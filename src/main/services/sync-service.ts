@@ -11,7 +11,7 @@ import type { ArtifactHandler } from "./sync/artifacts/interface.js";
 import { runtimeCookieOps } from "./bidi-cookie-service.js";
 import { writeQueuedCookieImports, readQueuedCookieImports, normalizeCookieForQueue } from "./cdp-cookie-service.js";
 import { normalizeCookiePartitionKey } from "./cookie-partition.js";
-import { acquireRestoreLock, isRestoreLocked, assertProfileTransferStopped, beginFullProfileRecovery, finishFullProfileRecovery, type FullProfileRecoveryTicket } from "./profile-restore-lock.js";
+import { acquireRestoreLock, isRestoreLocked, assertProfileTransferStopped, withProfileTransferProcessSnapshot, beginFullProfileRecovery, finishFullProfileRecovery, type FullProfileRecoveryTicket } from "./profile-restore-lock.js";
 import { markProfileDataChanging } from "./profile-data-revision.js";
 import { decryptSecretOr } from "./secrets.js";
 import { sanitizeTeam, mergeTeam, requireSyncPush, requireForcePush, requireSettingsMutation } from "./team.js";
@@ -791,14 +791,14 @@ async function pushFullProfileSnapshot(sync: SyncConfig, force: boolean, signal?
     let total = 0;
     for (const id of ids) {
       releases.push(acquireRestoreLock(id));
-      const guard = () => {
+      const guard = fullProfileReadGuard(id, () => {
         assertSyncRole("push", force); assertFullProfileScope(sync, opts?.history); assertSyncNotAborted(signal);
         assertSelectedProfileUnchanged(initial.browserProfiles, getConfig().browserProfiles || {}, id); assertHistoryStopped(id);
         assertFullProfileCookieQueueEmpty(id);
         if (initial.defaultProxy !== getConfig().defaultProxy) throw new Error("Default proxy changed during complete capture");
         const name = fullProfileProxyName(initial.browserProfiles[id], initial.defaultProxy);
         if (name && stableStringify(initial.proxies[name]) !== stableStringify(getConfig().proxies[name])) throw new Error("Linked proxy changed during complete capture");
-      };
+      });
       guard(); sourceGuards.push(guard);
       preferences[id] = profilePreferencesSnapshot(capturePreferences(id));
       const meta = snapshot.browserProfiles[id], proxyName = fullProfileProxyName(meta, initial.defaultProxy);
@@ -835,6 +835,7 @@ async function pushFullProfileSnapshot(sync: SyncConfig, force: boolean, signal?
     lease.stage("publishing");
     const publishVerified = async (key: string, bytes: Buffer, scope: "fullProfile" | "extensions", id: string): Promise<void> => {
       assertSyncRole("push", force); assertFullProfileScope(sync, opts?.history); assertSyncNotAborted(signal);
+      for (const guard of sourceGuards) guard();
       const publication = await publishS3Object(sync, key, bytes, signal);
       operation.remoteCommit = publication.state === "accepted" ? "partial" : "unknown";
       const readback = publication.state === "rejected" ? null : await s3Get(sync, key, signal, bytes.length);
@@ -919,11 +920,11 @@ async function pullFullProfileSnapshot(sync: SyncConfig, signal?: AbortSignal, o
     const prepared: Array<{ id: string; value: Awaited<ReturnType<typeof prepareFullProfileTransfer>> }> = [];
     const credentialProxyNames = new Set<string>();
     let total = 0;
-    const guardFor = (id: string) => () => {
+    const guardFor = (id: string) => fullProfileReadGuard(id, () => {
       assertSyncRole("pull"); assertFullProfileScope(sync, opts?.history); assertSyncNotAborted(signal);
       assertSelectedProfileUnchanged(initial.browserProfiles, getConfig().browserProfiles || {}, id); assertHistoryStopped(id);
       assertFullProfileCookieQueueEmpty(id);
-    };
+    });
     for (const id of selected) {
       const descriptor = descriptors.get(id)!, guard = guardFor(id); guard();
       total += descriptor.size;
@@ -1113,6 +1114,11 @@ function assertActiveHistoryScope(sync: SyncConfig, selected: boolean): void {
 function assertHistoryStopped(dirId: string): void {
   assertProfilePathsSafe(dirId);
   assertProfileTransferStopped(dirId, () => statusBrowser(dirId), () => runtimeCookieOps.hasRunningBrowser(dirId), { engine: getConfig().browserProfiles?.[dirId]?.engine });
+}
+function fullProfileReadGuard(dirId: string, guard: () => void) {
+  return Object.assign(guard, {
+    runSynchronous<T>(action: () => T): T { return withProfileTransferProcessSnapshot(dirId, action); },
+  });
 }
 function historyEngine(profile: any): BrowserEngine {
   if (profile?.engine !== undefined && profile.engine !== "chromium" && profile.engine !== "firefox") throw new Error("Unsupported profile history engine");

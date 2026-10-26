@@ -72,6 +72,14 @@ vi.mock("../../src/main/services/process-discovery.js", async original => {
     return { pid: native.pid, cdpPort: native.port };
   }
   const unsupported = () => { shell.discoveryDenied++; throw new Error("OWNED_DISCOVERY_OPERATION_UNSUPPORTED"); };
+  function runSynchronous<T>(action: () => T): T {
+    const result = action();
+    if (result !== null && result !== undefined && typeof (result as { then?: unknown }).then === "function") {
+      void Promise.resolve(result).catch(() => undefined);
+      shell.discoveryDenied++; throw new Error("OWNED_DISCOVERY_ASYNC_SCOPE");
+    }
+    return result;
+  }
   // Only named pure parsers are retained. No original collector is reachable as
   // a fallback, including future unexpected lifecycle/discovery operations.
   return {
@@ -80,6 +88,13 @@ vi.mock("../../src/main/services/process-discovery.js", async original => {
     browserLaunchProcessFromArgv: pure.browserLaunchProcessFromArgv,
     parseBrowserLaunchProcessLine: pure.parseBrowserLaunchProcessLine,
     inspectBrowserLaunchLines: pure.inspectBrowserLaunchLines,
+    withProfileProcessSnapshotSync<T>(profileDir: string, action: () => T): T {
+      const binding = shell.profiles.get(profileDir);
+      if (!binding) { shell.discoveryDenied++; throw new Error("OWNED_DISCOVERY_UNKNOWN_PROFILE"); }
+      lookup(binding.dirId, profileDir);
+      return runSynchronous(action);
+    },
+    withoutProfileProcessSnapshotSync: runSynchronous,
     findBrowserByProfileSync: lookup,
     findCdpPortSync: (dirId: string, profileDir: string) => lookup(dirId, profileDir)?.cdpPort ?? null,
     inspectBrowserLaunchesSync: unsupported,

@@ -57,7 +57,10 @@ export interface FullProfileExtraEntry {
   /** Only already-encrypted capsules or non-secret metadata. Never raw keys. */
   data: Buffer;
 }
-export type FullProfileGuard = () => void;
+export type FullProfileGuard = (() => void) & {
+  /** Coalesce discovery only inside this synchronous read slice, never an await. */
+  runSynchronous?: <T>(action: () => T) => T;
+};
 export interface CaptureFullProfileOptions {
   profileDir: string;
   stagingDir: string;
@@ -141,6 +144,16 @@ function combine(original: unknown, subsequent: unknown, context: string): Error
 }
 function recovery(message: string, paths: string[], cause?: unknown): Error {
   return Object.assign(failure("FULL_PROFILE_RECOVERY_REQUIRED", message + "; retained for recovery", cause), { recoveryPaths: paths });
+}
+function synchronousSlice<T>(guard: FullProfileGuard, action: () => T): T {
+  if (guard.runSynchronous === undefined) return action();
+  if (typeof guard.runSynchronous !== "function") invalid("Invalid synchronous full-profile executor");
+  const result = guard.runSynchronous(action), inspected: unknown = result;
+  if (inspected !== null && inspected !== undefined && typeof (inspected as { then?: unknown }).then === "function") {
+    void Promise.resolve(inspected).catch(() => undefined);
+    invalid("Full-profile synchronous executor cannot span an await");
+  }
+  return result;
 }
 function check(guard: FullProfileGuard, signal?: AbortSignal): void {
   if (typeof guard !== "function") invalid("A synchronous full-profile guard is required");
@@ -262,18 +275,21 @@ function temporaryPath(relative: string, engine: BrowserEngine): boolean {
   return caches.includes(parts[0]) || parts.length >= 2 && /^(?:Default|Profile [0-9]+|Guest Profile|System Profile)$/.test(parts[0]) && caches.includes(parts[1]);
 }
 type Traversal<T> = Generator<void, T, void>;
-function drain<T>(steps: Traversal<T>): T {
-  try {
-    for (;;) { const step = steps.next(); if (step.done) return step.value; }
-  } finally { steps.return(undefined as never); }
+function drain<T>(steps: Traversal<T>, guard: FullProfileGuard): T {
+  return synchronousSlice(guard, () => {
+    try {
+      for (;;) { const step = steps.next(); if (step.done) return step.value; }
+    } finally { steps.return(undefined as never); }
+  });
 }
 /** Yield only at the shared core's bounded checkpoints. Its very next operation
  * is the original synchronous guard, before any further I/O or successful return.
+ * A discovery frame ends before nextTurn; no observation survives an await.
  * Closing a suspended iterator also closes its pinned fd and clears owned bytes. */
-async function drainCooperatively<T>(steps: Traversal<T>): Promise<T> {
+async function drainCooperatively<T>(steps: Traversal<T>, guard: FullProfileGuard): Promise<T> {
   try {
     for (;;) {
-      const step = steps.next();
+      const step = synchronousSlice(guard, () => steps.next());
       if (step.done) return step.value;
       await nextTurn();
     }
@@ -299,7 +315,7 @@ function* visitFileSteps(file: string, expected: fs.Stats, guard: FullProfileGua
   } finally { chunk.fill(0); fs.closeSync(fd); }
 }
 function visitFile(file: string, expected: fs.Stats, guard: FullProfileGuard, signal?: AbortSignal, consume?: (chunk: Buffer, position: number) => void): string {
-  return drain(visitFileSteps(file, expected, guard, signal, consume));
+  return drain(visitFileSteps(file, expected, guard, signal, consume), guard);
 }
 function* scanTreeSteps(directory: string, engine: BrowserEngine, guard: FullProfileGuard, signal?: AbortSignal, filterTemporary = false, hashFiles = true): Traversal<Tree> {
   check(guard, signal); ensureArchiveDirectory(directory);
@@ -343,7 +359,7 @@ function* scanTreeSteps(directory: string, engine: BrowserEngine, guard: FullPro
   check(guard, signal); return { root, all, files, directories };
 }
 function scanTree(directory: string, engine: BrowserEngine, guard: FullProfileGuard, signal?: AbortSignal, filterTemporary = false, hashFiles = true): Tree {
-  return drain(scanTreeSteps(directory, engine, guard, signal, filterTemporary, hashFiles));
+  return drain(scanTreeSteps(directory, engine, guard, signal, filterTemporary, hashFiles), guard);
 }
 function assertTreeSnapshot(before: Tree, after: Tree, ignoreRootMetadata = false): void {
   if (!(ignoreRootMetadata ? sameIdentity(before.root, after.root) : sameSnapshot(before.root, after.root)) || before.all.length !== after.all.length ||
@@ -443,6 +459,9 @@ function assertZipKinds(zip: Buffer, entries: ZipEntry[]): void {
   }
 }
 function inspectZip(zip: Buffer, expectedIdentity: Identity, guard: FullProfileGuard, signal?: AbortSignal, verifyPayload = false): FullProfileManifest {
+  return synchronousSlice(guard, () => inspectZipInSlice(zip, expectedIdentity, guard, signal, verifyPayload));
+}
+function inspectZipInSlice(zip: Buffer, expectedIdentity: Identity, guard: FullProfileGuard, signal: AbortSignal | undefined, verifyPayload: boolean): FullProfileManifest {
   check(guard, signal);
   const entries = readZipEntries(zip);
   if (entries.length > MAX_FULL_PROFILE_ENTRIES) invalid("Full-profile ZIP entry limit exceeded");
@@ -503,7 +522,7 @@ export async function captureFullProfile(options: CaptureFullProfileOptions): Pr
   if (!validIdentity(id as unknown as Record<string, unknown>)) invalid("Invalid full-profile capture identity");
   const source = ensureArchiveDirectory(profileDir), staging = ensureArchiveDirectory(stagingDir);
   if (isPathInside(staging, source)) invalid("Full-profile staging must be outside the source profile");
-  const before = await drainCooperatively(scanTreeSteps(source, id.engine, guard, signal, true));
+  const before = await drainCooperatively(scanTreeSteps(source, id.engine, guard, signal, true), guard);
   // Even an empty traversal settles asynchronously; recheck its caller's turn.
   check(guard, signal);
   const extraCopies: FullProfileExtraEntry[] = [];
@@ -537,7 +556,7 @@ export async function captureFullProfile(options: CaptureFullProfileOptions): Pr
     const written = await guardedAwait(() => writeZipArchive(archive, entries), guard, signal);
     if (written.warnings?.some((warning) => warning !== "Directory fsync is unsupported on Windows; only file durability was verified.")) invalid("Full-profile ZIP publication/cleanup was not verified: " + written.warnings.join("; "));
     assertOwner(workspace);
-    zip = await drainCooperatively(readOwnedFileSteps(archive, MAX_FULL_PROFILE_BODY_BYTES - PREFIX_BYTES - TAG_BYTES, guard, signal));
+    zip = await drainCooperatively(readOwnedFileSteps(archive, MAX_FULL_PROFILE_BODY_BYTES - PREFIX_BYTES - TAG_BYTES, guard, signal), guard);
     check(guard, signal);
     inspectZip(zip, id, guard, signal, true);
     const salt = randomBytes(16), iv = randomBytes(12);
@@ -546,7 +565,7 @@ export async function captureFullProfile(options: CaptureFullProfileOptions): Pr
     if (headerBytes.length > MAX_HEADER_BYTES) invalid("Full-profile encryption header size limit exceeded");
     MAGIC.copy(prefix); prefix.writeUInt32BE(headerBytes.length, MAGIC.length);
     key = await deriveKey(passphrase, salt, guard, signal);
-    const after = await drainCooperatively(scanTreeSteps(source, id.engine, guard, signal, true));
+    const after = await drainCooperatively(scanTreeSteps(source, id.engine, guard, signal, true), guard);
     check(guard, signal); assertTreeSnapshot(before, after);
     const cipher = createCipheriv("aes-256-gcm", key, iv); cipher.setAAD(Buffer.concat([prefix, headerBytes]));
     const encrypted = cipher.update(zip), final = cipher.final();
@@ -619,13 +638,13 @@ export async function prepareFullProfile(options: PrepareFullProfileOptions): Pr
     });
     check(guard, signal); assertOwner(workspace);
     const directory = path.join(workspace.directory, "contents", "profile");
-    const tree = await drainCooperatively(scanTreeSteps(directory, descriptor.engine, guard, signal));
+    const tree = await drainCooperatively(scanTreeSteps(directory, descriptor.engine, guard, signal), guard);
     check(guard, signal);
     assertMembers(tree, manifest.files, manifest.directories);
     const extraDirectory = manifest.extraEntries.length ? path.join(workspace.directory, "contents", "extras") : undefined;
     let extraOwner: fs.Stats | undefined;
     if (extraDirectory) {
-      const extraTree = await drainCooperatively(scanTreeSteps(extraDirectory, descriptor.engine, guard, signal));
+      const extraTree = await drainCooperatively(scanTreeSteps(extraDirectory, descriptor.engine, guard, signal), guard);
       check(guard, signal);
       assertMembers(extraTree, manifest.extraEntries, extraDirectories(manifest.extraEntries)); extraOwner = extraTree.root;
     }

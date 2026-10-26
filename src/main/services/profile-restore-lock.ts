@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { getAppDataDir, getProfilesDir } from "./config-manager.js";
 import { validateDirId } from "./utils.js";
+import { withProfileProcessSnapshotSync, withoutProfileProcessSnapshotSync } from "./process-discovery.js";
 
 const heldLocks = new Map<string, { fd: number; token: string }>();
 
@@ -336,6 +337,18 @@ export function acquireRestoreLock(dirId: string): () => void {
   };
 }
 
+/** The restore lease fences managed launches while one synchronous read slice
+ * shares a real process observation. Every await and publication leaves it. */
+export function withProfileTransferProcessSnapshot<T>(dirId: string, action: () => T): T {
+  validateDirId(dirId);
+  const lease = assertRecoveryLease(dirId);
+  return withProfileProcessSnapshotSync(path.resolve(getProfilesDir(), dirId), () => {
+    const result = action();
+    assertRecoveryLease(dirId, lease);
+    return result;
+  });
+}
+
 export interface ProfileTransferStatus {
   running?: unknown;
   pid?: unknown;
@@ -399,8 +412,9 @@ export function assertProfileTransferStopped(
       }
       if (sentinels.length) {
         // Production status uses strict rich profile ownership, not a CDP-port
-        // lookup. A port-0/no-debug browser appearing here must still refuse.
-        confirmStopped();
+        // lookup. This second observation must be independent even within a
+        // synchronous slice; port-0/no-debug ownership must still refuse.
+        withoutProfileProcessSnapshotSync(confirmStopped);
         const rootAfter = fs.lstatSync(root, { throwIfNoEntry: false }), directoryAfter = fs.lstatSync(directory, { throwIfNoEntry: false });
         if (!rootStat || !stat || !rootAfter?.isDirectory() || rootAfter.isSymbolicLink() || rootAfter.dev !== rootStat.dev || rootAfter.ino !== rootStat.ino ||
             !directoryAfter?.isDirectory() || directoryAfter.isSymbolicLink() || directoryAfter.dev !== stat.dev || directoryAfter.ino !== stat.ino) throw blocked("profile directory changed during sentinel confirmation");

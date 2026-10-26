@@ -17,6 +17,33 @@ export type PsLine = string;
 let execFileSyncImpl: typeof execFileSync = execFileSync;
 let execImpl: typeof exec = exec;
 
+interface ProfileProcessFrame {
+  profileDir: string;
+  observation?: { lines: string[]; processes?: BrowserLaunchProcess[] } | { error: unknown };
+}
+let profileProcessFrame: ProfileProcessFrame | undefined;
+
+/** One lexical, synchronous observation, never a stopped-result/TTL cache. */
+export function withProfileProcessSnapshotSync<T>(profileDir: string, action: () => T): T {
+  const previous = profileProcessFrame, expected = normalizeBrowserProcessPath(profileDir);
+  profileProcessFrame = previous?.profileDir === expected ? previous : { profileDir: expected };
+  try {
+    const result = action();
+    if (result !== null && result !== undefined && typeof (result as { then?: unknown }).then === "function") {
+      void Promise.resolve(result).catch(() => undefined);
+      throw Object.assign(new Error("Process discovery frames cannot span an await"), { code: "PROCESS_DISCOVERY_FRAME_ASYNC" });
+    }
+    return result;
+  } finally { profileProcessFrame = previous; }
+}
+
+/** Independent confirmation, including Firefox's second sentinel observation. */
+export function withoutProfileProcessSnapshotSync<T>(action: () => T): T {
+  const previous = profileProcessFrame;
+  profileProcessFrame = undefined;
+  try { return action(); } finally { profileProcessFrame = previous; }
+}
+
 export function __setProcessDiscoveryExecForTest(overrides: {
   execFileSync?: typeof execFileSync;
   exec?: typeof exec;
@@ -208,7 +235,12 @@ export function inspectBrowserLaunchLines(
   expectedProfileDir: string,
   trackedPid?: number,
 ): BrowserLaunchSnapshot {
-  const processes = lines.map(parseBrowserLaunchProcessLine).filter((entry): entry is BrowserLaunchProcess => entry !== null);
+  return selectBrowserLaunchProcesses(parseBrowserLaunchLines(lines), expectedProfileDir, trackedPid);
+}
+function parseBrowserLaunchLines(lines: readonly string[]): BrowserLaunchProcess[] {
+  return lines.map(parseBrowserLaunchProcessLine).filter((entry): entry is BrowserLaunchProcess => entry !== null);
+}
+function selectBrowserLaunchProcesses(processes: BrowserLaunchProcess[], expectedProfileDir: string, trackedPid?: number): BrowserLaunchSnapshot {
   const expected = normalizeBrowserProcessPath(expectedProfileDir);
   return {
     available: processes.length > 0,
@@ -228,7 +260,15 @@ export function inspectBrowserLaunchLines(
 }
 
 export function inspectBrowserLaunchesSync(expectedProfileDir: string, trackedPid?: number, options?: { strict?: boolean }): BrowserLaunchSnapshot {
-  return inspectBrowserLaunchLines(collectLinesSync(true, options?.strict === true), expectedProfileDir, trackedPid);
+  const lines = collectProfileLinesSync(expectedProfileDir, true, options?.strict === true);
+  const snapshot = selectBrowserLaunchProcesses(processesForCollection(lines), expectedProfileDir, trackedPid);
+  // Callers must not be able to mutate the frame's private parsed observation.
+  const copies = new Map<BrowserLaunchProcess, BrowserLaunchProcess>();
+  const copy = (entry: BrowserLaunchProcess): BrowserLaunchProcess => {
+    if (!copies.has(entry)) copies.set(entry, { ...entry, args: [...entry.args], profileDirs: [...entry.profileDirs], cdpPorts: [...entry.cdpPorts] });
+    return copies.get(entry)!;
+  };
+  return { ...snapshot, candidates: snapshot.candidates.map(copy), tracked: snapshot.tracked ? copy(snapshot.tracked) : null };
 }
 
 function discoveryUnavailable(cause: unknown): Error {
@@ -357,13 +397,31 @@ function collectLinesSync(requireCommandLine = false, strict = false): string[] 
   return psLinesSync(strict);
 }
 
+function collectProfileLinesSync(profileDir: string, requireCommandLine: boolean, strict: boolean): string[] {
+  const frame = profileProcessFrame;
+  if (!frame || frame.profileDir !== normalizeBrowserProcessPath(profileDir)) return collectLinesSync(requireCommandLine, strict);
+  if (!frame.observation) {
+    // A shared observation is always strict, including when its first reader
+    // would ordinarily accept a lossy provider. A failed observation stays failed.
+    try { frame.observation = { lines: collectLinesSync(true, true) }; }
+    catch (error) { frame.observation = { error }; }
+  }
+  if ("error" in frame.observation) throw frame.observation.error;
+  return frame.observation.lines;
+}
+function processesForCollection(lines: string[]): BrowserLaunchProcess[] {
+  const observation = profileProcessFrame?.observation;
+  if (!observation || !("lines" in observation) || observation.lines !== lines) return parseBrowserLaunchLines(lines);
+  return observation.processes ??= parseBrowserLaunchLines(lines);
+}
+
 export function findBrowserByProfileSync(dirId: string, expectedProfileDir: string, options?: { strict?: boolean }): { pid: number; cdpPort: number; unknown?: boolean } | null {
   void dirId;
-  const lines = collectLinesSync(false, options?.strict === true);
+  const lines = collectProfileLinesSync(expectedProfileDir, false, options?.strict === true);
   if (options?.strict === true) {
     // Runtime ownership is independent of a usable automation endpoint. A live
     // browser with port 0/no debug flag must never become a stopped-data target.
-    const candidates = inspectBrowserLaunchLines(lines, expectedProfileDir).candidates;
+    const candidates = selectBrowserLaunchProcesses(processesForCollection(lines), expectedProfileDir).candidates;
     if (!candidates.length) return null;
     const first = candidates[0];
     const usablePort = first.cdpPorts.length === 1 && Number.isInteger(first.cdpPorts[0]) && first.cdpPorts[0] > 0 && first.cdpPorts[0] <= 65535;

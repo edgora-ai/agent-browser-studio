@@ -27,6 +27,10 @@ require("node:readline").createInterface({ input: process.stdin }).once("line", 
   const fixtureRequire = name => {
     if (name === "./config-manager.js") return { getAppDataDir: () => root, getProfilesDir: () => path.join(root, "profiles") };
     if (name === "./utils.js") return { validateDirId: value => { if (value !== id) throw new Error("Unexpected fixture profile"); } };
+    if (name === "./process-discovery.js") {
+      const blocked = () => { throw new Error("Discovery is outside the owned lock-owner fixture"); };
+      return { withProfileProcessSnapshotSync: blocked, withoutProfileProcessSnapshotSync: blocked };
+    }
     if (["node:crypto", "node:fs", "node:path"].includes(name)) return require(name);
     throw new Error("Undeclared child dependency");
   };
