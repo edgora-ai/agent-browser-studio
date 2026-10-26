@@ -416,10 +416,12 @@ export async function exportProfileArchive(
   } finally { release(); }
 }
 
-function removeOwnedDirectory(directory: string, owned: fs.Stats): void {
+function removeOwnedDirectory(directory: string, owned: fs.BigIntStats): void {
   ensureArchiveDirectory(path.dirname(directory));
-  let current: fs.Stats;
-  try { current = fs.lstatSync(directory); }
+  let current: fs.BigIntStats;
+  // Native uint64 File IDs can alias after Number rounding, even while the
+  // original directory still exists. Compare exact observations on both sides.
+  try { current = fs.lstatSync(directory, { bigint: true }); }
   catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return; throw error; }
   if (!current.isDirectory() || current.isSymbolicLink() || current.dev !== owned.dev || current.ino !== owned.ino) {
     throw new Error("Refusing cleanup of a replaced import directory: " + directory);
@@ -439,8 +441,8 @@ export function importProfileArchive(zipPath: string): ImportProfileResult {
   // Renaming children from os.tmpdir() can fail with EXDEV on relocated data.
   // An exclusive private staging directory under profiles is on the same volume.
   const tmpDir = fs.mkdtempSync(path.join(profilesDir, ".abs-profile-import-"));
-  const stagingOwner = fs.lstatSync(tmpDir);
-  let profileDir: string | null = null, profileOwner: fs.Stats | null = null;
+  const stagingOwner = fs.lstatSync(tmpDir, { bigint: true });
+  let profileDir: string | null = null, profileOwner: fs.BigIntStats | null = null;
   let dirId: string | null = null, release: (() => void) | null = null;
   let committed = false, result: ImportProfileResult | null = null, failure: unknown;
   try {
@@ -475,7 +477,7 @@ export function importProfileArchive(zipPath: string): ImportProfileResult {
     markProfileDataChanging(dirId);
     // Never use recursive mkdir here: EEXIST is not proof of ownership.
     fs.mkdirSync(profileDir, { mode: 0o700 });
-    profileOwner = fs.lstatSync(profileDir);
+    profileOwner = fs.lstatSync(profileDir, { bigint: true });
     for (const child of fs.readdirSync(tmpDir)) {
       if (child === META_FILE) continue;
       fs.renameSync(path.join(tmpDir, child), path.join(profileDir, child));

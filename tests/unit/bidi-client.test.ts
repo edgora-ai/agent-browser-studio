@@ -464,8 +464,13 @@ describe("cookie mapping (CookieInfo ↔ BiDi)", () => {
     expect(strict.domain).toBe("example.com"); // leading dot stripped
     expect(strict.value).toEqual({ type: "string", value: "b" });
 
-    const session = cookieInfoToBidiCookie({ domain: "example.com", name: "c", value: "d", path: "/", secure: false, httpOnly: false, sameSite: -1, expires: null });
+    const session = cookieInfoToBidiCookie({ domain: "example.com", name: "c", value: "d", path: "/", secure: false, httpOnly: false, sameSite: 0, expires: null });
     expect(session.expiry).toBeUndefined();
     expect(session.sameSite).toBe("none");
+  });
+
+  it("rejects unspecified SameSite rather than changing it to None", () => {
+    expect(() => cookieInfoToBidiCookie({ domain: "example.com", name: "c", value: "d", path: "/", secure: false, httpOnly: false, sameSite: -1, expires: null }))
+      .toThrow("FIREFOX_COOKIE_SAMESITE_UNSPECIFIED_UNSUPPORTED");
   });
 });

@@ -1,13 +1,16 @@
 // Finite Node-only transport proofs: original whole preload, registered sync IPC,
-// event bus/operation event producer, and the original REST HTTP callback.
-// Native BrowserWindow/IPC and HTTP sockets are modeled boundaries, NOT Electron
-// or live HTTP/auth acceptance. Services below are controlled responses; neither
-// thin adapter is replaced. All application/native/storage/network calls fail.
+// event bus/operation event producer, and original REST/MCP HTTP callbacks.
+// BrowserWindow/IPC and default HTTP listeners are modeled, NOT real Electron.
+// One explicit REST fixture uses an owned ephemeral loopback socket to verify
+// auth and Pull argument transport. SyncService remains a controlled boundary:
+// these tests do not prove full-profile data restoration or website acceptance.
+// Unselected application/native/storage/network operations fail closed.
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as vm from "node:vm";
 import * as crypto from "node:crypto";
+import * as nativeHttp from "node:http";
 import { EventEmitter } from "node:events";
 import ts from "typescript";
 import type { SyncComparisonToken, SyncResult } from "../../src/main/types.js";
@@ -15,8 +18,8 @@ import type { SyncComparisonToken, SyncResult } from "../../src/main/types.js";
 const MAIN = path.resolve(__dirname, "../../src/main");
 const PRELOAD = fs.readFileSync(path.join(MAIN, "preload.cjs"), "utf8");
 const MODULES = [
-  "ipc/sync.ts", "services/rest-api-server.ts", "services/event-bus.ts", "services/team.ts", "services/server-mode.ts", "branding.ts",
-  "services/sync/operation-state.ts", "services/sync/operation-result.ts", "services/http/auth.ts", "services/http/body.ts", "services/utils.ts",
+  "ipc/sync.ts", "services/rest-api-server.ts", "services/mcp-server.ts", "services/event-bus.ts", "services/team.ts", "services/server-mode.ts", "branding.ts",
+  "services/sync/operation-state.ts", "services/sync/operation-result.ts", "services/http/auth.ts", "services/http/body.ts", "services/utils.ts", "services/agent/tool-outcome.ts",
 ];
 const compileCounts = new Map<string, number>();
 // Compile the REST main layer exactly once, then execute that unchanged code in
@@ -34,14 +37,14 @@ const prohibited: string[] = [];
 function fail(name: string): (...args: any[]) => never {
   return () => { prohibited.push(name); throw new Error("Forbidden sync transport fixture operation: " + name); };
 }
-function unavailable(name: string): any {
-  return new Proxy({ __esModule: true }, { get: (target, key) => key === "__esModule" ? true : key === "then" ? undefined
-    : typeof key === "symbol" ? undefined : fail(name + "." + String(key)) });
+function unavailable(name: string, selected: Record<string, unknown> = {}): any {
+  return new Proxy({ __esModule: true }, { get: (_target, key) => key === "__esModule" ? true : key === "then" ? undefined
+    : typeof key === "symbol" ? undefined : Object.hasOwn(selected, key) ? selected[key] : fail(name + "." + key) });
 }
 const wireJson = (value: any) => JSON.parse(JSON.stringify(value));
 const liveFixtures: Array<{ stop: () => Promise<void> }> = [];
 
-function fixture() {
+function fixture(options: { sockets?: boolean; mcp?: boolean } = {}) {
   const handlers = new Map<string, (...args: any[]) => any>();
   const modules = new Map<string, any>();
   const windows: any[] = [];
@@ -62,6 +65,7 @@ function fixture() {
     activity: vi.fn((_dirId: string): any => fail("unplanned profile activity update")()),
   };
   const log = { log: vi.fn(), warn: vi.fn(), error: vi.fn() };
+  const nativeServers: nativeHttp.Server[] = [];
   let callback: ((req: any, res: any) => Promise<void>) | undefined;
   let state: any;
   const complete: SyncResult = { success: true, message: "Synthetic operation complete", outcome: "complete", localCommit: "committed", remoteCommit: "committed", operationId: "synthetic-operation", items: [], warnings: [], recovery: [] };
@@ -78,6 +82,11 @@ function fixture() {
   const http = {
     createServer: vi.fn((handler: typeof callback) => {
       callback = handler;
+      if (options.sockets) {
+        const server = nativeHttp.createServer(handler);
+        nativeServers.push(server);
+        return server;
+      }
       const server: any = new EventEmitter();
       server.listen = vi.fn((_port: number, _host: string, ready: () => void) => { ready(); }); // No socket is created.
       server.address = () => ({ port: 1 });
@@ -86,8 +95,10 @@ function fixture() {
     }),
   };
   const context = vm.createContext({ Buffer, URL, structuredClone, console: log,
-    process: { platform: "darwin", argv: ["synthetic-node", "synthetic-entry"], uptime: () => 1, env: { AGENT_BROWSER_API_TOKEN: AUTH, AGENT_BROWSER_API_PORT: "0" } },
-    setTimeout: fail("timer"), clearTimeout: fail("timer"), fetch: fail("network"),
+    process: { platform: "darwin", argv: ["synthetic-node", "synthetic-entry"], uptime: () => 1, env: {
+      AGENT_BROWSER_API_TOKEN: AUTH, AGENT_BROWSER_API_PORT: "0", AGENT_BROWSER_MCP_TOKEN: AUTH, AGENT_BROWSER_MCP_PORT: "0",
+    } },
+    setTimeout: fail("timer"), clearTimeout: fail("timer"), setInterval: fail("interval"), clearInterval: fail("interval"), fetch: fail("network"),
   });
   function load(name: string): any {
     if (modules.has(name)) return modules.get(name).exports;
@@ -113,6 +124,8 @@ function fixture() {
       if (relative === "services/config-manager.ts") return { getConfig: () => cfg, setSyncConfig: setter, saveConfig: fail("config write"), getProfileMeta: profile.meta, resolveProfileProxy: profile.proxy };
       if (relative === "services/sync/profile-state.ts") return { readProfileSyncState: profile.syncState };
       if (relative === "services/browser-manager.ts") return { statusBrowser: profile.runtime, touchProfileActivity: profile.activity };
+      // MCP advertises schemas at module load. No agent/LLM execution is allowed.
+      if (relative === "services/local-agent.ts") return unavailable(relative, { AGENT_TOOLS: [] });
       return unavailable(relative);
     }
     vm.runInContext(`(function(require,module,exports,__filename,__dirname) { ${code}\n})`, context, { filename: full })
@@ -158,13 +171,19 @@ function fixture() {
   const first = renderer();
   const rest = load("services/rest-api-server.ts");
   const startup = rest.startRestApiServer();
-  expect(callback).toBeTypeOf("function");
-  async function request(method: string, route: string, body?: any, authorized = true) {
-    await startup.ready;
+  const restCallback = callback;
+  expect(restCallback).toBeTypeOf("function");
+  let mcp: any, mcpStartup: { ready: Promise<void> } | undefined, mcpCallback: typeof callback;
+  if (options.mcp) {
+    mcp = load("services/mcp-server.ts");
+    mcpStartup = mcp.startMcpServer();
+    mcpCallback = callback;
+    expect(mcpCallback).toBeTypeOf("function");
+  }
+  async function invokeCallback(handler: NonNullable<typeof callback>, ready: Promise<void>, method: string, route: string, body?: any, authorized = true) {
+    await ready;
     const req: any = new EventEmitter();
     const encoded = body === undefined ? undefined : Buffer.from(JSON.stringify(body));
-    // One authorized callback path only. Real socket/auth matrices belong to
-    // the separate Electron E2E task, not this transport fixture.
     req.method = method; req.url = route;
     req.headers = { host: "127.0.0.1", ...(authorized ? { authorization: "Bearer " + AUTH } : {}), ...(encoded ? { "content-length": String(encoded.length) } : {}) };
     req.socket = { remoteAddress: "127.0.0.1" }; req.destroy = fail("request destroy");
@@ -174,13 +193,56 @@ function fixture() {
       writeHead: (status: number, headers: Record<string, unknown> = {}) => { response.status = status; Object.assign(response.headers, headers); },
       end: (body?: string) => { response.body = body ? JSON.parse(body) : undefined; },
     };
-    const pending = callback!(req, res);
+    const pending = handler(req, res);
     if (encoded) req.emit("data", encoded);
     req.emit("end"); await pending;
     return response;
   }
-  const f = { api: first.api, first, renderer, service, complete, setter, cfg, state, events, request, invocations, handlers, http, log, profile,
-    role: (role: string) => { cfg.team.members[0].role = role; }, stop: () => rest.stopRestApiServer() };
+  const request = (method: string, route: string, body?: any, authorized = true) =>
+    invokeCallback(restCallback!, startup.ready, method, route, body, authorized);
+  async function mcpCall(name: string, args?: any) {
+    if (!mcpStartup || !mcpCallback) throw new Error("MCP transport was not selected for this fixture");
+    return invokeCallback(mcpCallback, mcpStartup.ready, "POST", "/mcp", {
+      jsonrpc: "2.0", id: "synthetic-sync-tool-request", method: "tools/call",
+      params: { name, ...(args === undefined ? {} : { arguments: args }) },
+    });
+  }
+  async function socketRequest(method: string, route: string, body?: any, token: string | null = AUTH) {
+    if (!options.sockets) throw new Error("Native REST sockets were not selected for this fixture");
+    await startup.ready;
+    // Both listener and client are explicitly confined to this test's own
+    // ephemeral loopback port; never discover or contact an installed app.
+    const address = nativeServers[0]?.address();
+    if (!address || typeof address === "string" || address.port < 1) throw new Error("Owned REST listener did not bind an ephemeral port");
+    expect(rest.getRestApiPort()).toBe(address.port);
+    const encoded = body === undefined ? undefined : Buffer.from(JSON.stringify(body));
+    return new Promise<{ status: number; body: any }>((resolve, reject) => {
+      const req = nativeHttp.request({ hostname: "127.0.0.1", port: address.port, method, path: route, agent: false,
+        headers: { ...(token === null ? {} : { authorization: "Bearer " + token }),
+          ...(encoded ? { "content-type": "application/json", "content-length": String(encoded.length) } : {}) },
+      }, res => {
+        const chunks: Buffer[] = []; let bytes = 0;
+        res.on("data", chunk => {
+          bytes += chunk.length;
+          if (bytes > 64 * 1024) { res.destroy(new Error("Owned REST response exceeded its fixture budget")); return; }
+          chunks.push(Buffer.from(chunk));
+        });
+        res.on("error", reject);
+        res.on("end", () => {
+          try { resolve({ status: res.statusCode ?? 0, body: JSON.parse(Buffer.concat(chunks).toString("utf8")) }); }
+          catch (error) { reject(error); }
+        });
+      });
+      req.setTimeout(3000, () => req.destroy(new Error("Owned REST request timed out")));
+      req.on("error", reject);
+      req.end(encoded);
+    });
+  }
+  const f = { api: first.api, first, renderer, service, complete, setter, cfg, state, events, request, mcpCall, socketRequest, invocations, handlers, http, log, profile,
+    role: (role: string) => { cfg.team.members[0].role = role; }, stop: async () => {
+      for (const server of nativeServers) server.closeAllConnections();
+      await Promise.all([rest.stopRestApiServer(), ...(mcp ? [mcp.stopMcpServer()] : [])]);
+    } };
   liveFixtures.push(f);
   return f;
 }
@@ -189,6 +251,7 @@ afterEach(async () => { for (const f of liveFixtures.splice(0)) await f.stop(); 
 afterAll(() => {
   expect(prohibited).toEqual([]);
   expect(compileCounts.get("services/rest-api-server.ts")).toBe(1);
+  expect(compileCounts.get("services/mcp-server.ts")).toBe(1);
 });
 
 const RESULTS: Array<{ name: string; status: number; result: SyncResult }> = [
@@ -276,7 +339,7 @@ for (const transport of ["ipc", "rest"] as const) describe(`${transport}: origin
       if (transport === "ipc") { await f.api.sync.push({ history }); await f.api.sync.pull({ history }); }
       else { await f.request("POST", "/api/sync/push", { history }); await f.request("POST", "/api/sync/pull", { history }); }
       expect(f.service.push).toHaveBeenLastCalledWith(undefined, false, undefined, { history });
-      expect(f.service.pull).toHaveBeenLastCalledWith(undefined, { strategy: "local", resolutions: {}, comparisonToken: undefined, history });
+      expect(f.service.pull).toHaveBeenLastCalledWith(undefined, { strategy: undefined, resolutions: {}, comparisonToken: undefined, history });
     }
     const count = f.service.push.mock.calls.length;
     if (transport === "ipc") expect(await f.api.sync.push({ history: "true" })).toMatchObject({ success: false, code: "INVALID_HISTORY_SCOPE" });
@@ -319,6 +382,114 @@ for (const transport of ["ipc", "rest"] as const) describe(`${transport}: origin
       }
     });
   }
+});
+
+for (const transport of ["ipc", "rest", "mcp"] as const) describe(`${transport}: Pull strategy ownership stays in SyncService`, () => {
+  async function pull(f: ReturnType<typeof fixture>, opts?: any) {
+    if (transport === "ipc") return f.api.sync.pull(opts);
+    if (transport === "rest") {
+      const response = await f.request("POST", "/api/sync/pull", opts);
+      expect(response.status).toBe(200);
+      return response.body;
+    }
+    // Enter the public JSON-RPC HTTP route, not a private executeMcpTool export.
+    const response = await f.mcpCall("agent_browser_sync_pull", opts);
+    expect(response.status).toBe(200);
+    expect(response.body).not.toHaveProperty("error");
+    expect(response.body.result.isError).not.toBe(true);
+    return JSON.parse(response.body.result.content[0].text);
+  }
+  it.each([
+    { label: "omitted options", opts: undefined },
+    { label: "empty options", opts: {} },
+    { label: "undefined strategy", opts: { strategy: undefined } },
+  ])("defers an unspecified Pull strategy to the service ($label)", async ({ opts }) => {
+    const f = fixture({ mcp: transport === "mcp" }), before = structuredClone(opts);
+    const result = await pull(f, opts);
+    expect(f.service.pull).toHaveBeenCalledExactlyOnceWith(undefined, { strategy: undefined, resolutions: {}, comparisonToken: undefined });
+    expect(f.service.pull.mock.calls[0][1].strategy).toBeUndefined();
+    expect(f.service.push).not.toHaveBeenCalled();
+    expect(opts).toEqual(before);
+    expect(result).toMatchObject(f.complete);
+    if (transport === "rest") expect(result).not.toHaveProperty("strategy");
+  });
+  it.each(["local", "remote", "newest"] as const)("preserves explicit %s Pull strategy, decisions, token and history without scope inference", async strategy => {
+    const f = fixture({ mcp: transport === "mcp" });
+    const opts = { strategy, comparisonToken: TOKEN, history: true,
+      resolutions: { "profiles:synthetic-profile": "remote", "proxies:synthetic-proxy": "local", "accounts:synthetic-account": "newest", invalid: "discard" } };
+    const before = structuredClone(opts);
+    const result = await pull(f, opts);
+    expect(f.service.pull).toHaveBeenCalledExactlyOnceWith(undefined, { strategy, comparisonToken: TOKEN, history: true,
+      resolutions: { "profiles:synthetic-profile": "remote", "proxies:synthetic-proxy": "local", "accounts:synthetic-account": "newest" } });
+    expect(f.service.pull.mock.calls[0][1].comparisonToken).not.toBe(TOKEN);
+    expect(f.service.push).not.toHaveBeenCalled();
+    expect(opts).toEqual(before);
+    expect(result).toMatchObject(f.complete);
+    if (transport === "rest") expect(result.strategy).toBe(strategy);
+  });
+});
+
+describe("MCP public sync tool argument transport", () => {
+  it("keeps push force, comparison token and history intact while leaving omitted push options absent", async () => {
+    const f = fixture({ mcp: true }), opts = { force: true, comparisonToken: TOKEN, history: false }, before = structuredClone(opts);
+    const response = await f.mcpCall("agent_browser_sync_push", opts);
+    expect(response.status).toBe(200); expect(response.body).not.toHaveProperty("error");
+    expect(JSON.parse(response.body.result.content[0].text)).toEqual(f.complete);
+    expect(f.service.push).toHaveBeenCalledExactlyOnceWith(undefined, true, TOKEN, { history: false });
+    expect(f.service.push.mock.calls[0][2]).not.toBe(TOKEN); expect(opts).toEqual(before);
+    const omitted = await f.mcpCall("agent_browser_sync_push");
+    expect(omitted.status).toBe(200); expect(omitted.body).not.toHaveProperty("error");
+    expect(f.service.push).toHaveBeenCalledTimes(2);
+    expect(f.service.push).toHaveBeenLastCalledWith(undefined, false, undefined);
+    expect(f.service.pull).not.toHaveBeenCalled();
+  });
+});
+
+describe("REST Pull strategy through an owned real loopback socket", () => {
+  it("keeps health public, rejects missing/wrong auth, accepts valid auth and preserves omitted versus explicit local Pull strategy", async () => {
+    const f = fixture({ sockets: true });
+    const health = await f.socketRequest("GET", "/health", undefined, null);
+    expect(health.status).toBe(200); expect(health.body.status).toBe("ok");
+    expect(f.service.pull).not.toHaveBeenCalled();
+    const missing = await f.socketRequest("POST", "/api/sync/pull", {}, null);
+    expect(missing).toEqual({ status: 401, body: { error: "Unauthorized" } });
+    expect(f.service.pull).not.toHaveBeenCalled();
+    const wrong = await f.socketRequest("POST", "/api/sync/pull", {}, AUTH + "-wrong");
+    expect(wrong).toEqual({ status: 401, body: { error: "Unauthorized" } });
+    expect(f.service.pull).not.toHaveBeenCalled();
+    const status = await f.socketRequest("GET", "/api/sync/status");
+    expect(status.status).toBe(200); expect(status.body).toMatchObject({ enabled: true, configured: true });
+    const defaultOpts = { comparisonToken: TOKEN, history: true, resolutions: { "profiles:synthetic-profile": "remote" } };
+    const localOpts = { ...defaultOpts, strategy: "local" };
+    const defaultReply = await f.socketRequest("POST", "/api/sync/pull", defaultOpts);
+    const localReply = await f.socketRequest("POST", "/api/sync/pull", localOpts);
+    expect(defaultReply.status).toBe(200); expect(localReply.status).toBe(200);
+    expect(f.service.pull).toHaveBeenCalledTimes(2);
+    expect(f.service.pull).toHaveBeenLastCalledWith(undefined, localOpts);
+    expect(localReply.body).toEqual(wireJson({ ...f.complete, strategy: "local" }));
+    expect(f.service.push).not.toHaveBeenCalled();
+    expect(f.http.createServer).toHaveBeenCalledTimes(1);
+    expect(f.service.pull.mock.calls[0]).toEqual([undefined, { ...defaultOpts, strategy: undefined }]);
+    expect(f.service.pull.mock.calls[0][1].strategy).toBeUndefined();
+    expect(f.service.pull.mock.calls[0][1].comparisonToken).not.toBe(TOKEN);
+    expect(defaultReply.body).toEqual(wireJson(f.complete));
+  });
+});
+
+describe("REST scope-sensitive sync schema", () => {
+  it("leaves the optional Pull strategy unset in the public schema and documents both saved scope defaults", async () => {
+    const f = fixture();
+    const response = await f.request("GET", "/openapi.json", undefined, false);
+    expect(response.status).toBe(200);
+    const strategy = response.body.paths["/api/sync/pull"].post.requestBody.content["application/json"].schema.properties.strategy;
+    expect(strategy.type).toBe("string");
+    expect(strategy.enum).toEqual(["local", "remote", "newest"]);
+    expect(strategy).not.toHaveProperty("default");
+    expect(strategy.description).toMatch(/local.*limited/i);
+    expect(strategy.description).toMatch(/remote.*(full|complete)/i);
+    expect(f.service.pull).not.toHaveBeenCalled();
+    expect(f.service.push).not.toHaveBeenCalled();
+  });
 });
 
 describe("REST structured error receipts (original HTTP callback, no socket)", () => {

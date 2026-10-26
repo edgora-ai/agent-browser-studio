@@ -14,7 +14,7 @@ import { connectBidi, getRegisteredFirefoxSession, normalizeBidiWebSocketUrl, bi
 import { captureProtocolDispatchGuard, runWithProtocolDispatchGuard } from "./agent/dispatch-guard.js";
 import { getProfileEngineByDirId } from "./page-eval.js";
 import { runningProcesses } from "./browser/runtime-table.js";
-import { cdpCookieService, readQueuedCookieImportSnapshot, clearQueuedCookieImportsIfUnchanged, type CookieExportSnapshot } from "./cdp-cookie-service.js";
+import { cdpCookieService, normalizeCookieForQueue, readQueuedCookieImportSnapshot, clearQueuedCookieImportsIfUnchanged, type CookieExportSnapshot } from "./cdp-cookie-service.js";
 import { validateDirId } from "./utils.js";
 export type { CookieExportSnapshot } from "./cdp-cookie-service.js";
 
@@ -39,17 +39,25 @@ export function bidiCookieToCookieInfo(c: BidiCookie): CookieInfo {
   };
 }
 
-/** Map a product CookieInfo to a BiDi `storage.setCookie` payload. */
-export function cookieInfoToBidiCookie(c: CookieInfo): BidiCookie {
-  const sameSite = c.sameSite === 2 ? "strict" : c.sameSite === 1 ? "lax" : c.sameSite === 0 ? "none" : "none";
+/** Map only identities representable by the existing BiDi Cookie contract.
+ * Its userContext/sourceOrigin partition response cannot preserve CDP's complete
+ * topLevelSite + ancestor identity, so never import it as unpartitioned. */
+export function cookieInfoToBidiCookie(cookie: CookieInfo): BidiCookie {
+  const c = normalizeCookieForQueue(cookie);
+  if (!c) throw new Error("FIREFOX_COOKIE_IMPORT_INVALID");
+  if (c.partitionKey !== undefined) throw new Error("FIREFOX_COOKIE_PARTITION_UNSUPPORTED");
+  // BidiCookie requires an explicit enum. Do not turn unspecified into None or
+  // change the shared client contract to bypass this representability boundary.
+  if (c.sameSite === -1) throw new Error("FIREFOX_COOKIE_SAMESITE_UNSPECIFIED_UNSUPPORTED");
+  const sameSite = c.sameSite === 2 ? "strict" : c.sameSite === 1 ? "lax" : "none";
   return {
     name: c.name,
     value: { type: "string", value: c.value },
     domain: c.domain.startsWith(".") ? c.domain.slice(1) : c.domain,
-    path: c.path || "/",
+    path: c.path,
     size: c.value.length,
-    httpOnly: !!c.httpOnly,
-    secure: !!c.secure,
+    httpOnly: c.httpOnly,
+    secure: c.secure,
     sameSite,
     ...(c.expires && c.expires > 0 ? { expiry: Math.floor(c.expires) } : {}),
   };
@@ -227,13 +235,17 @@ export const firefoxCookieService = {
   async importCookies(dirId: string, cookies: CookieInfo[], signal?: AbortSignal, target?: FirefoxCookieImportTarget): Promise<number> {
     assertCookieImportNotAborted(signal);
     validateDirId(dirId);
-    if (!cookies.length) return 0;
+    if (!Array.isArray(cookies)) throw new Error("FIREFOX_COOKIE_IMPORT_INVALID");
+    // Preflight and copy the WHOLE batch before any native write: a valid
+    // leading Cookie must not be applied before a later unsupported partition.
+    const prepared = Array.from(cookies, cookieInfoToBidiCookie);
+    if (!prepared.length) return 0;
     return withBidiClient(dirId, async (conn, assertCurrent) => {
       let count = 0;
-      for (const cookie of cookies) {
+      for (const cookie of prepared) {
         assertCurrent();
         try {
-          if (await bidiSetCookie(conn, cookieInfoToBidiCookie(cookie), 10000, signal)) count++;
+          if (await bidiSetCookie(conn, cookie, 10000, signal)) count++;
         } catch {
           // Cancellation/replacement and connection failure must stop dispatch,
           // without attaching their state to or closing the borrowed session.
@@ -242,7 +254,7 @@ export const firefoxCookieService = {
         }
         assertCurrent();
       }
-      if (count !== cookies.length) throw new Error(`FIREFOX_COOKIE_IMPORT_INCOMPLETE:${count}/${cookies.length}`);
+      if (count !== prepared.length) throw new Error(`FIREFOX_COOKIE_IMPORT_INCOMPLETE:${count}/${prepared.length}`);
       return count;
     }, signal, target);
   },

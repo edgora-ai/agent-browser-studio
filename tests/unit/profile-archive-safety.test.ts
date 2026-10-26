@@ -8,7 +8,7 @@ import type * as Fs from "node:fs";
 type IoEvent = {
   op: string; path: string; to?: string; fd?: number; buffer?: Buffer;
   offset?: number; length?: number; position?: number | null; flags?: string | number;
-  stat?: Fs.Stats; directory?: boolean;
+  stat?: Fs.Stats | Fs.BigIntStats; directory?: boolean;
 };
 const io = vi.hoisted(() => ({
   appData: "", paths: new Map<number, string>(), events: [] as IoEvent[],
@@ -78,7 +78,7 @@ vi.mock("node:fs", async (importOriginal) => {
       io.streams.push(stream);
       stream.on("error", () => undefined);
       const write = stream.write.bind(stream);
-      stream.write = ((buffer: Buffer, callback: (error?: Error) => void) => {
+      stream.write = ((buffer: Buffer, callback: (error?: Error | null) => void) => {
         try { intercept({ op: "streamWrite", path: String(file), buffer, length: buffer.length }, () => undefined); }
         catch (error) { callback(error as Error); stream.destroy(); return false; }
         return write(buffer, callback);
@@ -640,6 +640,48 @@ describe("profile archive ownership, restore lock and live config commit", () =>
     io.hook = null;
     expect(replacement).not.toBeNull();
     expect(disk.readFileSync(path.join(replacement!, "sentinel"), "utf8")).toBe("other owner");
+    expect(disk.readFileSync(getConfigPath())).toEqual(before);
+  });
+
+  it.each([9007199254740992n, 9223372036854775808n])("refuses replacement ownership when distinct uint64 directory IDs round to the same Number (%s)", async originalId => {
+    const zip = await importFixture(), before = disk.readFileSync(getConfigPath()), replacementId = originalId + 1n;
+    expect(Number(originalId)).toBe(Number(replacementId));
+    expect(Number.isSafeInteger(Number(originalId))).toBe(false);
+    let replacement: string | null = null;
+    let originalReal: Fs.BigIntStats | undefined, replacementReal: Fs.BigIntStats | undefined;
+    const moved = path.join(WORK, "moved-original-uint64");
+    io.hook = e => {
+      if (e.op === "lstat" && path.dirname(e.path) === getProfilesDir() && path.basename(e.path).startsWith(PROFILE_ID_PREFIX) && e.stat?.isDirectory()) {
+        // Model the same native uint64 IDs through Node's actual requested stat
+        // representation. Never reconstruct an exact ID from a rounded Number.
+        const ino = typeof e.stat.ino === "bigint" ? (replacement ? replacementId : originalId) : Number(replacement ? replacementId : originalId);
+        return { value: Object.assign(Object.create(Object.getPrototypeOf(e.stat)), e.stat, { ino }) };
+      }
+      if (replacement || e.op !== "rename" || !e.to || !e.path.includes("profile-import-") || !e.to.includes(getProfilesDir() + path.sep)) return;
+      replacement = path.dirname(e.to);
+      originalReal = disk.lstatSync(replacement, { bigint: true });
+      disk.renameSync(replacement, moved);
+      disk.mkdirSync(replacement);
+      replacementReal = disk.lstatSync(replacement, { bigint: true });
+      expect(originalReal.dev).toBe(replacementReal.dev);
+      expect(originalReal.ino).not.toBe(replacementReal.ino);
+      disk.writeFileSync(path.join(replacement, "sentinel"), "other owner");
+      throw failure("EIO", "rename");
+    };
+    const importWithFacts = () => {
+      try { return importProfileArchive(zip); }
+      finally {
+        console.info("owned-archive-uint64 " + JSON.stringify({ nativeIdsModeled: true, originalId: String(originalId), replacementId: String(replacementId),
+          numberAlias: Number(originalId) === Number(replacementId), originalRetained: disk.existsSync(moved),
+          replacementRetained: replacement !== null && disk.existsSync(path.join(replacement, "sentinel")) }));
+      }
+    };
+    expect(importWithFacts).toThrow(/EIO.*cleanup.*replaced/i);
+    io.hook = null;
+    expect(replacement).not.toBeNull();
+    expect(disk.readFileSync(path.join(replacement!, "sentinel"), "utf8")).toBe("other owner");
+    expect(disk.lstatSync(moved, { bigint: true }).ino).toBe(originalReal!.ino);
+    expect(disk.lstatSync(replacement!, { bigint: true }).ino).toBe(replacementReal!.ino);
     expect(disk.readFileSync(getConfigPath())).toEqual(before);
   });
 

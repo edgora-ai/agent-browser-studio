@@ -1,6 +1,7 @@
 import { assertProtocolDispatchAllowed, captureProtocolDispatchGuard } from "./agent/dispatch-guard.js";
 import { NavigationBudget } from "./agent/cdp-navigation-budget.js";
 import { BrowserLoadTimeoutError, BrowserNavigationError, navigationConnectionClosed } from "./agent/cdp-navigation-errors.js";
+import { beginSyncBidiMutation, type BidiMutationSettlement } from "./sync/bidi-mutation-settlement.js";
 
 // ── WebDriver BiDi runtime client (Slice 79) ──
 // The runtime bridge that gives Firefox profiles the managed capabilities
@@ -132,7 +133,11 @@ export async function connectBidi(wsUrl: string, opts: BidiConnectOpts = {}): Pr
   let socket: any = null;
   let nextId = 1;
   let initReject: (e: Error) => void = () => {};
-  const pending = new Map<number, { resolve: (v: any) => void; reject: (e: Error) => void }>();
+  const pending = new Map<number, { resolve: (v: any) => void; reject: (e: Error, terminalReply?: boolean) => void }>();
+  // Sync mutations retain a terminal-reply witness even after the caller's
+  // ordinary pending Promise has rejected. A socket failure cannot drain it.
+  const mutations = new Map<number, BidiMutationSettlement>();
+  let connection: BidiConnection | undefined;
   const eventListeners = new Set<BidiEventListener>();
   let closedFlag = false;
   const rejectAll = (error: Error) => {
@@ -193,11 +198,16 @@ export async function connectBidi(wsUrl: string, opts: BidiConnectOpts = {}): Pr
       if (signal?.aborted) return Promise.reject(signal.reason);
       assertProtocolDispatchAllowed(endpointPort);
       const guard = captureProtocolDispatchGuard();
+      const mutation = method === "storage.setCookie" ? beginSyncBidiMutation(endpointPort, connection) : undefined;
       return new Promise((resolve, reject) => {
         const id = nextId++;
+        if (mutation) {
+          mutations.set(id, mutation);
+          void mutation.done.then(() => { mutations.delete(id); });
+        }
         let settled = false;
         let guardTimer: ReturnType<typeof setInterval> | undefined;
-        const finish = (ok: boolean, value: any) => {
+        const finish = (ok: boolean, value: any, terminalReply = false) => {
           if (settled) return;
           settled = true;
           clearTimeout(timer);
@@ -206,21 +216,27 @@ export async function connectBidi(wsUrl: string, opts: BidiConnectOpts = {}): Pr
           signal?.removeEventListener("abort", aborted);
           if (ok) {
             try { guard?.(endpointPort); if (signal?.aborted) throw signal.reason; resolve(value); }
-            catch (error) { reject(error); }
-          } else reject(value);
+            catch (error) { mutation?.interrupt(error); reject(error); }
+          } else { if (!terminalReply) mutation?.interrupt(value); reject(value); }
         };
         const aborted = () => finish(false, signal!.reason);
         const timer = setTimeout(() => finish(false, new Error(`BiDi command ${method} timed out`)), commandTimeoutMs);
-        pending.set(id, { resolve: (value) => finish(true, value), reject: (error) => finish(false, error) });
+        pending.set(id, { resolve: (value) => finish(true, value), reject: (error, terminalReply) => finish(false, error, terminalReply) });
         signal?.addEventListener("abort", aborted, { once: true });
         if (guard) guardTimer = setInterval(() => {
           try { guard(endpointPort); } catch (error) { finish(false, error); }
         }, 25);
+        let dispatchAttempted = false;
         try {
           assertProtocolDispatchAllowed(endpointPort);
           if (signal?.aborted) throw signal.reason;
-          socket.send(JSON.stringify({ id, method, ...(params !== undefined ? { params } : {}) }));
-        } catch (error) { finish(false, error); }
+          const frame = JSON.stringify({ id, method, ...(params !== undefined ? { params } : {}) });
+          dispatchAttempted = true;
+          socket.send(frame);
+        } catch (error) {
+          if (!dispatchAttempted) mutation?.confirm(); // No command reached the transport.
+          finish(false, error);
+        }
       });
     };
 
@@ -243,13 +259,27 @@ export async function connectBidi(wsUrl: string, opts: BidiConnectOpts = {}): Pr
         }
         return;
       }
+      const mutation = mutations.get(msg.id);
+      if (mutation) {
+        const terminal = (msg.type === "success" && Object.hasOwn(msg, "result") &&
+          isBidiSetCookieResult(msg.result) && !Object.hasOwn(msg, "error")) ||
+          (msg.type === "error" && typeof msg.error === "string" && msg.error.length > 0 &&
+            typeof msg.message === "string" && !Object.hasOwn(msg, "result"));
+        if (!terminal) {
+          pending.get(msg.id)?.reject(new Error("Invalid BiDi mutation response envelope"));
+          return;
+        }
+        // Observe the old wire reply even if abort/guard/deadline already rejected
+        // its caller. It proves request completion, not business success/rollback.
+        mutation.confirm();
+      }
       const waiter = pending.get(msg.id);
       if (!waiter) return;
       pending.delete(msg.id);
       if (Object.hasOwn(msg, "error") || msg.type === "error") {
         const details = [typeof msg.error === "string" ? msg.error : msg.error?.error, msg.message, msg.error?.message]
           .filter((value): value is string => typeof value === "string" && value.length > 0);
-        waiter.reject(new Error("BiDi request failed" + (details.length ? ": " + [...new Set(details)].join(": ") : "")));
+        waiter.reject(new Error("BiDi request failed" + (details.length ? ": " + [...new Set(details)].join(": ") : "")), true);
       } else if ((msg.type !== undefined && msg.type !== "success") || !Object.hasOwn(msg, "result") ||
                  !msg.result || typeof msg.result !== "object" || Array.isArray(msg.result)) {
         waiter.reject(new Error("Invalid BiDi response envelope"));
@@ -272,7 +302,7 @@ export async function connectBidi(wsUrl: string, opts: BidiConnectOpts = {}): Pr
         // long-lived connection to the caller.
         assertProtocolDispatchAllowed(endpointPort);
         finishInit();
-        resolveInit({
+        connection = {
           wsUrl: normalized,
           send,
           onEvent: (listener) => {
@@ -284,7 +314,8 @@ export async function connectBidi(wsUrl: string, opts: BidiConnectOpts = {}): Pr
             try { socket.close(); } catch { /* ignore */ }
           },
           get closed() { return closedFlag; },
-        });
+        };
+        resolveInit(connection);
       } catch (e: any) {
         failInit(e);
       }
@@ -487,15 +518,19 @@ export async function bidiGetCookies(conn: BidiConnection, timeoutMs = 10000): P
   return cookies;
 }
 
-/** BiDi confirms a stored cookie with a partition key, not CDP's success flag. */
-export async function bidiSetCookie(conn: BidiConnection, cookie: BidiCookie, timeoutMs = 10000, signal?: AbortSignal): Promise<boolean> {
-  const result = await conn.send("storage.setCookie", { cookie }, timeoutMs, signal);
+function isBidiSetCookieResult(result: any): boolean {
   const key = result?.partitionKey;
   return !!result && typeof result === "object" && !Array.isArray(result) &&
     Object.hasOwn(result, "partitionKey") && !Object.hasOwn(result, "error") && result.success !== false &&
     !!key && typeof key === "object" && !Array.isArray(key) &&
     (key.userContext === undefined || typeof key.userContext === "string") &&
     (key.sourceOrigin === undefined || typeof key.sourceOrigin === "string");
+}
+
+/** BiDi confirms a stored cookie with a partition key, not CDP's success flag. */
+export async function bidiSetCookie(conn: BidiConnection, cookie: BidiCookie, timeoutMs = 10000, signal?: AbortSignal): Promise<boolean> {
+  const result = await conn.send("storage.setCookie", { cookie }, timeoutMs, signal);
+  return isBidiSetCookieResult(result);
 }
 
 /**

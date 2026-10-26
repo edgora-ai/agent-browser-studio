@@ -424,6 +424,11 @@ export interface ProfileInfo {
   fingerprint: BrowserFingerprintMeta;
 }
 
+export interface CookiePartitionKey {
+  topLevelSite: string;
+  hasCrossSiteAncestor: boolean;
+}
+
 export interface CookieInfo {
   domain: string;
   name: string;
@@ -432,7 +437,10 @@ export interface CookieInfo {
   expires: number | null;
   secure: boolean;
   httpOnly: boolean;
+  /** -1 preserves unspecified SameSite rather than inventing explicit None. */
   sameSite: number;
+  /** Absent means unpartitioned; both fields are part of Cookie identity. */
+  partitionKey?: CookiePartitionKey;
 }
 
 export interface SyncConfig {
@@ -858,6 +866,14 @@ export interface SyncItemResult {
   /** A policy-selected omission is distinct from an incomplete requested item. */
   required?: boolean;
   history?: HistoryCoverage;
+  /** Source snapshot facts, not proof that a browser or site accepted the data. */
+  browserData?: {
+    version: 1;
+    source: "captured" | "preserved" | "absent" | "unavailable" | "unknown";
+    capturedAt: number | null;
+    snapshotId: string | null;
+    snapshotAt: number | null;
+  };
   identity?: import("./services/profile-identity.js").ProfileIdentityComparison;
   runtimeEffect?: SyncProfileRuntimeEffect;
 }
@@ -880,7 +896,7 @@ export interface SyncResult {
   items?: SyncItemResult[];
   warnings?: string[];
   recovery?: SyncRecoveryInfo[];
-  /** Configuration publication is not a complete fresh browser-data backup. */
+  /** Published or restored configuration does not imply fresh complete browser data. */
   browserBackupIncomplete?: boolean;
 }
 

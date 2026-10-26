@@ -29,7 +29,7 @@ const REPO = path.resolve(__dirname, "../..");
 const LOOPBACK = "127.0.0.1"; // Literal, exclusively owned listen(0) fixtures, not deployment configuration.
 const GIB = 1024 ** 3, JSON_CAP = 256 * 1024, CONFIG_CAP = 2 * 1024 ** 2;
 const CONTROL_DIAGNOSTIC_CAP = 64 * 1024;
-const AGGREGATE_CAP = GIB, MIN_FREE = 6 * GIB;
+const AGGREGATE_CAP = 2 * GIB, MIN_FREE = 6 * GIB;
 const COUNTER_KEYS = ["requests", "hops", "responses", "finished", "failed", "blocked", "requestCancelled", "redirects", "http4xx", "http5xx", "pending", "cache", "serviceWorker", "unattributed", "cspIssues"] as const;
 const CSP = "default-src 'none'; script-src 'self' 'report-sample'; connect-src 'self'; img-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'";
 type Dict = Record<string, unknown>;

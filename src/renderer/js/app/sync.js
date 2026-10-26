@@ -187,6 +187,18 @@
     });
   });
 
+  function fullProfileDraftReady() {
+    var passphraseInput = document.getElementById('sync-full-profile-passphrase');
+    var scopeChanged = fullProfileBox && fullProfileBox.checked !== savedFullProfileScope;
+    // Presence only: never copy the secret into a draft, token or sync request.
+    var passphraseChanged = passphraseInput && typeof passphraseInput.value === 'string' && passphraseInput.value.length > 0;
+    if (!scopeChanged && !passphraseChanged) return true;
+    toast(t('sync.full-profile.unsaved', 'Full migration scope or passphrase has unsaved changes. Save first before pushing or pulling; your draft has been kept.'), 'warning');
+    var field = passphraseChanged ? passphraseInput : fullProfileBox;
+    if (field && typeof field.focus === 'function') field.focus();
+    return false;
+  }
+
   function hydrateField(id, value, requestedDraft, savedDraft) {
     var el = document.getElementById(id);
     if (!el) return;
@@ -215,6 +227,25 @@
     if (!coverage) return t('sync.history.coverage.legacy', HISTORY_COVERAGE.legacy);
     var state = coverage.coverage || coverage.state || 'legacy';
     return resultLabel('sync.history.coverage.', HISTORY_COVERAGE, state) + ' · ' + resultLabel('sync.history.freshness.', HISTORY_FRESHNESS, coverage.freshness || 'not-covered');
+  }
+  var BROWSER_DATA_SOURCES = { captured: 'Freshly captured', preserved: 'Previous snapshot preserved; not freshly captured', absent: 'Source confirmed absent', unavailable: 'Source unavailable', unknown: 'Source unknown (legacy or missing metadata)' };
+  function isLimitedBrowserData(item) { return item && (item.scope === 'cookies' || item.scope === 'localStorage'); }
+  function browserDataSource(item) {
+    var data = item && item.browserData;
+    return data && data.version === 1 && Object.prototype.hasOwnProperty.call(BROWSER_DATA_SOURCES, data.source) ? data.source : 'unknown';
+  }
+  function browserDataHtml(item) {
+    if (!isLimitedBrowserData(item)) return '';
+    var data = item.browserData, source = browserDataSource(item);
+    var capture = t('sync.browser-data.capture-unknown', 'Capture time unknown; publication time is not capture time.');
+    // A publication timestamp, current clock or missing legacy metadata is not
+    // capture evidence. Only render the explicitly recorded, bounded timestamp.
+    if (source !== 'unknown' && source !== 'unavailable' && data && typeof data.capturedAt === 'number' && Number.isSafeInteger(data.capturedAt) && data.capturedAt >= 0) {
+      var date = new Date(data.capturedAt);
+      if (Number.isFinite(date.getTime())) capture = t('sync.browser-data.captured-at', 'Capture time: {d}').replace('{d}', date.toLocaleString());
+    }
+    return '<div class="status-note">' + esc(resultLabel('sync.browser-data.source.', BROWSER_DATA_SOURCES, source)) + ' · ' + esc(capture) + '</div>' +
+      '<div class="status-note">' + esc(t('sync.browser-data.limited', 'Limited Cookie/LocalStorage snapshot only; IndexedDB, Service Worker, session state and saved browser passwords are not covered. Full migration is not enabled automatically.')) + '</div>';
   }
   function identityLabel(identity) {
     var state = identity && identity.configuration && identity.configuration.state || 'not-verifiable';
@@ -254,7 +285,10 @@
     return r.browserBackupIncomplete === true || resultOutcome(r) !== 'complete' || !r.success || (r.warnings || []).length ||
       r.localCommit === 'partial' || r.remoteCommit === 'partial' || !COMMIT[r.localCommit] || !COMMIT[r.remoteCommit] ||
       r.localCommit === 'unknown' || r.remoteCommit === 'unknown' || (r.recovery || []).length ||
-      (r.items || []).some(function(item) { return ['queued', 'skipped', 'unknown', 'failed', 'preserved'].indexOf(item.state) >= 0; });
+      (r.items || []).some(function(item) {
+        return ['queued', 'skipped', 'unknown', 'failed', 'preserved'].indexOf(item.state) >= 0 ||
+          isLimitedBrowserData(item) && ['captured', 'absent'].indexOf(browserDataSource(item)) < 0;
+      });
   }
 
   function renderResult(r) {
@@ -288,6 +322,7 @@
       html += '<div>' + esc(resultLabel('sync.result.scope.', SCOPE, item.scope)) + (item.id ? ' · ' + esc(item.id) : '') + ': <strong>' + esc(resultLabel('sync.result.item.', ITEM, item.state)) + '</strong>' +
         (typeof item.count === 'number' ? ' (' + esc(String(item.count)) + ')' : '') + (itemMessage ? ' · ' + esc(itemMessage) : '') + (item.code ? ' · ' + esc(item.code) : '') + '</div>';
       if (item.scope === 'history') html += '<div class="status-note">' + esc(historyLabel(item.history)) + '</div>';
+      html += browserDataHtml(item);
       if (item.identity) html += '<div class="status-note">' + esc(identityLabel(item.identity)) + '</div>';
       html += runtimeEffectHtml(item);
     });
@@ -316,11 +351,20 @@
 
   function dispatchOperation(operation, invoke) {
     if (!ownsOperation(operation)) { toast(t('sync.compare.stale', 'Sync content changed. Compare again and choose resolutions afresh.'), 'warning'); return Promise.resolve(null); }
+    var syncWrite = operation.kind === 'push' || operation.kind === 'pull';
+    // Preview/confirmation awaits do not save a newly edited scope or secret.
+    if (syncWrite && !fullProfileDraftReady()) return Promise.resolve(null);
     operation.stage = 'running'; operation.dispatched = true; operation.awaitingReply = true; operation.serviceCompleted = false; operation.operationId = null;
     invalidateViews(); invalidateSurfaceCaches(); renderOperationState();
     // These are owned long-running writes, NOT the generic 15-second IPC write
     // wrapper. A UI timeout must not release an operation that can still commit.
-    return Promise.resolve().then(invoke).then(function(r) {
+    return Promise.resolve().then(function() {
+      if (syncWrite && !fullProfileDraftReady()) {
+        operation.dispatched = false; operation.awaitingReply = false;
+        return null;
+      }
+      return invoke();
+    }).then(function(r) {
       operation.awaitingReply = false;
       if (r && r.operationId) operation.operationId = r.operationId;
       return r;
@@ -578,6 +622,7 @@
 
   agentBrowser.syncPush = function() {
     if (operationBusy()) return Promise.resolve(null);
+    if (!fullProfileDraftReady()) return Promise.resolve(null);
     var operation = beginOperation('push');
     var token = null;
     function push(force) {
@@ -618,6 +663,7 @@
 
   agentBrowser.syncPull = function() {
     if (operationBusy()) return Promise.resolve(null);
+    if (!fullProfileDraftReady()) return Promise.resolve(null);
     if (!viewedComparison || viewedComparison.epoch !== viewEpoch) {
       toast(t('sync.compare.required', 'Compare with remote before pulling; previous choices have been cleared.'), 'warning');
       return Promise.resolve(null);
@@ -730,7 +776,8 @@
       config.historyConsent = !!submitted['sync-history-consent'];
     }
     // The passphrase never enters the ordinary form draft/baseline, and status
-    // never hydrates it. Only an explicit Save reads this password input.
+    // never hydrates it. Only explicit Save submits it; Push/Pull inspect only
+    // whether the input has an unsaved value, never copying it into requests.
     var passphraseInput = document.getElementById('sync-full-profile-passphrase');
     var passphrase = passphraseInput ? passphraseInput.value : '';
     if (passphrase) config.fullProfilePassphrase = passphrase;
