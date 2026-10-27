@@ -1,0 +1,12 @@
+plugins {
+    id 'com.android.application' version '8.7.3' apply false
+}
+
+def outputRoot = System.getenv('ABS_ANDROID_BUILD_ROOT')
+if (outputRoot == null || outputRoot.isBlank()) {
+    throw new GradleException('Set ABS_ANDROID_BUILD_ROOT to an owned external build directory; see README.md.')
+}
+
+allprojects {
+    layout.buildDirectory.set(file("${outputRoot}/${project.name}"))
+}

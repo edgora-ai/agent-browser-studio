@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">ABS 环境浏览器 · 开发版</string>
+    <string name="preview_notice">内部能力验证候选，尚未通过手机与 Ping0 验收。不用于真实账号。</string>
+    <string name="startup_failure">启动/能力配置失败，未开放普通浏览：%1$s</string>
+    <string name="navigation_refused">导航被拒绝：%1$s</string>
+    <string name="storage_unavailable">配置存储不可用，已停止操作；不会创建默认环境替代：%1$s</string>
+    <string name="profile_read_failed">读取失败，未把环境显示为空：%1$s</string>
+    <string name="declared_model_label">声明其他 Android 型号（未校准，禁止作为完整设备模拟启动）</string>
+    <string name="geo_probe_running">正在通过指定代理查询；不会用手机直连 IP 或旧成功缓存代替。</string>
+    <string name="geo_probe_stale">设置已变化，未应用过期探测建议。请按当前配置重测。</string>
+    <string name="geo_probe_suggestion">新鲜建议来源 ipwho.is，时间 %1$s。请确认再保存；这不是浏览器出口、设备型号或 Ping0 通过证明。</string>
+    <string name="geo_probe_failed">代理探测未成功：%1$s。未回填本机地区或旧结果。</string>
+    <string name="geo_probe_not_started">无法发起探测：%1$s</string>
+    <string name="profile_save_failed">保存失败，未假定已写入：%1$s</string>
+    <string name="storage_probe_button">合成存储验证</string>
+    <string name="storage_probe_confirm">进入仅使用 App 内置资源的验证页，许可最长 120 秒。首次只读检索；只有在页面点击“写入合成样本”才替换该页面自己的随机样本。可在正常退出、切换环境后再次只读比较 Cookie、LocalStorage、IndexedDB。不会访问真实账号，不会清空其他网站数据，也不表示完整持久性或登录态通过。</string>
+    <string name="storage_probe_start">进入只读检查</string>
+    <string name="storage_probe_failed">合成存储验证未启动：%1$s</string>
+    <string name="ping0_observation_button">Ping0 诊断</string>
+    <string name="ping0_observation_title">固定 Ping0 实站观察</string>
+    <string name="ping0_observation_confirm">仅本次会话在 %1$d 秒内打开固定 https://ping0.cc/env。仅允许已核对的 Ping0 静态资源、IPv4/IPv6 基础查询和固定格式 DNS 挑战路径；不开放任意子域、第三方、STUN/UDP 或普通浏览。其他依赖仍被阻止，结果可能不完整（partial）。请勿输入账号或凭据。网络与存储仍未验证，这不是产品验收。</string>
+    <string name="ping0_observation_start">开始本次观察</string>
+    <string name="ping0_observation_banner">仅实站观察，普通浏览未开放；网络与存储未验证。</string>
+    <string name="ping0_observation_active">固定页面：https://ping0.cc/env；许可最长 %1$d 秒。网页显示通过也不会提升普通浏览门禁。</string>
+    <string name="ping0_observation_no_blocked">目前未观察到被拦截的依赖；这不证明检测完整或网络无泄漏。</string>
+    <string name="ping0_observation_partial">partial：已阻止 %1$d 次依赖/导航请求（回调计数）。脱敏 origin（最多 %2$d 个）：%3$s。未自动扩大白名单；不能据此作完整站点验收。</string>
+    <string name="ping0_observation_revoked">诊断许可已撤销：%1$s。许可撤销不代表网页后台活动、网络或进程已退出。</string>
+    <string name="ping0_observation_expired">到达诊断截止时间</string>
+    <string name="ping0_observation_self_test">重新自检</string>
+    <string name="ping0_observation_stop">请求退出</string>
+    <string name="ping0_observation_leave">离开诊断页面</string>
+    <string name="ping0_observation_navigation_blocked">已阻止诊断范围外的导航；未打开外部应用。</string>
+    <string name="ping0_observation_window_blocked">已拒绝新窗口；诊断不开放其他页面。</string>
+    <string name="ping0_observation_failed">诊断未启动或已停止：%1$s</string>
+    <string name="ping0_observation_unload_failed">无法确认诊断页面卸载：%1$s。许可仍已撤销，请返回环境列表请求退出。</string>
+</resources>
