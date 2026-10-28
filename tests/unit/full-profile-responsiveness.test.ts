@@ -18,20 +18,20 @@ vi.mock("node:child_process", () => {
   return { exec: blocked, execSync: blocked, execFile: blocked, execFileSync: blocked, spawn: blocked, spawnSync: blocked, fork: blocked };
 });
 
-const CHUNK = 64 * 1024;
+const CHUNK = 64 * 1024, BATCH = 4 * 1024 * 1024;
 const roots: Array<{ directory: string; owner: fs.Stats }> = [];
 const turns = new Set<ReturnType<typeof setImmediate>>();
 function nextTurn(operation: () => void): void {
   const turn = setImmediate(() => { turns.delete(turn); operation(); });
   turns.add(turn);
 }
-function fixture() {
+function fixture(size = 2 * BATCH + 17) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "full-profile-responsiveness-"));
   fs.chmodSync(directory, 0o700); roots.push({ directory, owner: fs.lstatSync(directory) });
   const profileDir = path.join(directory, "source"), stagingDir = path.join(directory, "staging");
   for (const item of [profileDir, stagingDir]) fs.mkdirSync(item, { mode: 0o700 });
-  const bytes = Buffer.alloc(4 * CHUNK + 17, 0x5a);
-  bytes.write("task113-owned-marker=searchable-byte-readback", 3 * CHUNK);
+  const bytes = Buffer.alloc(size, 0x5a);
+  if (size > 4 * CHUNK) bytes.write("task113-owned-marker=searchable-byte-readback", 3 * CHUNK);
   const file = path.join(profileDir, "state.bin");
   fs.writeFileSync(file, bytes, { mode: 0o600 });
   const guard = vi.fn<() => void>(() => undefined);
@@ -122,33 +122,40 @@ afterEach(() => {
   }
 });
 
+function expectBoundedFirstBatch(chunks: Array<{ position: number; bytes: number }>): void {
+  expect(chunks.length).toBeGreaterThan(0);
+  expect(chunks.length).toBeLessThanOrEqual(BATCH / CHUNK);
+  expect(chunks).toEqual(chunks.map((_, index) => ({ position: index * CHUNK, bytes: CHUNK })));
+}
+
 describe("cooperative full-profile artifact traversal", () => {
-  it("observes timer cancellation after the first source chunk, before all bytes or any directory durability gate", async () => {
+  it("observes timer cancellation after a bounded source batch, before all bytes or any directory durability gate", async () => {
     const f = fixture(), controller = new AbortController(), durability = vi.spyOn(fsMutable, "fsyncSync");
     let readsAtCancellation = 0;
     const cancel = vi.fn(() => { readsAtCancellation = observed.chunks.length; controller.abort(); });
     const observed = observeReads(f.directory, file => file === f.file, () => nextTurn(cancel));
     await expect(captureFullProfile({ ...f.options, signal: controller.signal })).rejects.toMatchObject({ code: "ABORT_ERR" });
     observed.assertClosed(); expect(cancel).toHaveBeenCalledTimes(1);
-    expect(readsAtCancellation).toBe(1);
-    expect(observed.chunks).toEqual([{ position: 0, bytes: CHUNK }]);
+    expect(readsAtCancellation).toBe(observed.chunks.length);
+    expectBoundedFirstBatch(observed.chunks);
     expect(f.guard.mock.calls.length).toBeGreaterThanOrEqual(2); expect(durability).not.toHaveBeenCalled();
     expect(fs.readdirSync(f.options.stagingDir)).toEqual([]);
     expect(digest(fs.readFileSync(f.file))).toBe(digest(f.bytes));
   });
 
-  it("rechecks a changed synchronous runtime/config guard before any next chunk", async () => {
+  it("rechecks a changed runtime/config guard after a batch yield before any next chunk", async () => {
     const f = fixture(); let blocked = false;
     f.guard.mockImplementation(() => { if (blocked) throw new Error("SYNTHETIC_RUNTIME_CHANGED"); });
     const change = vi.fn(() => { blocked = true; });
     const observed = observeReads(f.directory, file => file === f.file, () => nextTurn(change));
     await expect(captureFullProfile(f.options)).rejects.toThrow("SYNTHETIC_RUNTIME_CHANGED");
-    expect(change).toHaveBeenCalledTimes(1); expect(observed.chunks).toHaveLength(1); observed.assertClosed();
-    expect(fs.readdirSync(f.options.stagingDir)).toEqual([]); expect(fs.readFileSync(f.file)).toEqual(f.bytes);
+    expect(change).toHaveBeenCalledTimes(1); expectBoundedFirstBatch(observed.chunks); observed.assertClosed();
+    expect(fs.readdirSync(f.options.stagingDir)).toEqual([]); expect(fs.readFileSync(f.file).equals(f.bytes)).toBe(true);
   });
 
-  it("gives every chunk a real turn and rechecks cancellation even after the final chunk before stability I/O", async () => {
-    const f = fixture(), controller = new AbortController(), durability = vi.spyOn(fsMutable, "fsyncSync"), abort = vi.spyOn(controller, "abort");
+  it("gives each bounded batch a real turn and checks cancellation at a final byte boundary before stability I/O", async () => {
+    const f = fixture(2 * BATCH), controller = new AbortController(), durability = vi.spyOn(fsMutable, "fsyncSync"), abort = vi.spyOn(controller, "abort");
+    const clock = Date.now(); vi.spyOn(Date, "now").mockReturnValue(clock);
     const readsAtTurns: number[] = [], count = Math.ceil(f.bytes.length / CHUNK);
     const untilLastChunk = () => {
       readsAtTurns.push(observed.chunks.length);
@@ -157,7 +164,7 @@ describe("cooperative full-profile artifact traversal", () => {
     };
     const observed = observeReads(f.directory, file => file === f.file, () => nextTurn(untilLastChunk));
     await expect(captureFullProfile({ ...f.options, signal: controller.signal })).rejects.toMatchObject({ code: "ABORT_ERR" });
-    expect(readsAtTurns).toEqual([1, 2, 3, 4, 5]); expect(abort).toHaveBeenCalledTimes(1);
+    expect(readsAtTurns).toEqual([BATCH / CHUNK, 2 * BATCH / CHUNK]); expect(abort).toHaveBeenCalledTimes(1);
     expect(observed.tailReads).toBe(0); observed.assertClosed(); expect(durability).not.toHaveBeenCalled();
     expect(fs.readdirSync(f.options.stagingDir)).toEqual([]);
   });
@@ -178,30 +185,32 @@ describe("cooperative full-profile artifact traversal", () => {
     });
     // Replacing a pinned file depends on OS share/delete semantics. Queue that
     // inode change after the real read descriptor closes, before the await
-    // continuation can publish its earlier witness. Append still races chunk 1.
+    // continuation can publish its earlier witness. Append races the first batch.
     const observed = observeReads(f.directory, file => file === f.file,
       () => { if (kind === "append") nextTurn(mutate); }, undefined,
       () => { if (kind === "replace") queueMicrotask(mutate); });
     await expect(captureFullProfile(f.options)).rejects.toThrow(kind === "append"
       ? /changed|unstable/i : "Full-profile ZIP member SHA-256 mismatch");
     expect(mutate).toHaveBeenCalledTimes(1);
-    expect(readsAtMutation).toBe(kind === "append" ? 1 : Math.ceil(f.bytes.length / CHUNK)); observed.assertClosed();
-    expect(fs.readFileSync(f.file)).toEqual(expected); expect(fs.readdirSync(f.options.stagingDir)).toEqual([]);
+    if (kind === "append") { expect(readsAtMutation).toBeGreaterThan(0); expect(readsAtMutation).toBeLessThanOrEqual(BATCH / CHUNK); }
+    else expect(readsAtMutation).toBe(Math.ceil(f.bytes.length / CHUNK));
+    observed.assertClosed();
+    expect(fs.readFileSync(f.file).equals(expected)).toBe(true); expect(fs.readdirSync(f.options.stagingDir)).toEqual([]);
   });
 
-  it("cancels owned ZIP readback after one chunk and cleans only its workspace", async () => {
+  it("cancels owned ZIP readback after one bounded batch and cleans only its workspace", async () => {
     const f = fixture(), controller = new AbortController();
     const callerFile = path.join(f.options.stagingDir, "caller-owned.txt");
     fs.writeFileSync(callerFile, "not the artifact workspace", { flag: "wx", mode: 0o600 });
     const cancel = vi.fn(() => controller.abort());
     const observed = observeReads(f.directory, file => path.basename(file) === "profile.zip", () => nextTurn(cancel));
     await expect(captureFullProfile({ ...f.options, signal: controller.signal })).rejects.toMatchObject({ code: "ABORT_ERR" });
-    expect(cancel).toHaveBeenCalledTimes(1); expect(observed.chunks).toEqual([{ position: 0, bytes: CHUNK }]); observed.assertClosed();
+    expect(cancel).toHaveBeenCalledTimes(1); expectBoundedFirstBatch(observed.chunks); observed.assertClosed();
     expect(fs.readdirSync(f.options.stagingDir)).toEqual(["caller-owned.txt"]);
-    expect(fs.readFileSync(callerFile, "utf8")).toBe("not the artifact workspace"); expect(fs.readFileSync(f.file)).toEqual(f.bytes);
+    expect(fs.readFileSync(callerFile, "utf8")).toBe("not the artifact workspace"); expect(fs.readFileSync(f.file).equals(f.bytes)).toBe(true);
   });
 
-  it("cancels prepare's extracted-file verification after one chunk without publishing prepared state", async () => {
+  it("cancels prepare's extracted-file verification after one bounded batch without publishing prepared state", async () => {
     const f = fixture(), bundle = await captureFullProfile(f.options), controller = new AbortController();
     const before = fs.readdirSync(f.options.stagingDir), cancel = vi.fn(() => controller.abort());
     let verificationOpens = 0;
@@ -210,13 +219,15 @@ describe("cooperative full-profile artifact traversal", () => {
     const observed = observeReads(f.directory, file => file.endsWith(path.join("contents", "profile", "state.bin")) && ++verificationOpens === 2, () => nextTurn(cancel));
     await expect(prepareFullProfile({ ...f.options, ...bundle, signal: controller.signal })).rejects.toMatchObject({ code: "ABORT_ERR" });
     expect(verificationOpens).toBe(2); expect(cancel).toHaveBeenCalledTimes(1);
-    expect(observed.chunks).toEqual([{ position: 0, bytes: CHUNK }]); observed.assertClosed();
-    expect(fs.readdirSync(f.options.stagingDir)).toEqual(before); expect(fs.readFileSync(f.file)).toEqual(f.bytes);
+    expectBoundedFirstBatch(observed.chunks); observed.assertClosed();
+    expect(fs.readdirSync(f.options.stagingDir)).toEqual(before); expect(fs.readFileSync(f.file).equals(f.bytes)).toBe(true);
   });
 
-  it("checks cancellation after an empty-directory member yield before inspecting that member", async () => {
+  it("checks cancellation at an item-count batch boundary before inspecting its next empty directory", async () => {
     const f = fixture(), controller = new AbortController();
-    fs.unlinkSync(f.file); const empty = path.join(f.options.profileDir, "empty"); fs.mkdirSync(empty, { mode: 0o700 });
+    fs.unlinkSync(f.file);
+    for (let i = 0; i < 129; i++) fs.mkdirSync(path.join(f.options.profileDir, "empty-" + String(i).padStart(3, "0")), { mode: 0o700 });
+    const empty = path.join(f.options.profileDir, "empty-127");
     const observed = observeReads(f.directory, () => false, () => { throw new Error("Unexpected fixture read"); });
     const readdir = fsMutable.readdirSync, cancel = vi.fn(() => controller.abort()); let scheduled = false;
     vi.spyOn(fsMutable, "readdirSync").mockImplementation(((...args: any[]) => {
@@ -261,7 +272,7 @@ describe("cooperative full-profile artifact traversal", () => {
     const realm = artifactRealm(), f = fixture(), controller = new AbortController(), cancel = vi.fn(() => controller.abort());
     const observed = observeReads(f.directory, file => file === f.file, () => nextTurn(cancel));
     await expect(realm.captureFullProfile({ ...f.options, signal: controller.signal })).rejects.toMatchObject({ code: "ABORT_ERR" });
-    expect(cancel).toHaveBeenCalledTimes(1); expect(observed.chunks).toHaveLength(1); observed.assertClosed();
+    expect(cancel).toHaveBeenCalledTimes(1); expectBoundedFirstBatch(observed.chunks); observed.assertClosed();
     expect(fs.readdirSync(f.options.stagingDir)).toEqual([]);
   });
 
@@ -273,8 +284,8 @@ describe("cooperative full-profile artifact traversal", () => {
     });
     const observed = observeReads(f.directory, file => file === f.file, () => { reading = true; });
     await expect(realm.captureFullProfile(f.options)).rejects.toThrow("SYNTHETIC_SCHEDULER_FAILURE");
-    expect(faults).toBe(1); expect(observed.chunks).toHaveLength(1); observed.assertClosed();
-    expect(fs.readdirSync(f.options.stagingDir)).toEqual([]); expect(fs.readFileSync(f.file)).toEqual(f.bytes);
+    expect(faults).toBe(1); expectBoundedFirstBatch(observed.chunks); observed.assertClosed();
+    expect(fs.readdirSync(f.options.stagingDir)).toEqual([]); expect(fs.readFileSync(f.file).equals(f.bytes)).toBe(true);
   });
 
   it("preserves chunk guards and byte/hash/searchable readback with synchronous reseal, restore and rollback", async () => {
@@ -283,15 +294,15 @@ describe("cooperative full-profile artifact traversal", () => {
     const observeTurn = vi.fn(() => { readsAtTurn = observed.chunks.length; });
     const observed = observeReads(f.directory, file => file === f.file, () => nextTurn(observeTurn), () => f.guard.mock.calls.length);
     const bundle = await captureFullProfile(f.options);
-    expect(observeTurn).toHaveBeenCalledTimes(1); expect(readsAtTurn).toBe(1); expect(observed.chunks).toHaveLength(5);
-    for (let i = 1; i < observed.guardsAtRead.length; i++) expect(observed.guardsAtRead[i] - observed.guardsAtRead[i - 1]).toBe(2);
-    expect(observed.guardsAtClose! - observed.guardsAtRead.at(-1)!).toBe(2); expect(observed.tailReads).toBe(1);
+    expect(observeTurn).toHaveBeenCalledTimes(1); expect(readsAtTurn).toBeGreaterThan(0); expect(readsAtTurn).toBeLessThanOrEqual(BATCH / CHUNK); expect(observed.chunks).toHaveLength(Math.ceil(f.bytes.length / CHUNK));
+    for (let i = 1; i < observed.guardsAtRead.length; i++) expect(observed.guardsAtRead[i] - observed.guardsAtRead[i - 1]).toBeGreaterThanOrEqual(2);
+    expect(observed.guardsAtClose! - observed.guardsAtRead.at(-1)!).toBeGreaterThanOrEqual(2); expect(observed.tailReads).toBe(1);
     expect(bundle.descriptor.sha256).toBe(digest(bundle.body)); expect(bundle.descriptor.size).toBe(bundle.body.length);
     const prepared = await prepareFullProfile({ ...f.options, ...bundle });
     const member = prepared.manifest.files.find(item => item.path === "state.bin");
     expect(member).toMatchObject({ size: f.bytes.length, sha256: digest(f.bytes) });
     const readback = fs.readFileSync(path.join(prepared.directory, "state.bin"));
-    expect(readback).toEqual(f.bytes); expect(readback.includes(Buffer.from("task113-owned-marker=searchable-byte-readback"))).toBe(true);
+    expect(readback.equals(f.bytes)).toBe(true); expect(readback.includes(Buffer.from("task113-owned-marker=searchable-byte-readback"))).toBe(true);
     expect(fs.lstatSync(path.join(prepared.directory, "empty")).isDirectory()).toBe(true);
     const target = path.join(f.directory, "receiver"); fs.mkdirSync(target, { mode: 0o700 });
     fs.writeFileSync(path.join(target, "old.txt"), "owned previous bytes", { flag: "wx", mode: 0o600 });
@@ -300,7 +311,7 @@ describe("cooperative full-profile artifact traversal", () => {
     expect(resealed).not.toHaveProperty("then"); expect(turnRan).toBe(false);
     const restored = restorePreparedFullProfile({ prepared: resealed, profileDir: target, backupSuffix: ".owned-old", guard: f.options.guard });
     expect(restored).not.toHaveProperty("then"); expect(turnRan).toBe(false);
-    expect(fs.readFileSync(path.join(target, "state.bin"))).toEqual(f.bytes);
+    expect(fs.readFileSync(path.join(target, "state.bin")).equals(f.bytes)).toBe(true);
     expect(restored.rollback()).toBeUndefined(); expect(turnRan).toBe(false);
     expect(fs.readFileSync(path.join(target, "old.txt"), "utf8")).toBe("owned previous bytes");
     const retained = fs.readFileSync(path.join(restored.rollbackDir!, "state.bin"));

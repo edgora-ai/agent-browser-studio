@@ -89,6 +89,7 @@ const api = {
   sync: {
     push: (opts) => ipcRenderer.invoke("sync:push", opts),
     pull: (opts) => ipcRenderer.invoke("sync:pull", opts),
+    cancel: (opts) => ipcRenderer.invoke("sync:cancel", opts),
     status: () => ipcRenderer.invoke("sync:status"),
     historyState: (dirId) => ipcRenderer.invoke("sync:history-state", dirId),
     preview: () => ipcRenderer.invoke("sync:preview"),

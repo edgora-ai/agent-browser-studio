@@ -477,6 +477,172 @@ describe("full-profile cold-source and owned-path safety", () => {
   });
 });
 
+describe("full-profile local progress callback safety", () => {
+  it.each(["callback", "slice-postcheck"] as const)("clears an archive buffer rejected by the final %s before ownership reaches capture", async mode => {
+    const root = tmp(), options = captureOptions(root);
+    put(options.profileDir, "safe", "synthetic-owned-plaintext");
+    const allocate = Buffer.alloc, owned: Buffer[] = [];
+    let archiveSize = -1, archiveRead = false;
+    const open = fsMutable.openSync;
+    vi.spyOn(fsMutable, "openSync").mockImplementation((file, flags, permissions) => {
+      if (String(file).endsWith(path.sep + "profile.zip") && typeof flags === "number" && !(flags & (fs.constants.O_WRONLY | fs.constants.O_RDWR))) {
+        archiveSize = fs.statSync(file).size; archiveRead = true;
+      }
+      return open(file, flags, permissions);
+    });
+    vi.spyOn(Buffer, "alloc").mockImplementation(((size: number, ...args: any[]) => {
+      const buffer = Reflect.apply(allocate, Buffer, [size, ...args]);
+      // The owned read buffer is allocated before openRegular; record the
+      // unique ZIP-sized allocation using the staging file's real size.
+      const workspace = fs.readdirSync(options.stagingDir).find(name => name.startsWith("full-profile-capture-"));
+      const archive = workspace && path.join(options.stagingDir, workspace, "profile.zip");
+      if (archive && fs.existsSync(archive) && fs.statSync(archive).size === size) owned.push(buffer);
+      return buffer;
+    }) as typeof Buffer.alloc);
+    syncBuiltinESMExports();
+    const scoped = Object.assign(() => guard(), { runSynchronous<T>(action: () => T): T {
+      const result = action();
+      if (mode === "slice-postcheck" && archiveRead) throw new Error("SYNTHETIC_LEASE_POSTCHECK_FAILED");
+      return result;
+    } });
+    await expect(captureFullProfile({ ...options, guard: scoped, onProgress(value) {
+      if (mode === "callback" && value.phase === "reading-archive") {
+        expect(value.bytes).toBe(archiveSize);
+        throw new Error("SYNTHETIC_PROGRESS_FAILED");
+      }
+    } })).rejects.toThrow(mode === "callback" ? "SYNTHETIC_PROGRESS_FAILED" : "SYNTHETIC_LEASE_POSTCHECK_FAILED");
+    expect(owned.length).toBeGreaterThan(0);
+    for (const buffer of owned) expect(buffer.every(byte => byte === 0)).toBe(true);
+    expect(fs.readdirSync(options.stagingDir)).toEqual([]);
+    expect(fs.readFileSync(path.join(options.profileDir, "safe"), "utf8")).toBe("synthetic-owned-plaintext");
+  });
+
+  it("revalidates source bytes after the encryption phase boundary before sealing", async () => {
+    const options = captureOptions(tmp());
+    const file = put(options.profileDir, "safe", "synthetic-before-boundary");
+    let scheduled = false, mutated = false;
+    await expect(captureFullProfile({ ...options, onProgress(value) {
+      if (value.phase !== "encrypting" || scheduled) return;
+      scheduled = true;
+      setImmediate(() => { fs.writeFileSync(file, "synthetic-after-boundary"); mutated = true; });
+    } })).rejects.toMatchObject({ code: "FULL_PROFILE_INVALID", message: expect.stringContaining("source changed") });
+    expect(mutated).toBe(true);
+    expect(fs.readFileSync(file, "utf8")).toBe("synthetic-after-boundary");
+    expect(fs.readdirSync(options.stagingDir)).toEqual([]);
+  });
+
+  it.each([
+    ["verifying-source", "callback"], ["verifying-source", "microtask"], ["encrypting", "callback"],
+  ] as const)("rejects source mutation at the completed %s %s boundary", async (phase, timing) => {
+    // A tiny tree and a frozen batch clock make the scan callback terminal, not
+    // an earlier chunk boundary that another hash might happen to catch.
+    vi.spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
+    const options = captureOptions(tmp()), original = "synthetic-source-before-observer";
+    const file = put(options.profileDir, "safe", original);
+    let callbacks = 0, mutated = false;
+    await expect(captureFullProfile({ ...options, onProgress(value) {
+      if (value.phase !== phase || phase === "encrypting" && value.items !== 1) return;
+      callbacks++; expect(value.items).toBe(1); expect(value.bytes).toBeGreaterThan(0);
+      const mutate = () => { fs.writeFileSync(file, original + ":changed-after-final-read"); mutated = true; };
+      if (timing === "microtask") queueMicrotask(mutate); else mutate();
+    } })).rejects.toMatchObject({ code: "FULL_PROFILE_INVALID", message: expect.stringContaining("source changed") });
+    expect(callbacks).toBe(1); expect(mutated).toBe(true);
+    expect(fs.readFileSync(file, "utf8")).toBe(original + ":changed-after-final-read");
+    expect(fs.readdirSync(options.stagingDir)).toEqual([]);
+  });
+
+  it.each([
+    ["verifying-profile", "profile", "callback"], ["verifying-profile", "profile", "microtask"],
+    ["verifying-extras", "extras", "callback"], ["verifying-extras", "extras", "microtask"],
+    ["verifying-extras", "profile", "callback"], ["verifying-extras", "profile", "microtask"],
+  ] as const)("rejects completed %s observers mutating prepared %s at the %s boundary", async (phase, namespace, timing) => {
+    vi.spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
+    const options = captureOptions(tmp(), { extraEntries: phase === "verifying-extras" ? [
+      { path: "capsule.bin", data: Buffer.from("synthetic-opaque-capsule") },
+    ] : [] });
+    const original = "synthetic-profile-before-observer";
+    put(options.profileDir, "safe", original);
+    const bundle = { options, ...await captureFullProfile(options) };
+    let callbacks = 0, mutated = false;
+    await expect(prepare(bundle, { onProgress(value) {
+      if (value.phase !== phase) return;
+      callbacks++; expect(value.items).toBe(1); expect(value.bytes).toBeGreaterThan(0);
+      const workspaces = fs.readdirSync(options.stagingDir).filter(name => name.startsWith("full-profile-prepare-"));
+      expect(workspaces).toHaveLength(1);
+      const file = path.join(options.stagingDir, workspaces[0], "contents", namespace, namespace === "profile" ? "safe" : "capsule.bin");
+      const mutate = () => { fs.writeFileSync(file, "synthetic-unverified-prepared-content-after-observer"); mutated = true; };
+      if (timing === "microtask") queueMicrotask(mutate); else mutate();
+    } })).rejects.toMatchObject({ code: "FULL_PROFILE_INVALID", message: expect.stringContaining("source changed") });
+    expect(callbacks).toBe(1); expect(mutated).toBe(true);
+    expect(fs.readFileSync(path.join(options.profileDir, "safe"), "utf8")).toBe(original);
+    expect(fs.readdirSync(options.stagingDir)).toEqual([]);
+  });
+
+  it("rejects an earlier prepared profile mutation during a later suspended extras batch", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
+    const capsule = Buffer.alloc(4 * 1024 * 1024 + 1, 0x65);
+    const options = captureOptions(tmp(), { extraEntries: [{ path: "capsule.bin", data: capsule }] });
+    put(options.profileDir, "safe", "synthetic-profile-before-extras");
+    const bundle = { options, ...await captureFullProfile(options) };
+    let scheduled = false, mutated = false;
+    await expect(prepare(bundle, { onProgress(value) {
+      if (value.phase !== "verifying-extras" || scheduled) return;
+      expect(value.bytes).toBeGreaterThan(0); expect(value.bytes).toBeLessThan(capsule.length); scheduled = true;
+      const workspaces = fs.readdirSync(options.stagingDir).filter(name => name.startsWith("full-profile-prepare-"));
+      expect(workspaces).toHaveLength(1);
+      const file = path.join(options.stagingDir, workspaces[0], "contents", "profile", "safe");
+      queueMicrotask(() => { fs.writeFileSync(file, "synthetic-profile-changed-while-extras-yielded"); mutated = true; });
+    } })).rejects.toMatchObject({ code: "FULL_PROFILE_INVALID", message: expect.stringContaining("source changed") });
+    expect(scheduled).toBe(true); expect(mutated).toBe(true);
+    expect(fs.readFileSync(path.join(options.profileDir, "safe"), "utf8")).toBe("synthetic-profile-before-extras");
+    expect(fs.readdirSync(options.stagingDir)).toEqual([]);
+  });
+
+  it.each(["capture", "prepare"] as const)("ends %s with fresh metadata witnesses, without another payload read or observer", async mode => {
+    vi.spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
+    const options = captureOptions(tmp(), { extraEntries: [{ path: "capsule.bin", data: Buffer.from("synthetic-opaque-capsule") }] });
+    put(options.profileDir, "safe", "synthetic-final-witness");
+    const bundle = mode === "prepare" ? { options, ...await captureFullProfile(options) } : undefined;
+    let finalFile = "", witnesses = 0, lateReads = 0;
+    const lstat = fsMutable.lstatSync, read = fsMutable.readSync;
+    vi.spyOn(fsMutable, "lstatSync").mockImplementation(((...args: Parameters<typeof fsMutable.lstatSync>) => {
+      if (finalFile && String(args[0]) === finalFile) witnesses++;
+      return Reflect.apply(lstat, fsMutable, args);
+    }) as typeof fsMutable.lstatSync);
+    vi.spyOn(fsMutable, "readSync").mockImplementation(((...args: Parameters<typeof fsMutable.readSync>) => {
+      if (finalFile) lateReads++;
+      return Reflect.apply(read, fsMutable, args);
+    }) as typeof fsMutable.readSync);
+    syncBuiltinESMExports();
+    const observer = (value: Parameters<NonNullable<CaptureFullProfileOptions["onProgress"]>>[0]) => {
+      expect(witnesses).toBe(0);
+      if (mode === "capture" ? value.phase === "encrypting" && value.items === 1 : value.phase === "verifying-extras") {
+        if (mode === "capture") finalFile = path.join(options.profileDir, "safe");
+        else {
+          const workspaces = fs.readdirSync(options.stagingDir).filter(name => name.startsWith("full-profile-prepare-"));
+          expect(workspaces).toHaveLength(1); finalFile = path.join(options.stagingDir, workspaces[0], "contents", "profile", "safe");
+        }
+      }
+    };
+    const finalGuard = () => { expect(witnesses).toBe(0); };
+    if (mode === "capture") await captureFullProfile({ ...options, guard: finalGuard, onProgress: observer });
+    else await prepare(bundle!, { guard: finalGuard, onProgress: observer });
+    expect(finalFile).not.toBe(""); expect(witnesses).toBeGreaterThan(0); expect(lateReads).toBe(0);
+  });
+
+  it("rejects asynchronous local progress callbacks without retaining a process frame or unhandled rejection", async () => {
+    const root = tmp(), options = captureOptions(root); put(options.profileDir, "safe", "synthetic-state");
+    let depth = 0;
+    const scoped = Object.assign(() => guard(), { runSynchronous<T>(action: () => T): T {
+      depth++; try { return action(); } finally { depth--; }
+    } });
+    await expect(captureFullProfile({ ...options, guard: scoped, onProgress: async () => {
+      expect(depth).toBe(0); throw new Error("SYNTHETIC_ASYNC_PROGRESS_REJECTION");
+    } })).rejects.toMatchObject({ code: "FULL_PROFILE_INVALID", message: expect.stringContaining("must be synchronous") });
+    expect(depth).toBe(0); expect(fs.readdirSync(options.stagingDir)).toEqual([]);
+  });
+});
+
 describe("full-profile staged replacement, rollback and local conversion", () => {
   it("preserves synchronous read slices through restore and rollback without scoping publication renames", async () => {
     const bundle = await simpleBundle(), incoming = await prepare(bundle), target = liveTarget(bundle.root);

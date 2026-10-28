@@ -512,7 +512,7 @@ describe("process-discovery", () => {
   });
 
   describe("owned-guard-cost: actual cold transfer gate with injected providers", () => {
-    const CHUNK = 64 * 1024, turns = new Set<ReturnType<typeof setImmediate>>();
+    const CHUNK = 64 * 1024, BATCH = 4 * 1024 * 1024, turns = new Set<ReturnType<typeof setImmediate>>();
     const sha = (bytes: Buffer) => createHash("sha256").update(bytes).digest("hex");
     function nextOwnedTurn(action: () => void): void {
       const turn = setImmediate(() => { turns.delete(turn); action(); }); turns.add(turn);
@@ -588,7 +588,7 @@ describe("process-discovery", () => {
           clearTimeout(timer); maxGap = Math.max(maxGap, ended - lastBeat);
           const providers = gate.providers.length, guards = gate.guards;
           expect(providers).toBe(guards * (process.platform === "win32" ? 4 : 2));
-          expect(firstTurnChunks).toBe(1); expect(io.chunks).toHaveLength(Math.ceil(size / CHUNK));
+          expect(firstTurnChunks).toBeGreaterThan(0); expect(firstTurnChunks).toBeLessThanOrEqual(Math.min(Math.ceil(size / CHUNK), BATCH / CHUNK)); expect(io.chunks).toHaveLength(Math.ceil(size / CHUNK));
           measurements.push({ bytes: size, guards, providers, commands: gate.providers.reduce<Record<string, number>>((counts, command) => { counts[command] = (counts[command] || 0) + 1; return counts; }, {}),
             firstScanChunks: io.chunks.length, firstTurnChunks, heartbeatTicks, maxHeartbeatGapMs: Number(maxGap.toFixed(3)), elapsedMs: Number((ended - started).toFixed(3)) });
           expect(bundle.descriptor.sha256).toBe(sha(bundle.body)); expect(bundle.descriptor.size).toBe(bundle.body.length);
@@ -597,7 +597,7 @@ describe("process-discovery", () => {
           expect(member).toMatchObject({ size, sha256: sha(f.bytes) });
           const readback = fs.readFileSync(path.join(prepared.directory, "state.bin"));
           expect(readback).toEqual(f.bytes); if (size > CHUNK) expect(readback.includes(f.marker)).toBe(true);
-          expect(fs.readFileSync(f.file)).toEqual(f.bytes); expect(runningProcesses.size).toBe(0); expect(isRestoreLocked(f.id)).toBe(true);
+          expect(fs.readFileSync(f.file).equals(f.bytes)).toBe(true); expect(runningProcesses.size).toBe(0); expect(isRestoreLocked(f.id)).toBe(true);
         } finally { clearTimeout(timer); try { release(); io.assertClosed(); } finally { io.restore(); } }
         expect(isRestoreLocked(f.id)).toBe(false);
       }
@@ -606,9 +606,9 @@ describe("process-discovery", () => {
       console.info("owned-guard-cost " + JSON.stringify({ scope: "runtime-guard branch; injected providers, no native process timings or UI budget", platform: process.platform, measurements }));
     });
 
-    it.each(["cancel", "unknown"] as const)("ends real runSynchronous frames before nextTurn and preserves first-chunk %s rejection", async mode => {
+    it.each(["cancel", "unknown"] as const)("ends real runSynchronous frames before nextTurn and preserves bounded-batch %s rejection", async mode => {
       vi.stubGlobal("process", { ...process, platform: "linux" });
-      const f = coldProfile(4 * CHUNK + 17), controller = new AbortController(); let unavailable = false, active = false, readsAtChange = 0;
+      const f = coldProfile(2 * BATCH + 17), controller = new AbortController(); let unavailable = false, active = false, readsAtChange = 0;
       const gate = stoppedGate(f.id, () => unavailable);
       const slices: Array<{ guards: number; providers: number; complete: boolean }> = [];
       const guard = Object.assign(gate.guard, {
@@ -630,27 +630,28 @@ describe("process-discovery", () => {
       try {
         await expect(captureFullProfile(options(f, guard, controller.signal))).rejects.toMatchObject({ code: mode === "cancel" ? "ABORT_ERR" : "PROFILE_STOP_REQUIRED" });
         expect(atTurn).toEqual({ frameActive: false, freshProviders: 1, status: { running: false, pid: null, cdpPort: null } });
-        expect(active).toBe(false); expect(readsAtChange).toBe(1); expect(io.chunks).toEqual([{ position: 0, bytes: CHUNK }]);
+        expect(active).toBe(false); expect(readsAtChange).toBeGreaterThan(0); expect(readsAtChange).toBeLessThanOrEqual(BATCH / CHUNK);
+        expect(io.chunks).toHaveLength(readsAtChange);
         const completed = slices.filter(slice => slice.complete);
-        expect(completed).toHaveLength(2); expect(completed.map(slice => slice.providers)).toEqual([1, 1]);
-        expect(completed[0].guards).toBeGreaterThanOrEqual(2); expect(completed[1].guards).toBeGreaterThanOrEqual(3); expect(gate.guards).toBeGreaterThanOrEqual(6);
+        expect(completed.length).toBeGreaterThan(0); expect(completed.every(slice => slice.providers === 1)).toBe(true);
+        expect(completed.some(slice => slice.guards >= 3)).toBe(true); expect(gate.guards).toBeGreaterThanOrEqual(6);
         expect(slices[slices.length - 1]).toMatchObject({ complete: false, providers: mode === "cancel" ? 0 : 2 });
-        expect(fs.readdirSync(f.stage)).toEqual([]); expect(fs.readFileSync(f.file)).toEqual(f.bytes);
+        expect(fs.readdirSync(f.stage)).toEqual([]); expect(fs.readFileSync(f.file).equals(f.bytes)).toBe(true);
         expect(sha(fs.readFileSync(f.file))).toBe(sha(f.bytes)); expect(fs.readFileSync(f.file).includes(f.marker)).toBe(true);
         expect(isRestoreLocked(f.id)).toBe(true); expect(runningProcesses.size).toBe(0);
       } finally { try { release(); io.assertClosed(); } finally { io.restore(); } }
       expect(isRestoreLocked(f.id)).toBe(false);
     });
 
-    it.each(["cancel", "unknown"] as const)("rechecks %s after the first cooperative source chunk while retaining caller ownership", async mode => {
-      const f = coldProfile(4 * CHUNK + 17), controller = new AbortController(); let unavailable = false, readsAtChange = 0;
+    it.each(["cancel", "unknown"] as const)("rechecks %s after the first bounded source batch while retaining caller ownership", async mode => {
+      const f = coldProfile(2 * BATCH + 17), controller = new AbortController(); let unavailable = false, readsAtChange = 0;
       const gate = stoppedGate(f.id, () => unavailable);
       const io = observeOwnedIO(f.file, () => nextOwnedTurn(() => { readsAtChange = io.chunks.length; if (mode === "cancel") controller.abort(); else unavailable = true; }));
       const release = acquireRestoreLock(f.id);
       try {
         await expect(captureFullProfile(options(f, gate.guard, controller.signal))).rejects.toMatchObject({ code: mode === "cancel" ? "ABORT_ERR" : "PROFILE_STOP_REQUIRED" });
-        expect(readsAtChange).toBe(1); expect(io.chunks).toEqual([{ position: 0, bytes: CHUNK }]);
-        expect(fs.readdirSync(f.stage)).toEqual([]); expect(fs.readFileSync(f.file)).toEqual(f.bytes);
+        expect(readsAtChange).toBeGreaterThan(0); expect(readsAtChange).toBeLessThanOrEqual(BATCH / CHUNK); expect(io.chunks).toHaveLength(readsAtChange);
+        expect(fs.readdirSync(f.stage)).toEqual([]); expect(fs.readFileSync(f.file).equals(f.bytes)).toBe(true);
         expect(sha(fs.readFileSync(f.file))).toBe(sha(f.bytes)); expect(fs.readFileSync(f.file).includes(f.marker)).toBe(true);
         expect(isRestoreLocked(f.id)).toBe(true); expect(runningProcesses.size).toBe(0);
       } finally { try { release(); io.assertClosed(); } finally { io.restore(); } }

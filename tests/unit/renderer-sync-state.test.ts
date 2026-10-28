@@ -102,6 +102,7 @@ function harness(locale?: "en-US" | "zh-CN") {
       push: vi.fn(async (_opts?: any): Promise<any> => result({ operationId: "manual-push", remoteCommit: "committed" })),
       pull: vi.fn(async (_opts?: any): Promise<any> => result()),
       configure: vi.fn(async (_config: any): Promise<any> => result({ operationId: "manual-configure" })),
+      cancel: vi.fn(async (opts: any): Promise<any> => ({ success: true, requestId: opts.requestId, state: "cancelling" })),
       historyState: vi.fn(async (_dirId: string): Promise<any> => ({ scope: "history-and-firefox-bookmarks", status: "unknown", coverage: "legacy", freshness: "not-covered", capturedAt: null })),
     },
     app: { reloadConfig: vi.fn(async () => { throw new Error("renderer must not reload the live config store"); }), setLanguage: vi.fn(async () => {}) },
@@ -278,7 +279,7 @@ describe("owned sync progress rendering and races", () => {
   it("retains a manual write through byte completion, a late completion event, and its pending reply beyond 15 seconds", async () => {
     vi.useFakeTimers(); vi.setSystemTime(11000);
     const h = harness(), write = deferred<any>(); await h.ab.loadSyncDiff(); h.api.sync.pull.mockReturnValueOnce(write.promise);
-    const pending = h.ab.syncPull(); await flush(); h.emit(event("started", 1, "pull", "manual-pull")); await flush();
+    const pending = h.ab.syncPull(); await flush(); h.emit({ ...event("started", 1, "pull", "manual-pull"), requestId: h.api.sync.pull.mock.calls[0][0].requestId }); await flush();
     const fixture = progressEvent(1, { operationId: "manual-pull", kind: "pull", stage: "downloading" });
     fixture.progress.transfer.direction = "download"; fixture.progress.transfer.state = "complete";
     fixture.progress.transfer.bytes = fixture.progress.transfer.totalBytes; h.emitProgress(fixture);
@@ -745,7 +746,7 @@ describe("draft preservation and exact viewed comparison token", () => {
     h.entries()[0].value = "remote"; h.elements["sync-merge-strategy"].value = "newest";
     h.api.sync.previewDiff.mockResolvedValue(comparison(TOKEN_B, "never-viewed-profile")); h.api.sync.pull.mockReturnValueOnce(pendingPull.promise);
     const pending = h.ab.syncPull(); await flush();
-    expect(h.api.sync.pull).toHaveBeenCalledWith({ strategy: "newest", resolutions: { "profiles:profile-a": "remote" }, comparisonToken: TOKEN_A });
+    expect(h.api.sync.pull).toHaveBeenCalledWith({ requestId: expect.any(String), strategy: "newest", resolutions: { "profiles:profile-a": "remote" }, comparisonToken: TOKEN_A });
     expect(h.api.sync.previewDiff).toHaveBeenCalledTimes(1); expect(h.entries()).toHaveLength(0);
     pendingPull.resolve(result()); await pending; await flush();
     expect(h.api.app.reloadConfig).not.toHaveBeenCalled();
@@ -1090,4 +1091,167 @@ describe("truthful Compare scope and effective mirrored translations", () => {
       expect(occurrences, `${key} must occur once per locale, not shadow itself in another layer`).toHaveLength(2);
     }
   });
+});
+
+
+describe("safe user-owned renderer sync cancellation", () => {
+  const cancel = (h: ReturnType<typeof harness>) => h.elements["sync-operation-actions"]?.children.find(node => node.id === "sync-cancel-button");
+  async function started(kind: "push" | "pull", locale?: "en-US" | "zh-CN") {
+    const h = harness(locale), settle = deferred<any>();
+    if (kind === "pull") await h.ab.loadSyncDiff();
+    h.api.sync[kind].mockReturnValueOnce(settle.promise);
+    const pending = h.ab[kind === "push" ? "syncPush" : "syncPull"](); await flush();
+    const requestId = h.api.sync[kind].mock.calls[0][0].requestId;
+    return { h, settle, pending, requestId };
+  }
+  it.each(["push", "pull"] as const)("%s cancel is available during preflight, abandons hung reads and never dispatches their later replies", async kind => {
+    const h = harness(), preview = deferred<any>(); if (kind === "pull") await h.ab.loadSyncDiff();
+    h.api.sync.preview.mockReturnValueOnce(preview.promise);
+    const pending = h.ab[kind === "push" ? "syncPush" : "syncPull"](); await flush();
+    expect(cancel(h)?.disabled).toBe(false); cancel(h)!.emit("click");
+    await pending; await flush(); expect(h.api.sync[kind]).not.toHaveBeenCalled(); expect(h.api.sync.cancel).not.toHaveBeenCalled();
+    expect(h.buttons.syncPush.disabled).toBe(false); expect(cancel(h)).toBeUndefined();
+    preview.resolve({ configured: true, runningProfiles: [], message: "obsolete cancelled preflight" }); await flush();
+    expect(h.api.sync[kind]).not.toHaveBeenCalled(); expect(h.elements["sync-preview-message"].textContent).not.toContain("obsolete cancelled preflight");
+  });
+  it("cancel during a confirmation prevents a later accepted dialog from dispatching", async () => {
+    const h = harness(), decision = deferred<boolean>();
+    h.api.sync.previewDiff.mockResolvedValue({ ...comparison(), pushWarnings: ["Synthetic removal"] }); h.ab.confirmAsync.mockReturnValueOnce(decision.promise);
+    const pending = h.ab.syncPush(); await flush(); expect(h.ab.confirmAsync).toHaveBeenCalledTimes(1);
+    cancel(h)!.emit("click"); await pending; decision.resolve(true); await flush();
+    expect(h.api.sync.push).not.toHaveBeenCalled(); expect(h.buttons.syncPull.disabled).toBe(false);
+  });
+  for (const locale of ["en-US", "zh-CN"] as const) for (const kind of ["push", "pull"] as const) {
+    it(`${locale} ${kind} keeps cancel available through every phase and remains cancelling after acknowledgement until service settles`, async () => {
+      const { h, settle, pending, requestId } = await started(kind, locale);
+      h.emit({ ...event("started", 1, kind, "service-progress"), requestId }); await flush();
+      const button = cancel(h)!;
+      for (const [i, stage] of ["preparing", "publishing", "downloading", "verifying", "applying", "finalizing"].entries()) {
+        h.emitProgress(progressEvent(i + 1, { kind, stage, progress: { sequence: i + 1, updatedAt: 6000 + i } }));
+        expect(cancel(h)).toBe(button); expect(button.disabled).toBe(false);
+      }
+      button.emit("click"); button.emit("click"); await flush();
+      expect(h.api.sync.cancel).toHaveBeenCalledExactlyOnceWith({ requestId }); expect(button.disabled).toBe(true);
+      expect(h.banner()).toContain(h.window.i18n.t("sync.cancel.cancelling")); expect(h.renderedResult()).toBe("");
+      for (const control of [h.buttons.syncPush, h.buttons.syncPull, h.buttons.syncSave]) expect(control.disabled).toBe(true);
+      const final = result({ operationId: "service-progress", success: false, outcome: "partial", localCommit: "partial", remoteCommit: "unknown", code: "SYNC_CANCELLED" });
+      // Completion can reach the renderer before the invoke reply. Keep the
+      // original operation pending even after its service completion event.
+      h.emit({ ...event("completed", 2, kind, "service-progress"), result: final }, final); await flush();
+      expect(h.buttons.syncPush.disabled).toBe(true); expect(h.banner()).toContain(h.window.i18n.t("sync.cancel.cancelling"));
+      settle.resolve(final); await pending; await flush();
+      expect(h.buttons.syncPush.disabled).toBe(false); expect(cancel(h)).toBeUndefined();
+      expect(h.renderedResult()).toContain(h.window.i18n.t("sync.result.commit.partial"));
+      expect(h.renderedResult()).toContain(h.window.i18n.t("sync.result.commit.unknown"));
+      expect(h.ab.helpers.toast.mock.calls.some((call: any[]) => call[1] === "success")).toBe(false);
+    });
+  }
+  it("an old button and a late cancel reply cannot cancel or mutate a subsequent operation", async () => {
+    const first = await started("push"), oldButton = cancel(first.h)!, ack = deferred<any>();
+    first.h.api.sync.cancel.mockReturnValueOnce(ack.promise); oldButton.emit("click"); await flush();
+    first.settle.resolve(result({ operationId: "first", success: false, outcome: "cancelled", localCommit: "none", remoteCommit: "none" })); await first.pending;
+    const next = deferred<any>(); first.h.api.sync.push.mockReturnValueOnce(next.promise);
+    const pending = first.h.ab.syncPush(); await flush(); const newButton = cancel(first.h)!;
+    expect(newButton).not.toBe(oldButton); oldButton.emit("click"); await flush(); expect(first.h.api.sync.cancel).toHaveBeenCalledTimes(1);
+    ack.reject(new Error("obsolete cancel failure")); await flush(); expect(newButton.disabled).toBe(false);
+    expect(first.h.banner()).not.toContain("Cancelling"); expect(first.h.ab.helpers.toast.mock.calls.some((call: any[]) => String(call[0]).includes("Cancellation could not"))).toBe(false);
+    newButton.emit("click"); await flush();
+    const secondId = first.h.api.sync.push.mock.calls[1][0].requestId;
+    expect(secondId).not.toBe(first.requestId); expect(first.h.api.sync.cancel).toHaveBeenLastCalledWith({ requestId: secondId });
+    next.resolve(result({ operationId: "second", success: false, outcome: "cancelled" })); await pending;
+  });
+  it("failed cancellation acknowledgement permits retry but never unlocks the outstanding write", async () => {
+    const { h, pending, settle, requestId } = await started("pull");
+    h.api.sync.cancel.mockRejectedValueOnce(new Error("synthetic cancel IPC error")); cancel(h)!.emit("click"); await flush();
+    expect(h.buttons.syncPush.disabled).toBe(true); expect(cancel(h)?.disabled).toBe(false); expect(h.renderedResult()).toBe("");
+    expect(h.ab.helpers.toast).toHaveBeenLastCalledWith(expect.stringContaining("Cancellation could not be confirmed"), "warning");
+    cancel(h)!.emit("click"); await flush(); expect(h.api.sync.cancel).toHaveBeenLastCalledWith({ requestId });
+    settle.resolve(result({ success: false, outcome: "cancelled", localCommit: "none", remoteCommit: "none" })); await pending;
+  });
+  it("does not expose cancellation for foreign status-only operations or configuration writes", async () => {
+    const h = harness(); h.emit(event("started", 1, "push", "foreign-service")); await flush(); expect(cancel(h)).toBeUndefined();
+    expect(h.api.sync.cancel).not.toHaveBeenCalled(); h.emit(event("completed", 2, "push", "foreign-service")); await flush();
+    const settle = deferred<any>(); h.api.sync.configure.mockReturnValueOnce(settle.promise);
+    const pending = h.ab.syncSave(); await flush(); expect(cancel(h)).toBeUndefined(); settle.resolve(result()); await pending;
+  });
+  it("a force retry gets a new capability and ignores clicks on the prior invocation's button", async () => {
+    const h = harness(), first = deferred<any>(), second = deferred<any>(), confirmation = deferred<boolean>();
+    h.api.sync.push.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
+    h.ab.confirmAsync.mockReturnValueOnce(confirmation.promise);
+    const pending = h.ab.syncPush(); await flush(); const oldButton = cancel(h)!;
+    first.resolve({ success: false, message: "locked by another device" }); await flush();
+    expect(h.ab.confirmAsync).toHaveBeenCalledTimes(1); confirmation.resolve(true); await flush();
+    expect(h.api.sync.push).toHaveBeenCalledTimes(2);
+    const [firstId, secondId] = h.api.sync.push.mock.calls.map((call: any[]) => call[0].requestId);
+    expect(secondId).not.toBe(firstId); expect(cancel(h)).not.toBe(oldButton);
+    oldButton.emit("click"); await flush(); expect(h.api.sync.cancel).not.toHaveBeenCalled();
+    cancel(h)!.emit("click"); await flush(); expect(h.api.sync.cancel).toHaveBeenCalledExactlyOnceWith({ requestId: secondId });
+    second.resolve(result({ success: false, outcome: "cancelled" })); await pending;
+  });
+  it("uncertain cancellation acknowledgement never opens a force retry or claims a cancelled result", async () => {
+    const { h, pending, settle } = await started("push");
+    h.api.sync.cancel.mockResolvedValueOnce({ success: false, code: "SYNC_CANCEL_NOT_OWNED" });
+    cancel(h)!.emit("click"); await flush();
+    settle.resolve({ success: false, message: "locked by another device" }); await pending;
+    expect(h.ab.confirmAsync).not.toHaveBeenCalled(); expect(h.api.sync.push).toHaveBeenCalledTimes(1);
+    expect(h.renderedResult()).not.toContain("Cancelled");
+  });
+  it("a rejected operation after cancellation reports unknown commits rather than fabricated safe rollback", async () => {
+    const { h, pending, settle } = await started("push"); cancel(h)!.emit("click"); await flush();
+    settle.reject(new Error("Synthetic lost result")); await pending;
+    expect(h.renderedResult()).toContain("SYNC_RESULT_UNAVAILABLE"); expect(h.renderedResult()).toContain("Unknown");
+    expect(h.renderedResult()).not.toContain("Cancelled");
+    expect(h.ab.helpers.toast.mock.calls.some((call: any[]) => call[1] === "success")).toBe(false);
+  });
+
+  it("does not infer same-kind event ownership while a request awaits its reply", async () => {
+    const { h, pending, settle, requestId } = await started("push");
+    h.emit(event("started", 1, "push", "foreign-operation")); h.emit(event("completed", 2, "push", "foreign-operation")); await flush();
+    expect(h.banner()).not.toContain("Waiting for the operation result"); expect(h.buttons.syncPush.disabled).toBe(true);
+    cancel(h)!.emit("click"); await flush(); expect(h.api.sync.cancel).toHaveBeenCalledWith({ requestId });
+    settle.resolve(result()); await pending;
+  });
+  it("recovers exact request ownership from status when the start event was missed", async () => {
+    const { h, pending, settle, requestId } = await started("push");
+    h.status().operation = { generation: 1, active: { operationId: "owned-status", requestId, kind: "push", stage: "preparing" }, last: null };
+    await h.ab.loadSyncConfig(); h.emit(event("completed", 2, "push", "owned-status")); await flush();
+    expect(h.banner()).toContain("Waiting for the operation result"); expect(h.buttons.syncPush.disabled).toBe(true);
+    h.status().operation = { generation: 2, active: null, last: null }; settle.resolve(result()); await pending;
+  });
+  it.each(["en-US", "zh-CN"] as const)("renders local phases separately from network/commit progress (%s)", async locale => {
+    const { h, pending, settle, requestId } = await started("push", locale);
+    h.emit({ ...event("started", 1, "push", "owned-operation"), requestId });
+    const phases = ["scanning", "reading-archive", "verifying-source", "verifying-profile", "verifying-extras", "packing", "encrypting", "decrypting", "extracting"];
+    for (let i = 0; i < phases.length; i++) {
+      const fixture = progressEvent(i + 1, { operationId: "owned-operation" }) as any;
+      fixture.progress.local = { phase: phases[i], bytes: 524288, items: 2, totalBytes: 1048576, totalItems: 4 };
+      h.emitProgress(fixture); await flush();
+      expect(h.banner()).toContain(locale === "en-US" ? "Local work" : "本地处理"); expect(h.banner()).toContain("512 KiB / 1 MiB");
+      expect(h.banner()).toContain("2 / 4"); expect(h.banner()).not.toContain("/s");
+      expect(h.banner()).toContain(locale === "en-US" ? "Bytes processed:" : "已处理数据量：");
+      if (phases[i] === "packing") expect(h.banner()).toContain(locale === "en-US" ? "this is not archive size" : "不是归档大小");
+      expect(h.banner()).toContain(locale === "en-US" ? "not upload progress or publication confirmation" : "不代表上传进度或发布确认");
+      expect(h.banner()).not.toContain("sync.progress."); expect(cancel(h)?.disabled).toBe(false);
+    }
+    cancel(h)!.emit("click"); await flush(); expect(h.banner()).toContain(locale === "en-US" ? "Cancelling" : "正在取消");
+    h.emit(event("completed", 2, "push", "owned-operation")); settle.resolve(result({ success: false, outcome: "cancelled" })); await pending;
+  });
+  it("ignores malformed local counters and stale phase events without inventing totals", async () => {
+    const { h, pending, settle, requestId } = await started("push"); h.emit({ ...event("started", 1, "push", "owned-operation"), requestId });
+    const phase = (sequence: number, local: any) => ({ ...progressEvent(sequence, { operationId: "owned-operation" }), progress: { sequence, updatedAt: 11000, local } });
+    h.emitProgress(phase(1, { phase: "packing", bytes: 2048, items: 2, totalBytes: 1, totalItems: 1 }));
+    expect(h.banner()).toContain("Packing profile"); expect(h.banner()).toContain("2 KiB"); expect(h.banner()).not.toContain("2 / 1");
+    const valid = h.banner(); h.emitProgress(phase(0, { phase: "scanning", bytes: 0, items: 0 })); expect(h.banner()).toBe(valid);
+    h.emitProgress(phase(2, { phase: "packing", bytes: -1, items: 2 })); expect(h.banner()).not.toContain("Local work"); expect(h.banner()).not.toContain("NaN");
+    h.emit(event("completed", 2, "push", "owned-operation")); settle.resolve(result()); await pending;
+  });
+
+  it("a foreign start during preflight invalidates dispatch without exposing foreign cancellation", async () => {
+    const h = harness(), preview = deferred<any>(); h.api.sync.preview.mockReturnValueOnce(preview.promise);
+    const pending = h.ab.syncPush(); await flush(); h.emit(event("started", 1, "push", "foreign-preflight")); await flush();
+    preview.resolve({ configured: true, runningProfiles: [] }); await pending;
+    expect(h.api.sync.push).not.toHaveBeenCalled(); expect(cancel(h)).toBeUndefined(); expect(h.buttons.syncPush.disabled).toBe(true);
+    expect(h.api.sync.cancel).not.toHaveBeenCalled(); h.emit(event("completed", 2, "push", "foreign-preflight")); await flush();
+  });
+
 });

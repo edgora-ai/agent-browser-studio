@@ -822,7 +822,7 @@ async function pushFullProfileSnapshot(sync: SyncConfig, force: boolean, signal?
       const item = await captureFullProfileTransfer({ profileDir: resolveProfileDir(id), stagingDir: root, dirId: id,
         engine: historyEngine(meta), snapshotId: operation.operationId, sourcePlatform: process.platform,
         browserVersion: typeof meta.browserVersion === "string" ? meta.browserVersion : undefined,
-        passphrase, guard, signal, environment: { profileHash: profileContentHash(meta, profilePreferencesSnapshot(null)),
+        passphrase, guard, signal, onProgress: lease.local().update, environment: { profileHash: profileContentHash(meta, profilePreferencesSnapshot(null)),
           ...(proxy && proxyName ? { proxy: { name: proxyName, publicHash: fullProfileProxyHash(proxy), username: proxy.username || "", password: decryptSecretOr(proxy.password || "", "") } } : {}) } });
       guard(); total += item.body.length;
       if (total > 1024 * 1024 * 1024) throw fullProfileError("FULL_PROFILE_SIZE_LIMIT", "Complete snapshot exceeds its aggregate byte limit; no partial browser snapshot was published");
@@ -960,10 +960,10 @@ async function pullFullProfileSnapshot(sync: SyncConfig, signal?: AbortSignal, o
       const body = await s3Get(sync, descriptor.key, signal, descriptor.size, lease);
       if (!body) throw fullProfileError("FULL_PROFILE_OBJECT_UNAVAILABLE", "Complete browser data object is unavailable; nothing was restored");
       guard();
-      lease.stage("verifying");
+      lease.stage("verifying", { scope: "fullProfile", itemId: id, completedItems: downloadedCount, totalItems: selected.size });
       const value = await prepareFullProfileTransfer({ body, descriptor, stagingDir: root, passphrase,
         dirId: id, engine: descriptor.engine, snapshotId: payload.snapshotId, receiverPlatform: process.platform,
-        profileHash: profileContentHash(remote.browserProfiles[id], profilePreferencesSnapshot(null)), guard, signal });
+        profileHash: profileContentHash(remote.browserProfiles[id], profilePreferencesSnapshot(null)), guard, signal, onProgress: lease.local().update });
       guard();
       const proxy = value.environment.proxy;
       if (proxy) {
@@ -1382,12 +1382,18 @@ async function pushFrozenSnapshot(sync: SyncConfig, force: boolean, signal?: Abo
       const key = extensionObjectKey(extension.entry);
       lease.stage("publishing", { scope: "extensions", itemId: extension.entry.id });
       const publication = await publishS3Object(sync, key, pkg, signal, lease);
+      // Record a possible remote write before cancellation/readback can throw.
+      // Failures thrown before publication retain their no-side-effect evidence.
+      operation.remoteCommit = publication.state === "accepted" ? "partial" : "unknown";
+      const item: SyncItemResult = { side: "remote", scope: "extensions", id: extension.entry.id, state: "unknown",
+        message: "Extension package dispatch may have changed remote storage; its envelope reference has not been published." };
+      operation.add(item);
       assertSyncNotAborted(signal);
       if (publication.state !== "accepted") throw new Error(`Extension package was not confirmed uploaded: ${extension.entry.id} (${publication.message})`);
       lease.stage("verifying");
       const readback = await s3Get(sync, key, signal, MAX_EXTENSION_PACKAGE_BYTES, lease);
       if (!readback || !readback.equals(pkg)) throw new Error(`Extension package remote readback mismatch: ${extension.entry.id}`);
-      operation.add({ side: "remote", scope: "extensions", id: extension.entry.id, state: "uploaded", bytes: pkg.length });
+      item.state = "uploaded"; item.bytes = pkg.length; item.message = undefined;
     }
     assertSyncNotAborted(signal);
     assertSyncRole("push", force); assertActiveHistoryScope(sync, selectedHistory);

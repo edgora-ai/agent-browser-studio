@@ -2,8 +2,9 @@
 // event bus/operation event producer, and original REST/MCP HTTP callbacks.
 // BrowserWindow/IPC and default HTTP listeners are modeled, NOT real Electron.
 // One explicit REST fixture uses an owned ephemeral loopback socket to verify
-// auth and Pull argument transport. SyncService remains a controlled boundary:
-// these tests do not prove full-profile data restoration or website acceptance.
+// auth and Pull argument transport. Adapter tests keep SyncService controlled;
+// the extension-publication tests execute the actual service with in-memory IO.
+// Neither proves full-profile data restoration or website acceptance.
 // Unselected application/native/storage/network operations fail closed.
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import * as fs from "node:fs";
@@ -11,6 +12,7 @@ import * as path from "node:path";
 import * as vm from "node:vm";
 import * as crypto from "node:crypto";
 import * as nativeHttp from "node:http";
+import * as zlib from "node:zlib";
 import { EventEmitter } from "node:events";
 import ts from "typescript";
 import type { SyncComparisonToken, SyncResult } from "../../src/main/types.js";
@@ -612,5 +614,182 @@ describe("configure permission and result translation via original preload/regis
     const f = fixture(); f.setter.mockImplementationOnce(() => { throw new Error("Synthetic configuration validation failure"); });
     await expect(f.api.sync.configure(settings)).resolves.toEqual({ success: false, error: "Synthetic configuration validation failure" });
     expect(f.setter).toHaveBeenCalledExactlyOnceWith(settings);
+  });
+});
+
+// Whole actual service/result/state/transport helpers, without source rewriting.
+// Package capture and every filesystem operation are in-memory modeled boundaries;
+// fetch is a strict synthetic dispatcher, not the native HTTP client. No sockets,
+// profiles, config files, staging directories or existing application are touched.
+const PUBLICATION_COMPILED = new Map([
+  ...["services/sync/operation-state.ts", "services/sync/operation-result.ts", "services/event-bus.ts", "services/team.ts"]
+    .map(name => [name, COMPILED.get(name)!] as const),
+  ...["services/sync-service.ts", "services/sync/transfer-progress.ts"].map(name => [name,
+    ts.transpileModule(fs.readFileSync(path.join(MAIN, name), "utf8"), {
+      compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, esModuleInterop: true },
+    }).outputText] as const),
+]);
+type PublicationScenario = "cancel-unknown-put" | "cancel-accepted-put" | "failed-put" | "rejected-put" |
+  "failed-readback" | "mismatched-readback" | "cancel-verified-readback" | "failed-predispatch" | "cancel-predispatch" | "complete";
+function extensionPublicationFixture(scenario: PublicationScenario) {
+  const controller = new AbortController(), modules = new Map<string, any>();
+  const profileRoot = "/synthetic-only/extension-publication", stageRoot = profileRoot + "/.sync-pull-stage-owned";
+  const packagePath = stageRoot + "/package.zip", packageBody = Buffer.from("Synthetic frozen extension bytes; not a real archive");
+  const entry = { id: "local_synthetic1", name: "Synthetic extension", version: "1", source: "local",
+    packageHash: crypto.createHash("sha512").update(packageBody).digest("hex"), manifestHash: "b".repeat(128) };
+  const objectKey = `extension-${entry.id}-${entry.packageHash}.zip`;
+  const sync = { enabled: true, endpoint: "https://publication.synthetic.invalid", bucket: "synthetic-bucket",
+    accessKey: "synthetic-access", secretKey: "synthetic-secret", custodyConsentAt: 1, includeHistory: false, includeFullProfile: false };
+  const cfg = { version: 4, deviceId: "synthetic-device", sync, browserProfiles: {}, extensionRepository: { [entry.id]: entry }, proxies: {}, accounts: [] };
+  const remoteObjects = new Map<string, Buffer>(), calls: Array<{ method: string; key: string }> = [];
+  const timers = new Set<unknown>();
+  const transact = vi.fn((mutate: (draft: any) => void) => {
+    if (scenario !== "complete") fail("unexpected local publication commit")();
+    mutate(cfg);
+  });
+  const cleanup = vi.fn((target: string, options: any) => {
+    expect(target).toBe(stageRoot); expect(options).toEqual({ recursive: true, force: true });
+  });
+  const modeledFs = unavailable("publication filesystem", {
+    lstatSync: (target: string) => { expect(target).toBe(profileRoot); return { isDirectory: () => true, isSymbolicLink: () => false }; },
+    mkdirSync: (target: string) => { expect(target).toBe(profileRoot); },
+    mkdtempSync: (prefix: string) => { expect(prefix).toBe(profileRoot + "/.sync-pull-stage-"); return stageRoot; },
+    statSync: (target: string) => { expect(target).toBe(packagePath); return { size: packageBody.length }; },
+    readFileSync: (target: string) => {
+      expect(target).toBe(packagePath);
+      if (scenario === "failed-predispatch") throw new Error("Synthetic package read failed before dispatch");
+      return Buffer.from(packageBody);
+    },
+    rmSync: cleanup,
+  });
+  const transport = vi.fn(async (raw: string, init: RequestInit) => {
+    const url = new URL(raw);
+    expect(url.origin).toBe(sync.endpoint); expect(url.pathname.startsWith(`/${sync.bucket}/`)).toBe(true);
+    const key = url.pathname.slice(sync.bucket.length + 2), method = init.method!;
+    calls.push({ method, key });
+    expect(init.signal?.aborted).toBe(false);
+    if (method === "GET" && ["agent-browser-studio-config.json", "cloak-lite-config.json"].includes(key)) {
+      const body = remoteObjects.get(key);
+      return new Response(body ?? null, { status: body ? 200 : 404 });
+    }
+    if (method === "PUT" && key === objectKey) {
+      expect(Buffer.isBuffer(init.body)).toBe(true);
+      expect(Buffer.from(init.body as any)).toEqual(packageBody);
+      // Even an unacknowledged PUT may already have changed remote storage.
+      remoteObjects.set(key, Buffer.from(packageBody));
+      if (scenario === "cancel-unknown-put" || scenario === "cancel-accepted-put") controller.abort();
+      if (scenario === "cancel-unknown-put" || scenario === "failed-put") throw new Error("Synthetic lost PUT acknowledgement");
+      return new Response(null, { status: scenario === "rejected-put" ? 503 : 200 });
+    }
+    if (method === "GET" && key === objectKey) {
+      if (scenario === "failed-readback") throw new Error("Synthetic readback unavailable");
+      return new Response(scenario === "mismatched-readback" ? Buffer.from("different bytes") : remoteObjects.get(key)!);
+    }
+    if (method === "PUT" && key === "agent-browser-studio-config.json" && scenario === "complete") {
+      remoteObjects.set(key, Buffer.from(init.body as any));
+      return new Response(null, { status: 200 });
+    }
+    return fail("unselected synthetic publication request " + method + " " + key)();
+  });
+  const context = vm.createContext({ Buffer, URL, Response, ReadableStream, AbortController, AbortSignal, structuredClone,
+    console: { log: vi.fn(), warn: vi.fn(), error: vi.fn() }, fetch: transport,
+    // Exercise real deadline setup/disposal without starting actual timers.
+    setTimeout: () => { const timer = { unref() {} }; timers.add(timer); return timer; },
+    clearTimeout: (timer: unknown) => timers.delete(timer),
+  });
+  function load(name: string): any {
+    if (modules.has(name)) return modules.get(name).exports;
+    const code = PUBLICATION_COMPILED.get(name);
+    if (!code) return fail("unselected publication module " + name)();
+    const module = { exports: {} as any }; modules.set(name, module);
+    const full = path.join(MAIN, name);
+    const requireFixture = (id: string): any => {
+      if (id === "node:fs") return modeledFs;
+      if (id === "node:path") return path;
+      if (id === "node:crypto") return crypto;
+      if (id === "node:zlib") return zlib;
+      if (id.startsWith("node:")) return unavailable("publication " + id);
+      const relative = path.relative(MAIN, path.resolve(path.dirname(full), id.replace(/\.js$/, ".ts"))).replace(/\\/g, "/");
+      if (PUBLICATION_COMPILED.has(relative)) return load(relative);
+      if (relative === "services/config-manager.ts") return unavailable(relative, {
+        getConfig: () => cfg, getSyncConfig: () => sync, getProfilesDir: () => profileRoot,
+      });
+      if (relative === "services/config/store.ts") return { transact };
+      if (relative === "services/sync/profile-state.ts") return unavailable(relative, { getProfileSyncTarget: () => "synthetic-target" });
+      if (relative === "services/secrets.ts") return { decryptSecretOr: (value: string) => value };
+      if (relative === "services/extension-repository.ts") return unavailable(relative, {
+        captureRepositoryExtensionForSync: async (captured: any, target: string, signal: AbortSignal) => {
+          expect(captured).toEqual(entry); expect(path.dirname(target)).toBe(stageRoot); expect(signal).toBe(controller.signal);
+          return { entry: structuredClone(entry), packagePath };
+        },
+      });
+      return unavailable("publication " + relative);
+    };
+    vm.runInContext(`(function(require,module,exports) { ${code}\n})`, context, { filename: full })(requireFixture, module, module.exports);
+    return module.exports;
+  }
+  const state = load("services/sync/operation-state.ts"), events = load("services/event-bus.ts");
+  events.onEvent("sync:progress", (event: any) => {
+    if (event.progress.scope !== "extensions") return;
+    if ((scenario === "cancel-predispatch" && event.stage === "publishing" && !event.progress.transfer) ||
+      (scenario === "cancel-verified-readback" && event.stage === "verifying" && event.progress.transfer?.state === "complete")) controller.abort();
+  });
+  const service = load("services/sync-service.ts").syncService;
+  return { controller, calls, remoteObjects, entry, objectKey, packageBody, transact, state,
+    mayRetry: load("services/sync/operation-result.ts").syncMayRetryAutomatically,
+    async push(): Promise<SyncResult> {
+      let result: SyncResult;
+      try { result = await service.push(controller.signal); }
+      catch (error: any) { expect(controller.signal.aborted).toBe(true); expect(error.syncResult).toBeDefined(); result = error.syncResult; }
+      expect(state.getSyncOperationState()).toMatchObject({ active: null, last: result });
+      expect(cleanup).toHaveBeenCalledExactlyOnceWith(stageRoot, { recursive: true, force: true });
+      expect(timers.size).toBe(0);
+      return result;
+    },
+  };
+}
+
+describe("actual SyncService extension publication accounting (in-memory mocked transport)", () => {
+  it.each([
+    { scenario: "cancel-unknown-put", remoteCommit: "unknown", code: "SYNC_CANCELLED", readback: false },
+    { scenario: "cancel-accepted-put", remoteCommit: "partial", code: "SYNC_CANCELLED", readback: false },
+    { scenario: "failed-put", remoteCommit: "unknown", code: "SYNC_FAILED", readback: false },
+    { scenario: "rejected-put", remoteCommit: "unknown", code: "SYNC_FAILED", readback: false },
+    { scenario: "failed-readback", remoteCommit: "partial", code: "SYNC_FAILED", readback: true },
+    { scenario: "mismatched-readback", remoteCommit: "partial", code: "SYNC_FAILED", readback: true },
+    { scenario: "cancel-verified-readback", remoteCommit: "partial", code: "SYNC_CANCELLED", readback: true },
+  ] as const)("$scenario retains remote side effects without publishing a config envelope", async ({ scenario, remoteCommit, code, readback }) => {
+    const f = extensionPublicationFixture(scenario), result = await f.push();
+    expect(result).toMatchObject({ success: false, outcome: "partial", localCommit: "none", remoteCommit, code });
+    expect(f.remoteObjects.get(f.objectKey)).toEqual(f.packageBody);
+    expect(f.calls).toEqual([
+      { method: "GET", key: "agent-browser-studio-config.json" }, { method: "GET", key: "cloak-lite-config.json" },
+      { method: "PUT", key: f.objectKey }, ...(readback ? [{ method: "GET", key: f.objectKey }] : []),
+    ]);
+    expect(result.items).toHaveLength(1);
+    expect(result.items![0]).toMatchObject({ side: "remote", scope: "extensions", id: f.entry.id,
+      state: scenario === "cancel-verified-readback" ? "uploaded" : "unknown" });
+    if (scenario === "cancel-verified-readback") expect(result.items![0].bytes).toBe(f.packageBody.length);
+    else expect(result.items![0].bytes).toBeUndefined();
+    expect(f.mayRetry(result)).toBe(false); expect(f.transact).not.toHaveBeenCalled();
+    expect(result.recovery).toEqual([]);
+  });
+  it.each(["failed-predispatch", "cancel-predispatch"] as const)("%s keeps positive no-side-effect evidence", async scenario => {
+    const f = extensionPublicationFixture(scenario), result = await f.push();
+    expect(result).toMatchObject({ success: false, outcome: scenario === "failed-predispatch" ? "failed" : "cancelled",
+      code: scenario === "failed-predispatch" ? "SYNC_FAILED" : "SYNC_CANCELLED", localCommit: "none", remoteCommit: "none", items: [] });
+    expect(f.calls).toEqual([{ method: "GET", key: "agent-browser-studio-config.json" }, { method: "GET", key: "cloak-lite-config.json" }]);
+    expect(f.remoteObjects.size).toBe(0); expect(f.transact).not.toHaveBeenCalled();
+    expect(f.mayRetry(result)).toBe(scenario === "failed-predispatch");
+  });
+  it("verified extension and envelope publication still produce a complete receipt without duplicate items", async () => {
+    const f = extensionPublicationFixture("complete"), result = await f.push();
+    expect(result).toMatchObject({ success: true, outcome: "complete", localCommit: "committed", remoteCommit: "committed" });
+    const extensions = result.items!.filter(item => item.scope === "extensions");
+    expect(extensions).toHaveLength(1);
+    expect(extensions[0]).toMatchObject({ side: "remote", id: f.entry.id, state: "uploaded", bytes: f.packageBody.length });
+    expect(extensions[0].message).toBeUndefined();
+    expect(f.calls.filter(call => call.method === "PUT").map(call => call.key)).toEqual([f.objectKey, "agent-browser-studio-config.json"]);
+    expect(f.transact).toHaveBeenCalledTimes(1); expect(f.mayRetry(result)).toBe(false);
   });
 });

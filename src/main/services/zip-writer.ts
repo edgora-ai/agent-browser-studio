@@ -13,6 +13,9 @@ export const MAX_ZIP_TOTAL_BYTES = 2 * 1024 * 1024 * 1024;
 // Bound names/extra fields/comments as well as payloads. This is not ZIP64.
 const MAX_ZIP_METADATA_BYTES = 16 * 1024 * 1024;
 const CHUNK = 64 * 1024;
+const WRITE_BATCH_BYTES = 4 * 1024 * 1024;
+const WRITE_BATCH_MS = 16;
+const WRITE_BATCH_ITEMS = 128;
 const NOFOLLOW = fs.constants.O_NOFOLLOW || 0;
 const TEMP_ROOTS = [path.resolve(os.tmpdir()), fs.realpathSync(os.tmpdir())];
 
@@ -42,9 +45,23 @@ function dosDateTime(ms: number): { time: number; date: number } {
 }
 export interface ZipFileEntry { name: string; filePath?: string; data?: Buffer; }
 export interface ZipDirEntry { name: string; isDirectory: true; }
+export interface WriteZipProgress {
+  phase: "packing";
+  /** Cumulative payload bytes processed by CRC prepass, copy and readback (not network/archive size). */
+  bytes: number;
+  /** Entries copied to staging; this does not mean verification/publication has completed. */
+  items: number;
+  totalBytes?: number;
+  totalItems?: number;
+}
 export interface WriteZipOptions {
   /** Only a caller with explicit replacement confirmation may opt in. */
   overwrite?: boolean;
+  signal?: AbortSignal;
+  /** Synchronous, fresh admission check at batch/await/callback and publication boundaries. */
+  guard?: () => void;
+  /** Synchronous local-work observer, never called after publication. */
+  onProgress?: (progress: WriteZipProgress) => void;
 }
 export interface WriteZipResult { entries: number; bytes: number; warnings?: string[]; }
 export interface ZipEntry {
@@ -54,6 +71,67 @@ export interface ZipEntry {
 
 function codedError(code: string, message: string): Error & { code: string } {
   return Object.assign(new Error(`${code}: ${message}`), { code });
+}
+function checkWriteSignal(signal?: AbortSignal): void {
+  if (signal?.aborted) throw Object.assign(codedError("ABORT_ERR", "ZIP writing aborted"), { name: "AbortError", cause: signal.reason });
+}
+function rejectAsyncCallback(result: unknown, name: string): void {
+  if (result !== null && result !== undefined && typeof (result as { then?: unknown }).then === "function") {
+    // Observe rejection, but never treat an unresolved guard/observer as admitted.
+    void Promise.resolve(result).catch(() => undefined);
+    throw new Error(`ZIP ${name} must be synchronous`);
+  }
+}
+function checkWriteGuard(options: WriteZipOptions): void {
+  checkWriteSignal(options.signal);
+  if (options.guard !== undefined) {
+    if (typeof options.guard !== "function") throw new Error("ZIP guard must be synchronous");
+    rejectAsyncCallback(options.guard(), "guard");
+  }
+  checkWriteSignal(options.signal);
+}
+interface WriteCheckpoint { bytes: number; items: number; packed?: number; boundary?: boolean; }
+type WriteSteps<T> = Generator<WriteCheckpoint, T, void>;
+const ITEM_CHECKPOINT: WriteCheckpoint = { bytes: 0, items: 1 };
+function drainSteps<T>(steps: WriteSteps<T>): T {
+  for (;;) { const step = steps.next(); if (step.done) return step.value; }
+}
+async function writeCooperatively(steps: WriteSteps<WriteZipResult>, options: WriteZipOptions, totalItems: number): Promise<WriteZipResult> {
+  let bytes = 0, items = 0;
+  try {
+    if (options.onProgress !== undefined && typeof options.onProgress !== "function") throw new Error("ZIP progress callback must be synchronous");
+    for (;;) {
+      // There is no process cache here: one fresh admission covers only this
+      // synchronous batch. Expensive admission is outside the payload budget.
+      checkWriteGuard(options);
+      const started = Date.now();
+      let batchBytes = 0, batchCheckpoints = 0;
+      for (;;) {
+        checkWriteSignal(options.signal);
+        const step = steps.next();
+        // The last iterator step acquires the final name synchronously. Never
+        // report progress/cancellation after that point, even if it aborted there.
+        if (step.done) return step.value;
+        bytes += step.value.bytes; items += step.value.packed ?? 0;
+        batchBytes += step.value.bytes; batchCheckpoints++;
+        // Reserve a full next read, including when the previous file ended in a
+        // partial chunk. Exactly aligned batches still admit all 64 chunks.
+        // Count zero-byte metadata and short-I/O checkpoints, not only entries.
+        if (step.value.boundary || batchBytes > WRITE_BATCH_BYTES - CHUNK ||
+            batchCheckpoints >= WRITE_BATCH_ITEMS || Date.now() - started >= WRITE_BATCH_MS) break;
+      }
+      if (options.onProgress) rejectAsyncCallback(options.onProgress({ phase: "packing", bytes, items, totalItems }), "progress callback");
+      checkWriteGuard(options); // Also covers synchronous observer side effects.
+      // Keep the existing global scheduler: ZIP callers include restricted VMs
+      // that expose setImmediate but intentionally deny new module dependencies.
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    }
+  } catch (error) {
+    // Inject failure into the suspended operation: its nested finally blocks
+    // close every fd and check/remove staging before this promise can reject.
+    steps.throw(error);
+    throw error;
+  } finally { steps.return(undefined as never); }
 }
 function message(error: unknown): string { return error instanceof Error ? error.message : String(error); }
 function combinedError(original: unknown, cleanup: unknown): Error {
@@ -139,24 +217,29 @@ function writeAll(fd: number, data: Buffer, position: number): void {
     offset += written;
   }
 }
-function readExact(fd: number, length: number, position: number): Buffer {
+function* readExactSteps(fd: number, length: number, position: number, signal?: AbortSignal): WriteSteps<Buffer> {
   const data = Buffer.allocUnsafe(length);
   let offset = 0;
   while (offset < length) {
+    checkWriteSignal(signal);
     const wanted = Math.min(CHUNK, length - offset);
     const n = fs.readSync(fd, data, offset, wanted, position + offset);
     if (!Number.isInteger(n) || n <= 0 || n > wanted) throw new Error("Unexpected EOF/short read in ZIP archive");
     offset += n;
+    // Metadata reads are timed work, but not payload-processing progress.
+    yield { bytes: 0, items: 0 };
   }
   return data;
 }
-function readSourceChunk(fd: number, buffer: Buffer, position: number, size: number): number {
+function readSourceChunk(fd: number, buffer: Buffer, position: number, size: number, signal?: AbortSignal): number {
+  checkWriteSignal(signal);
   const wanted = Math.min(buffer.length, size - position);
   const n = fs.readSync(fd, buffer, 0, wanted, position);
   if (!Number.isInteger(n) || n <= 0 || n > wanted) throw new Error("Archive source short read or size changed");
   return n;
 }
-function assertSourceEnd(fd: number, size: number): void {
+function assertSourceEnd(fd: number, size: number, signal?: AbortSignal): void {
+  checkWriteSignal(signal);
   if (fs.readSync(fd, Buffer.allocUnsafe(1), 0, 1, size) !== 0) throw new Error("Archive source size changed");
 }
 function fileCRC(fd: number, size: number): number {
@@ -167,6 +250,28 @@ function fileCRC(fd: number, size: number): number {
     state = crc32Update(state, chunk.subarray(0, n)); position += n;
   }
   assertSourceEnd(fd, size);
+  return (state ^ 0xffffffff) >>> 0;
+}
+
+function* fileCRCSteps(fd: number, size: number, signal?: AbortSignal): WriteSteps<number> {
+  const chunk = Buffer.allocUnsafe(CHUNK);
+  let state = 0xffffffff, position = 0;
+  while (position < size) {
+    const n = readSourceChunk(fd, chunk, position, size, signal);
+    state = crc32Update(state, chunk.subarray(0, n)); position += n;
+    yield { bytes: n, items: 0 };
+  }
+  assertSourceEnd(fd, size, signal);
+  return (state ^ 0xffffffff) >>> 0;
+}
+function* bufferCRCSteps(data: Buffer, signal?: AbortSignal): WriteSteps<number> {
+  let state = 0xffffffff;
+  for (let position = 0; position < data.length; position += CHUNK) {
+    checkWriteSignal(signal);
+    const chunk = data.subarray(position, Math.min(position + CHUNK, data.length));
+    state = crc32Update(state, chunk);
+    yield { bytes: chunk.length, items: 0 };
+  }
   return (state ^ 0xffffffff) >>> 0;
 }
 
@@ -184,50 +289,60 @@ export function validateZipEntryName(name: string): void {
     }
   }
 }
-function assertEntryNames(entries: Array<{ name: string; isDirectory: boolean }>): void {
+function* entryNameSteps(entries: Array<{ name: string; isDirectory?: boolean }>): WriteSteps<void> {
   const explicit = new Set<string>(), files = new Set<string>(), directories = new Set<string>();
   let nameBytes = 0;
   for (const entry of entries) {
+    const directory = entry.isDirectory === true;
     validateZipEntryName(entry.name);
-    if (entry.isDirectory !== entry.name.endsWith("/")) throw new Error("Conflicting ZIP directory name: " + entry.name);
+    if (directory !== entry.name.endsWith("/")) throw new Error("Conflicting ZIP directory name: " + entry.name);
     nameBytes += Buffer.byteLength(entry.name, "utf8");
     if (nameBytes > MAX_ZIP_METADATA_BYTES) throw new Error("ZIP metadata size limit exceeded");
     const key = entry.name.replace(/\/$/, "").normalize("NFC").toLowerCase();
-    if (explicit.has(key) || (entry.isDirectory ? files.has(key) : directories.has(key))) throw new Error("Duplicate/conflicting ZIP entry: " + entry.name);
+    if (explicit.has(key) || (directory ? files.has(key) : directories.has(key))) throw new Error("Duplicate/conflicting ZIP entry: " + entry.name);
     explicit.add(key);
-    if (entry.isDirectory) directories.add(key); else files.add(key);
+    if (directory) directories.add(key); else files.add(key);
     const parents = key.split("/");
     parents.pop();
     while (parents.length) {
       const parent = parents.join("/");
       if (files.has(parent)) throw new Error("Conflicting ZIP file/directory entries: " + entry.name);
       directories.add(parent); parents.pop();
+      yield { bytes: 0, items: 0 };
     }
+    yield ITEM_CHECKPOINT;
   }
 }
-
-interface ZipSource { size: number; read(position: number, length: number): Buffer; }
+interface ZipSource {
+  size: number;
+  read(position: number, length: number): Buffer;
+  readSteps?(position: number, length: number): WriteSteps<Buffer>;
+}
+function* sourceReadSteps(source: ZipSource, position: number, length: number): WriteSteps<Buffer> {
+  return source.readSteps ? yield* source.readSteps(position, length) : source.read(position, length);
+}
 function bufferSource(zip: Buffer): ZipSource {
   return { size: zip.length, read: (position, length) => {
     if (!Number.isSafeInteger(position) || position < 0 || length < 0 || position + length > zip.length) throw new Error("ZIP entry exceeds archive bounds");
     return zip.subarray(position, position + length);
   } };
 }
-function fileSource(fd: number): ZipSource {
+function fileSource(fd: number, signal?: AbortSignal): ZipSource {
   const size = fs.fstatSync(fd).size;
-  return { size, read: (position, length) => {
+  function* readSteps(position: number, length: number): WriteSteps<Buffer> {
     if (!Number.isSafeInteger(position) || position < 0 || length < 0 || position + length > size) throw new Error("ZIP entry exceeds archive bounds");
-    return readExact(fd, length, position);
-  } };
+    return yield* readExactSteps(fd, length, position, signal);
+  }
+  return { size, readSteps, read: (position, length) => drainSteps(readSteps(position, length)) };
 }
-function entryDataOffset(source: ZipSource, entry: ZipEntry, centralOffset = source.size, expectedFlags?: number): number {
-  const local = source.read(entry.localHeaderOffset, 30);
+function* entryDataOffsetSteps(source: ZipSource, entry: ZipEntry, centralOffset = source.size, expectedFlags?: number): WriteSteps<number> {
+  const local = yield* sourceReadSteps(source, entry.localHeaderOffset, 30);
   if (local.readUInt32LE(0) !== 0x04034b50) throw new Error("Invalid ZIP local header");
   const flags = local.readUInt16LE(6), method = local.readUInt16LE(8);
   const nameLen = local.readUInt16LE(26), extraLen = local.readUInt16LE(28);
   const start = entry.localHeaderOffset + 30 + nameLen + extraLen;
   if (start + entry.compressedSize > centralOffset) throw new Error("ZIP entry exceeds archive bounds");
-  const name = source.read(entry.localHeaderOffset + 30, nameLen).toString("utf8");
+  const name = (yield* sourceReadSteps(source, entry.localHeaderOffset + 30, nameLen)).toString("utf8");
   if (name !== entry.name || method !== entry.method || (flags & 0x41) || (expectedFlags !== undefined && flags !== expectedFlags)) {
     throw new Error("ZIP local/central header name, method or flags mismatch");
   }
@@ -237,10 +352,11 @@ function entryDataOffset(source: ZipSource, entry: ZipEntry, centralOffset = sou
   }
   return start;
 }
-function parseEntries(source: ZipSource): ZipEntry[] {
+function entryDataOffset(source: ZipSource, entry: ZipEntry): number { return drainSteps(entryDataOffsetSteps(source, entry)); }
+function* parseEntrySteps(source: ZipSource): WriteSteps<ZipEntry[]> {
   if (source.size < 22) throw new Error("ZIP end-of-central-directory not found");
   const tailOffset = Math.max(0, source.size - 65557);
-  const tail = source.read(tailOffset, source.size - tailOffset);
+  const tail = yield* sourceReadSteps(source, tailOffset, source.size - tailOffset);
   let end = -1;
   for (let i = tail.length - 22; i >= 0; i--) {
     if (tail.readUInt32LE(i) === 0x06054b50 && i + 22 + tail.readUInt16LE(i + 20) === tail.length) { end = i; break; }
@@ -255,12 +371,12 @@ function parseEntries(source: ZipSource): ZipEntry[] {
   let p = cdOffset, total = 0;
   for (let i = 0; i < count; i++) {
     if (p + 46 > cdOffset + cdSize) throw new Error("Invalid ZIP central directory entry");
-    const c = source.read(p, 46);
+    const c = yield* sourceReadSteps(source, p, 46);
     if (c.readUInt32LE(0) !== 0x02014b50) throw new Error("Invalid ZIP central directory entry");
     const nameLen = c.readUInt16LE(28), extraLen = c.readUInt16LE(30), commentLen = c.readUInt16LE(32);
     const next = p + 46 + nameLen + extraLen + commentLen;
     if (next > cdOffset + cdSize || c.readUInt16LE(34) || (c.readUInt16LE(8) & 0x41)) throw new Error("Invalid/encrypted ZIP central directory entry");
-    const name = source.read(p + 46, nameLen).toString("utf8");
+    const name = (yield* sourceReadSteps(source, p + 46, nameLen)).toString("utf8");
     const entry: ZipEntry = {
       name, isDirectory: name.endsWith("/"), method: c.readUInt16LE(10), crc: c.readUInt32LE(16),
       compressedSize: c.readUInt32LE(20), uncompressedSize: c.readUInt32LE(24), localHeaderOffset: c.readUInt32LE(42),
@@ -271,16 +387,21 @@ function parseEntries(source: ZipSource): ZipEntry[] {
     if ((entry.method === 0 && entry.compressedSize !== entry.uncompressedSize) || (entry.isDirectory && (entry.uncompressedSize !== 0 || entry.crc !== 0))) throw new Error("ZIP entry size/CRC mismatch: " + name);
     total += entry.uncompressedSize;
     if (total > MAX_ZIP_TOTAL_BYTES) throw new Error("Archive exceeds size limit (" + MAX_ZIP_TOTAL_BYTES + " bytes)");
-    const dataOffset = entryDataOffset(source, entry, cdOffset, c.readUInt16LE(8));
+    const dataOffset = yield* entryDataOffsetSteps(source, entry, cdOffset, c.readUInt16LE(8));
     spans.push({ start: entry.localHeaderOffset, end: dataOffset + entry.compressedSize });
     entries.push(entry); p = next;
+    yield ITEM_CHECKPOINT;
   }
   if (p !== cdOffset + cdSize) throw new Error("Invalid ZIP central directory size/count mismatch");
-  assertEntryNames(entries);
+  yield* entryNameSteps(entries);
   spans.sort((a, b) => a.start - b.start);
-  for (let i = 1; i < spans.length; i++) if (spans[i].start < spans[i - 1].end) throw new Error("Overlapping ZIP entry data");
+  for (let i = 1; i < spans.length; i++) {
+    if (spans[i].start < spans[i - 1].end) throw new Error("Overlapping ZIP entry data");
+    yield ITEM_CHECKPOINT;
+  }
   return entries;
 }
+function parseEntries(source: ZipSource): ZipEntry[] { return drainSteps(parseEntrySteps(source)); }
 export function readZipEntries(zip: Buffer): ZipEntry[] { return parseEntries(bufferSource(zip)); }
 
 function readContent(source: ZipSource, entry: ZipEntry): Buffer {
@@ -306,18 +427,33 @@ function visitStoredContent(source: ZipSource, entry: ZipEntry, consume: (chunk:
   }
   if (((state ^ 0xffffffff) >>> 0) !== entry.crc) throw new Error("ZIP entry CRC mismatch");
 }
-function verifyWrittenArchive(file: string, expected: ZipEntry[], size: number, written: fs.Stats): fs.Stats {
+function* verifyWrittenArchiveSteps(file: string, expected: ZipEntry[], size: number, written: fs.Stats, signal?: AbortSignal): WriteSteps<fs.Stats> {
+  checkWriteSignal(signal);
   const before = regularFile(file);
   if (!sameSnapshot(before, written)) throw new Error("ZIP staging file changed before verification");
   const fd = openRegularFile(file, before);
   try {
     if (before.size !== size) throw new Error("ZIP verification size mismatch");
-    const source = fileSource(fd), entries = parseEntries(source);
+    const source = fileSource(fd, signal), entries = yield* parseEntrySteps(source);
     if (entries.length !== expected.length) throw new Error("ZIP verification entry count mismatch");
+    const chunk = Buffer.allocUnsafe(CHUNK);
     for (let i = 0; i < entries.length; i++) {
       const entry = entries[i], wanted = expected[i];
+      checkWriteSignal(signal);
       if (Object.keys(wanted).some((key) => entry[key as keyof ZipEntry] !== wanted[key as keyof ZipEntry])) throw new Error("ZIP verification entry/header mismatch");
-      visitStoredContent(source, entry, () => undefined);
+      if (entry.method !== 0 || entry.compressedSize !== entry.uncompressedSize) throw new Error("ZIP store entry size/method mismatch");
+      const start = yield* entryDataOffsetSteps(source, entry);
+      let state = 0xffffffff, position = 0;
+      while (position < entry.uncompressedSize) {
+        checkWriteSignal(signal);
+        const wantedBytes = Math.min(CHUNK, entry.uncompressedSize - position);
+        const n = fs.readSync(fd, chunk, 0, wantedBytes, start + position);
+        if (!Number.isInteger(n) || n <= 0 || n > wantedBytes) throw new Error("Unexpected EOF/short read in ZIP archive");
+        state = crc32Update(state, chunk.subarray(0, n)); position += n;
+        yield { bytes: n, items: 0 };
+      }
+      if (((state ^ 0xffffffff) >>> 0) !== entry.crc) throw new Error("ZIP entry CRC mismatch");
+      yield ITEM_CHECKPOINT;
     }
     assertSourceUnchanged(file, before, fd);
     return before;
@@ -346,14 +482,19 @@ function destinationStat(destPath: string): fs.Stats | null {
 export async function writeZipArchive(
   destPath: string, entries: Array<ZipFileEntry | ZipDirEntry>, options: WriteZipOptions = {},
 ): Promise<WriteZipResult> {
+  return writeCooperatively(writeZipSteps(destPath, entries, options), options, entries.length);
+}
+function* writeZipSteps(destPath: string, entries: Array<ZipFileEntry | ZipDirEntry>, options: WriteZipOptions): WriteSteps<WriteZipResult> {
   destPath = path.resolve(destPath);
   const parent = ensureArchiveDirectory(path.dirname(destPath));
   const previous = destinationStat(destPath);
   if (previous && options.overwrite !== true) throw codedError("ARCHIVE_DESTINATION_EXISTS", "Destination already exists; explicit overwrite confirmation required");
   if (entries.length > MAX_ZIP_ENTRIES) throw new Error(`ZIP entry count too large: ${entries.length} (max ${MAX_ZIP_ENTRIES})`);
-  assertEntryNames(entries.map((entry) => ({ name: entry.name, isDirectory: "isDirectory" in entry && entry.isDirectory === true })));
+  yield* entryNameSteps(entries);
   let total = 0, metadataBytes = 0;
-  const prepared = entries.map((entry) => {
+  const prepared: Array<{ entry: ZipFileEntry | ZipDirEntry; directory: boolean; stat: fs.Stats | null; size: number }> = [];
+  for (const entry of entries) {
+    checkWriteSignal(options.signal);
     const directory = "isDirectory" in entry && entry.isDirectory === true;
     const file = entry as ZipFileEntry;
     if (!directory && file.filePath !== undefined && file.data !== undefined) throw new Error("ZIP entry has conflicting file/data sources");
@@ -365,20 +506,35 @@ export async function writeZipArchive(
     metadataBytes += 46 + Buffer.byteLength(entry.name, "utf8");
     if (total > MAX_ZIP_TOTAL_BYTES) throw new Error("Archive exceeds size limit (" + MAX_ZIP_TOTAL_BYTES + " bytes)");
     if (metadataBytes > MAX_ZIP_METADATA_BYTES) throw new Error("ZIP metadata size limit exceeded");
-    return { entry, directory, stat, size };
-  });
+    prepared.push({ entry, directory, stat, size });
+    yield ITEM_CHECKPOINT;
+  }
   const tmp = path.join(parent, `.abs-profile-archive-${randomUUID()}.tmp`);
   let fd: number | null = null, owned: fs.Stats | null = null, committed = false;
   let error: unknown;
   let offset = 0;
   const warnings: string[] = [], central: Buffer[] = [], expected: ZipEntry[] = [];
-  const emit = (data: Buffer): void => { writeAll(fd!, data, offset); offset += data.length; };
+  function* emit(data: Buffer, payload = false): WriteSteps<void> {
+    let position = 0;
+    while (position < data.length) {
+      checkWriteSignal(options.signal);
+      const wanted = Math.min(CHUNK, data.length - position);
+      const written = fs.writeSync(fd!, data, position, wanted, offset);
+      if (!Number.isInteger(written) || written <= 0 || written > wanted) throw new Error("ZIP write made no valid progress");
+      position += written; offset += written;
+      yield { bytes: payload ? written : 0, items: 0 };
+    }
+  }
   const syncParent = (): void => {
     if (!syncArchiveDirectory(parent) && !warnings.includes("Directory fsync is unsupported on Windows; only file durability was verified.")) {
       warnings.push("Directory fsync is unsupported on Windows; only file durability was verified.");
     }
   };
   try {
+    checkWriteSignal(options.signal);
+    // Metadata preparation may yield; O_NOFOLLOW protects only the leaf, so
+    // revalidate the parent immediately before exclusive staging acquisition.
+    ensureArchiveDirectory(parent);
     fd = fs.openSync(tmp, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | NOFOLLOW, 0o600);
     owned = fs.fstatSync(fd);
     for (const item of prepared) {
@@ -387,32 +543,34 @@ export async function writeZipArchive(
       const dt = dosDateTime(stat?.mtimeMs ?? Date.now());
       let sourceFd: number | null = null, crc = 0;
       try {
+        checkWriteSignal(options.signal);
         if (stat) {
           sourceFd = openRegularFile(file.filePath!, stat);
-          crc = fileCRC(sourceFd, size);
+          crc = yield* fileCRCSteps(sourceFd, size, options.signal);
           assertSourceUnchanged(file.filePath!, stat, sourceFd);
-        } else if (!directory) crc = crc32(file.data ?? Buffer.alloc(0));
+        } else if (!directory) crc = yield* bufferCRCSteps(file.data ?? Buffer.alloc(0), options.signal);
         const localOffset = offset, local = Buffer.alloc(30);
         local.writeUInt32LE(0x04034b50, 0); local.writeUInt16LE(20, 4); local.writeUInt16LE(0x0800, 6);
         local.writeUInt16LE(dt.time, 10); local.writeUInt16LE(dt.date, 12); local.writeUInt32LE(crc, 14);
         local.writeUInt32LE(size, 18); local.writeUInt32LE(size, 22); local.writeUInt16LE(name.length, 26);
-        emit(local); emit(name);
+        yield* emit(local); yield* emit(name);
         let bodyState = 0xffffffff;
         if (sourceFd !== null) {
           const chunk = Buffer.allocUnsafe(CHUNK);
           let position = 0;
           while (position < size) {
-            const n = readSourceChunk(sourceFd, chunk, position, size), data = chunk.subarray(0, n);
-            bodyState = crc32Update(bodyState, data); emit(data); position += n;
-            await new Promise<void>((resolve) => setImmediate(resolve));
+            const n = readSourceChunk(sourceFd, chunk, position, size, options.signal), data = chunk.subarray(0, n);
+            bodyState = crc32Update(bodyState, data); position += n;
+            yield* emit(data, true);
           }
-          assertSourceEnd(sourceFd, size); assertSourceUnchanged(file.filePath!, stat!, sourceFd);
+          assertSourceEnd(sourceFd, size, options.signal); assertSourceUnchanged(file.filePath!, stat!, sourceFd);
         } else if (!directory) {
           const data = file.data ?? Buffer.alloc(0);
           for (let position = 0; position < size; position += CHUNK) {
+            checkWriteSignal(options.signal);
             const chunk = data.subarray(position, Math.min(position + CHUNK, size));
-            bodyState = crc32Update(bodyState, chunk); emit(chunk);
-            await new Promise<void>((resolve) => setImmediate(resolve));
+            bodyState = crc32Update(bodyState, chunk);
+            yield* emit(chunk, true);
           }
         }
         if (((bodyState ^ 0xffffffff) >>> 0) !== crc) throw new Error("Archive source changed (body CRC differs from prepass): " + entry.name);
@@ -424,21 +582,40 @@ export async function writeZipArchive(
         central.push(Buffer.concat([c, name]));
         expected.push({ name: entry.name, isDirectory: directory, method: 0, crc, compressedSize: size, uncompressedSize: size, localHeaderOffset: localOffset });
       } finally { if (sourceFd !== null) fs.closeSync(sourceFd); }
+      yield { bytes: 0, items: 1, packed: 1 };
     }
     const cdOffset = offset;
-    for (const record of central) emit(record);
+    for (const record of central) {
+      checkWriteSignal(options.signal);
+      yield* emit(record);
+      yield ITEM_CHECKPOINT;
+    }
     const cdSize = offset - cdOffset, end = Buffer.alloc(22);
     end.writeUInt32LE(0x06054b50, 0); end.writeUInt16LE(entries.length, 8); end.writeUInt16LE(entries.length, 10);
-    end.writeUInt32LE(cdSize, 12); end.writeUInt32LE(cdOffset, 16); emit(end);
+    end.writeUInt32LE(cdSize, 12); end.writeUInt32LE(cdOffset, 16); yield* emit(end);
+    // Even tiny writes yield with the staging descriptor still owned, as before.
+    // A cancellation/progress error closes it before rejecting the public promise.
+    yield { bytes: 0, items: 0, boundary: true };
     fs.fsyncSync(fd);
     const written = fs.fstatSync(fd);
     const closing = fd; fd = null; fs.closeSync(closing);
-    const verified = verifyWrittenArchive(tmp, expected, offset, written);
-    for (const item of prepared) if (item.stat) assertSourceUnchanged((item.entry as ZipFileEntry).filePath!, item.stat);
+    const verified = yield* verifyWrittenArchiveSteps(tmp, expected, offset, written, options.signal);
+    // Deliver complete processing counts BEFORE final source/staging checks.
+    // There is no observer, await, or cancellation check after name acquisition.
+    yield { bytes: 0, items: 0, boundary: true };
     syncParent(); // All ordinary directory-sync failures must precede commit.
     ensureArchiveDirectory(parent);
+    checkWriteGuard(options);
+    // Final witnesses and name acquisition are one synchronous segment. Yielding
+    // after checking an early source would let an observer change it unnoticed.
+    // This bounded-count stat-only loop is the intentional commit-time residual.
+    for (const item of prepared) {
+      checkWriteSignal(options.signal);
+      if (item.stat) assertSourceUnchanged((item.entry as ZipFileEntry).filePath!, item.stat);
+    }
     assertSourceUnchanged(tmp, verified);
     const current = destinationStat(destPath);
+    checkWriteSignal(options.signal);
     if (previous) {
       if (!current || !sameSnapshot(current, previous)) throw codedError("ARCHIVE_DESTINATION_CHANGED", "Destination changed since overwrite was confirmed");
       fs.renameSync(tmp, destPath);

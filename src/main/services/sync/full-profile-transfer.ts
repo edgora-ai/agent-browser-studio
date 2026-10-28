@@ -4,7 +4,7 @@ import { createCipheriv, createDecipheriv, createHash, randomBytes, scrypt } fro
 import type { BrowserEngine, ProxyConfig } from "../../types.js";
 import {
   captureFullProfile, prepareFullProfile, resealPreparedFullProfile,
-  type FullProfileArtifact, type PreparedFullProfile,
+  type FullProfileArtifact, type FullProfileProgress, type PreparedFullProfile,
 } from "./full-profile-artifact.js";
 import {
   identityForManagedProfile, createBasicChromiumAdapter, inspectProfileCredentials,
@@ -35,6 +35,7 @@ interface TransferOptions {
   stagingDir: string;
   guard: () => void;
   signal?: AbortSignal;
+  onProgress?: (progress: FullProfileProgress) => void;
 }
 function failure(code: string, message: string): Error & { code: string } {
   return Object.assign(new Error(message), { code });

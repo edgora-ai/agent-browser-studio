@@ -17,6 +17,14 @@ export const MAX_FULL_PROFILE_DEPTH = 64;
 const MAX_MANIFEST_BYTES = 8 * 1024 * 1024;
 const MAX_HEADER_BYTES = 4096;
 const CHUNK = 64 * 1024;
+// Keep frequent guards/64 KiB I/O, but amortize process discovery over a bounded
+// synchronous batch. The read-work timer starts after fresh process admission:
+// one slow, non-preemptible discovery must not reduce every batch to one chunk.
+// Subsequent guards/syscalls are soft time bounds; bytes/checkpoints also bound
+// work if the wall clock moves backward.
+const READ_BATCH_BYTES = 4 * 1024 * 1024;
+const READ_BATCH_MS = 16;
+const READ_BATCH_CHECKPOINTS = 128;
 const NOFOLLOW = fs.constants.O_NOFOLLOW || 0;
 const MAGIC = Buffer.from("RXYFP001", "ascii");
 const PREFIX_BYTES = MAGIC.length + 4;
@@ -61,6 +69,17 @@ export type FullProfileGuard = (() => void) & {
   /** Coalesce discovery only inside this synchronous read slice, never an await. */
   runSynchronous?: <T>(action: () => T) => T;
 };
+export interface FullProfileProgress {
+  phase: "scanning" | "reading-archive" | "verifying-source" | "verifying-profile" | "verifying-extras" |
+    "packing" | "encrypting" | "decrypting" | "extracting";
+  /** Phase-local cumulative processing bytes and member checkpoints visited. */
+  bytes: number;
+  items: number;
+  totalBytes?: number;
+  totalItems?: number;
+}
+/** Local, synchronous observation only; no paths or profile contents are exposed. */
+export type FullProfileProgressCallback = (progress: FullProfileProgress) => void;
 export interface CaptureFullProfileOptions {
   profileDir: string;
   stagingDir: string;
@@ -72,6 +91,7 @@ export interface CaptureFullProfileOptions {
   browserVersion?: string;
   guard: FullProfileGuard;
   signal?: AbortSignal;
+  onProgress?: FullProfileProgressCallback;
   extraEntries?: readonly FullProfileExtraEntry[];
 }
 export interface PrepareFullProfileOptions {
@@ -85,6 +105,7 @@ export interface PrepareFullProfileOptions {
   snapshotId?: string;
   guard: FullProfileGuard;
   signal?: AbortSignal;
+  onProgress?: FullProfileProgressCallback;
 }
 export interface PreparedFullProfile {
   readonly directory: string;
@@ -290,26 +311,86 @@ function temporaryPath(relative: string, engine: BrowserEngine): boolean {
   return componentDownloads.includes(parts[0]) || caches.includes(parts[0]) ||
     parts.length >= 2 && /^(?:Default|Profile [0-9]+|Guest Profile|System Profile)$/.test(parts[0]) && caches.includes(parts[1]);
 }
-type Traversal<T> = Generator<void, T, void>;
-function drain<T>(steps: Traversal<T>, guard: FullProfileGuard): T {
-  return synchronousSlice(guard, () => {
-    try {
-      for (;;) { const step = steps.next(); if (step.done) return step.value; }
-    } finally { steps.return(undefined as never); }
-  });
+interface ReadCheckpoint { bytes: number; items: number; }
+type Traversal<T> = Generator<ReadCheckpoint, T, void>;
+function advanceBatch<T>(steps: Traversal<T>, guard: FullProfileGuard, signal?: AbortSignal, abandon?: (value: T) => void) {
+  let completed: IteratorReturnResult<T> | undefined;
+  try {
+    return synchronousSlice(guard, () => {
+      check(guard, signal);
+      const started = Date.now();
+      let bytes = 0, items = 0, checkpoints = 0;
+      for (;;) {
+        const step = steps.next();
+        if (step.done) { completed = step; return { step, bytes, items }; }
+        bytes += step.value.bytes; items += step.value.items; checkpoints++;
+        // The next read may be a full chunk even after an uneven file tail.
+        // Reserve that headroom so mixed small files cannot overshoot 4 MiB.
+        if (bytes > READ_BATCH_BYTES - CHUNK || checkpoints >= READ_BATCH_CHECKPOINTS || Date.now() - started >= READ_BATCH_MS) {
+          return { step, bytes, items };
+        }
+      }
+    });
+  } catch (error) {
+    // A runSynchronous executor also validates the lease AFTER action returns.
+    // It can reject a completed archive read before its buffer reaches a caller.
+    if (completed) abandon?.(completed.value);
+    throw error;
+  }
 }
-/** Yield only at the shared core's bounded checkpoints. Its very next operation
- * is the original synchronous guard, before any further I/O or successful return.
- * A discovery frame ends before nextTurn; no observation survives an await.
- * Closing a suspended iterator also closes its pinned fd and clears owned bytes. */
-async function drainCooperatively<T>(steps: Traversal<T>, guard: FullProfileGuard): Promise<T> {
+function drain<T>(steps: Traversal<T>, guard: FullProfileGuard): T {
+  try {
+    // Synchronous apply/rollback APIs cannot yield, but still renew discovery at
+    // the same bounded checkpoints. Publication remains outside these frames.
+    for (;;) { const { step } = advanceBatch(steps, guard); if (step.done) return step.value; }
+  } finally { steps.return(undefined as never); }
+}
+/** Every original guard still runs, including between 64 KiB chunks. Only the
+ * process observation may be shared within one bounded synchronous batch. The
+ * frame ends before callbacks/nextTurn; no safety observation spans an await.
+ * Closing a suspended iterator closes its pinned fd and clears owned bytes. */
+async function drainCooperatively<T>(steps: Traversal<T>, guard: FullProfileGuard, signal: AbortSignal | undefined,
+  phase: FullProfileProgress["phase"], onProgress?: FullProfileProgressCallback, abandon?: (value: T) => void): Promise<T> {
+  let bytes = 0, items = 0, completed: IteratorReturnResult<T> | undefined, returned = false;
   try {
     for (;;) {
-      const step = synchronousSlice(guard, () => steps.next());
-      if (step.done) return step.value;
+      const batch = advanceBatch(steps, guard, signal, abandon);
+      if (batch.step.done) completed = batch.step;
+      bytes += batch.bytes; items += batch.items;
+      if (onProgress) {
+        const result: unknown = onProgress({ phase, bytes, items });
+        if (result !== null && result !== undefined && typeof (result as { then?: unknown }).then === "function") {
+          void Promise.resolve(result).catch(() => undefined);
+          invalid("Full-profile progress callback must be synchronous");
+        }
+        // A callback can synchronously cancel or change config/lease state too.
+        check(guard, signal);
+      }
+      if (batch.step.done) { returned = true; return batch.step.value; }
       await nextTurn();
+      // The generator's next operation is its original guard, in a NEW frame.
     }
-  } finally { steps.return(undefined as never); }
+  } finally {
+    try { steps.return(undefined as never); }
+    finally { if (!returned && completed) abandon?.(completed.value); }
+  }
+}
+function reportLocalProgress(value: FullProfileProgress, options: Pick<CaptureFullProfileOptions, "guard" | "signal" | "onProgress">): void {
+  if (options.onProgress) {
+    const result: unknown = options.onProgress(value);
+    if (result !== null && result !== undefined && typeof (result as { then?: unknown }).then === "function") {
+      void Promise.resolve(result).catch(() => undefined);
+      invalid("Full-profile progress callback must be synchronous");
+    }
+  }
+  check(options.guard, options.signal);
+}
+/** Expose an honest phase boundary before non-preemptible crypto/extraction.
+ * Yield before starting it, never during atomic profile publication/rollback. */
+async function enterLocalPhase(phase: FullProfileProgress["phase"], options: Pick<CaptureFullProfileOptions, "guard" | "signal" | "onProgress">): Promise<void> {
+  reportLocalProgress({ phase, bytes: 0, items: 0 }, options);
+  await nextTurn();
+  check(options.guard, options.signal);
 }
 function* visitFileSteps(file: string, expected: fs.Stats, guard: FullProfileGuard, signal?: AbortSignal, consume?: (chunk: Buffer, position: number) => void): Traversal<string> {
   check(guard, signal); ensureArchiveDirectory(path.dirname(file)); regular(file, expected);
@@ -323,7 +404,7 @@ function* visitFileSteps(file: string, expected: fs.Stats, guard: FullProfileGua
       const wanted = Math.min(CHUNK, expected.size - position), count = fs.readSync(fd, chunk, 0, wanted, position);
       if (!Number.isInteger(count) || count <= 0 || count > wanted) invalid("Full-profile source short read");
       const data = chunk.subarray(0, count); hash.update(data); consume?.(data, position); position += count;
-      yield;
+      yield { bytes: count, items: 0 };
       check(guard, signal);
     }
     if (fs.readSync(fd, chunk, 0, 1, expected.size) !== 0 || !sameSnapshot(fs.fstatSync(fd), expected) || !sameSnapshot(fs.lstatSync(file), expected)) invalid("Unstable full-profile source");
@@ -342,7 +423,7 @@ function* scanTreeSteps(directory: string, engine: BrowserEngine, guard: FullPro
     const before = fs.lstatSync(current);
     if (!before.isDirectory() || before.isSymbolicLink()) invalid("Unsafe full-profile source directory");
     for (const name of fs.readdirSync(current).sort()) {
-      yield;
+      yield { bytes: 0, items: 1 };
       check(guard, signal);
       const relative = parentRelative ? parentRelative + "/" + name : name;
       validateRelative(relative); rejectRecoveryOrQueue(relative);
@@ -383,6 +464,18 @@ function assertTreeSnapshot(before: Tree, after: Tree, ignoreRootMetadata = fals
   if (!(ignoreRootMetadata ? sameIdentity(before.root, after.root) : sameSnapshot(before.root, after.root)) || before.all.length !== after.all.length ||
       before.all.some((item, index) => item.path !== after.all[index].path || !sameSnapshot(item.stat, after.all[index].stat)) ||
       before.files.length !== after.files.length || before.files.some((item, index) => item.path !== after.files[index].path || item.sha256 !== after.files[index].sha256)) invalid("Full-profile source changed during capture/apply");
+}
+/** Revalidate the original hash/inventory witnesses after the last observer,
+ * await and guard. This metadata-only commit tail must not call user code or
+ * yield: another cooperative hash would just create another stale boundary.
+ * Keep the original stats (including omitted entries), never bless new ones. */
+function assertTreeWitnesses(directory: string, tree: Tree): void {
+  ensureArchiveDirectory(directory);
+  if (!sameSnapshot(tree.root, fs.lstatSync(directory))) invalid("Full-profile source changed after verification");
+  for (const item of tree.all) {
+    const current = lstatOptional(path.join(directory, item.path));
+    if (!current || !sameSnapshot(item.stat, current)) invalid("Full-profile source changed after verification");
+  }
 }
 function members(tree: Tree): FullProfileMember[] { return tree.files.map(({ path: relative, size, sha256: digest }) => ({ path: relative, size, sha256: digest })); }
 function sumFiles(files: readonly FullProfileMember[]): number { return files.reduce((sum, file) => sum + file.size, 0); }
@@ -520,6 +613,7 @@ async function deriveKey(passphrase: string, salt: Buffer, guard: FullProfileGua
   finally { input.fill(0); }
 }
 function* readOwnedFileSteps(file: string, limit: number, guard: FullProfileGuard, signal?: AbortSignal): Traversal<Buffer> {
+  check(guard, signal);
   const stat = fs.lstatSync(file); regular(file, stat);
   if (stat.size > limit) sizeLimit("body", stat.size, limit);
   const bytes = Buffer.alloc(stat.size);
@@ -540,7 +634,7 @@ export async function captureFullProfile(options: CaptureFullProfileOptions): Pr
   if (!validIdentity(id as unknown as Record<string, unknown>)) invalid("Invalid full-profile capture identity");
   const source = ensureArchiveDirectory(profileDir), staging = ensureArchiveDirectory(stagingDir);
   if (isPathInside(staging, source)) invalid("Full-profile staging must be outside the source profile");
-  const before = await drainCooperatively(scanTreeSteps(source, id.engine, guard, signal, true), guard)
+  const before = await drainCooperatively(scanTreeSteps(source, id.engine, guard, signal, true), guard, signal, "scanning", options.onProgress)
     .catch(cause => { throw sizeContext(cause, options.dirId); });
   // Even an empty traversal settles asynchronously; recheck its caller's turn.
   check(guard, signal);
@@ -573,10 +667,13 @@ export async function captureFullProfile(options: CaptureFullProfileOptions): Pr
       ...before.files.map((file): ZipFileEntry => ({ name: "profile/" + file.path, filePath: path.join(source, file.path) }))];
     if (extraCopies.length) entries.push({ name: "extras/", isDirectory: true });
     entries.push(...extraCopies.map((extra) => ({ name: "extras/" + extra.path, data: extra.data })));
-    const written = await guardedAwait(() => writeZipArchive(archive, entries), guard, signal);
+    const written = await guardedAwait(() => writeZipArchive(archive, entries, {
+      signal, guard: () => check(guard, signal), onProgress: options.onProgress,
+    }), guard, signal);
+    check(guard, signal);
     if (written.warnings?.some((warning) => warning !== "Directory fsync is unsupported on Windows; only file durability was verified.")) invalid("Full-profile ZIP publication/cleanup was not verified: " + written.warnings.join("; "));
     assertOwner(workspace);
-    zip = await drainCooperatively(readOwnedFileSteps(archive, MAX_FULL_PROFILE_BODY_BYTES - PREFIX_BYTES - TAG_BYTES, guard, signal), guard);
+    zip = await drainCooperatively(readOwnedFileSteps(archive, MAX_FULL_PROFILE_BODY_BYTES - PREFIX_BYTES - TAG_BYTES, guard, signal), guard, signal, "reading-archive", options.onProgress, bytes => bytes.fill(0));
     check(guard, signal);
     inspectZip(zip, id, guard, signal, true);
     const salt = randomBytes(16), iv = randomBytes(12);
@@ -584,15 +681,22 @@ export async function captureFullProfile(options: CaptureFullProfileOptions): Pr
     const headerBytes = jsonBytes(header), prefix = Buffer.alloc(PREFIX_BYTES);
     if (headerBytes.length > MAX_HEADER_BYTES) invalid("Full-profile encryption header size limit exceeded");
     MAGIC.copy(prefix); prefix.writeUInt32BE(headerBytes.length, MAGIC.length);
+    await enterLocalPhase("encrypting", options);
+    check(guard, signal);
     key = await deriveKey(passphrase, salt, guard, signal);
-    const after = await drainCooperatively(scanTreeSteps(source, id.engine, guard, signal, true), guard);
+    const after = await drainCooperatively(scanTreeSteps(source, id.engine, guard, signal, true), guard, signal, "verifying-source", options.onProgress);
     check(guard, signal); assertTreeSnapshot(before, after);
+    // Keep the original two-scan comparison. The final metadata witness below
+    // also covers mutations by the terminal encryption observer.
     const cipher = createCipheriv("aes-256-gcm", key, iv); cipher.setAAD(Buffer.concat([prefix, headerBytes]));
     const encrypted = cipher.update(zip), final = cipher.final();
     const body = Buffer.concat([prefix, headerBytes, encrypted, final, cipher.getAuthTag()]);
     if (body.length > MAX_FULL_PROFILE_BODY_BYTES) sizeLimit("body", body.length, MAX_FULL_PROFILE_BODY_BYTES);
     const digest = sha256(body), descriptor = parseFullProfileArtifact({ ...id, key: `full-profile-v1-${digest}.bin`, sha256: digest, size: body.length })!;
-    check(guard, signal); result = { body, descriptor };
+    reportLocalProgress({ phase: "encrypting", bytes: zip.length, items: 1, totalBytes: zip.length, totalItems: 1 }, options);
+    check(guard, signal);
+    assertTreeWitnesses(source, after);
+    result = { body, descriptor };
   } catch (cause) { error = sizeContext(cause, options.dirId); }
   finally {
     key?.fill(0); zip?.fill(0); extraCopies.forEach((extra) => extra.data.fill(0));
@@ -638,7 +742,10 @@ export async function prepareFullProfile(options: PrepareFullProfileOptions): Pr
     if (!object(rawHeader) || !exactKeys(rawHeader, [...IDENTITY_KEYS, "cipher", "kdf", "salt", "iv"], ["browserVersion"]) || !validIdentity(rawHeader) ||
         rawHeader.cipher !== "aes-256-gcm" || rawHeader.kdf !== KDF || typeof rawHeader.salt !== "string" || !/^[a-f0-9]{32}$/.test(rawHeader.salt) ||
         typeof rawHeader.iv !== "string" || !/^[a-f0-9]{24}$/.test(rawHeader.iv) || canonical(identity(rawHeader as unknown as Identity)) !== canonical(identity(descriptor))) invalid("Full-profile header identity/algorithm mismatch");
+    await enterLocalPhase("decrypting", options);
+    check(guard, signal);
     key = await deriveKey(passphrase, Buffer.from(rawHeader.salt, "hex"), guard, signal);
+    check(guard, signal);
     try {
       const decipher = createDecipheriv("aes-256-gcm", key, Buffer.from(rawHeader.iv, "hex"));
       decipher.setAAD(body.subarray(0, start)); decipher.setAuthTag(body.subarray(body.length - TAG_BYTES));
@@ -646,32 +753,40 @@ export async function prepareFullProfile(options: PrepareFullProfileOptions): Pr
       const final = decipher.final(); zip = Buffer.concat([unauthenticated, final]);
     } catch (cause) { throw failure("FULL_PROFILE_DECRYPTION_FAILED", "Unable to decrypt full-profile artifact (wrong passphrase or damaged object)", cause); }
     finally { unauthenticated?.fill(0); unauthenticated = undefined; key.fill(0); key = undefined; }
+    reportLocalProgress({ phase: "decrypting", bytes: zip.length, items: 1, totalBytes: zip.length, totalItems: 1 }, options);
+    await enterLocalPhase("extracting", options);
+    check(guard, signal);
     const manifest = inspectZip(zip, descriptor, guard, signal);
     workspace = makeWorkspace(options.stagingDir, "full-profile-prepare-");
     const archive = path.join(workspace.directory, "profile.zip");
     const fd = fs.openSync(archive, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | NOFOLLOW, 0o600);
     try { fs.writeFileSync(fd, zip); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
     check(guard, signal);
-    extractZipArchive(archive, path.join(workspace.directory, "contents"), {
+    const extracted = extractZipArchive(archive, path.join(workspace.directory, "contents"), {
       maxTotalBytes: MAX_FULL_PROFILE_EXPANDED_BYTES, maxEntryBytes: MAX_ZIP_ENTRY_BYTES,
       skipNames: () => { check(guard, signal); return false; },
     });
+    reportLocalProgress({ phase: "extracting", bytes: extracted.bytes, items: extracted.files, totalBytes: extracted.bytes, totalItems: extracted.files }, options);
     check(guard, signal); assertOwner(workspace);
     const directory = path.join(workspace.directory, "contents", "profile");
-    const tree = await drainCooperatively(scanTreeSteps(directory, descriptor.engine, guard, signal), guard);
+    const tree = await drainCooperatively(scanTreeSteps(directory, descriptor.engine, guard, signal), guard, signal, "verifying-profile", options.onProgress);
     check(guard, signal);
     assertMembers(tree, manifest.files, manifest.directories);
     const extraDirectory = manifest.extraEntries.length ? path.join(workspace.directory, "contents", "extras") : undefined;
-    let extraOwner: fs.Stats | undefined;
+    let extraTree: Tree | undefined;
     if (extraDirectory) {
-      const extraTree = await drainCooperatively(scanTreeSteps(extraDirectory, descriptor.engine, guard, signal), guard);
+      extraTree = await drainCooperatively(scanTreeSteps(extraDirectory, descriptor.engine, guard, signal), guard, signal, "verifying-extras", options.onProgress);
       check(guard, signal);
-      assertMembers(extraTree, manifest.extraEntries, extraDirectories(manifest.extraEntries)); extraOwner = extraTree.root;
+      assertMembers(extraTree, manifest.extraEntries, extraDirectories(manifest.extraEntries));
     }
     // Neither of these transport files is part of prepared.directory.
     fs.unlinkSync(archive); fs.unlinkSync(path.join(workspace.directory, "contents", "manifest.json"));
-    check(guard, signal);
-    prepared = preparedValue(directory, extraDirectory, { workspace, profileOwner: tree.root, extraOwner, manifest, sourceManifest: manifest });
+    check(guard, signal); assertOwner(workspace);
+    // Revisit BOTH trees after the last phase: an extras observer/await can also
+    // mutate the already-verified profile. No observer or yield after this tail.
+    assertTreeWitnesses(directory, tree);
+    if (extraDirectory && extraTree) assertTreeWitnesses(extraDirectory, extraTree);
+    prepared = preparedValue(directory, extraDirectory, { workspace, profileOwner: tree.root, extraOwner: extraTree?.root, manifest, sourceManifest: manifest });
   } catch (cause) { error = sizeContext(cause, options.dirId); }
   finally {
     key?.fill(0); zip?.fill(0); unauthenticated?.fill(0); body.fill(0);

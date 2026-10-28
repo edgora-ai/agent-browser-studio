@@ -242,6 +242,77 @@ afterEach(async () => {
 afterAll(() => { assertRoot(); fs.rmSync(h.root, { recursive: true }); });
 
 describe.skipIf(!["darwin", "linux"].includes(process.platform))("complete profile production transport with independent device vaults", () => {
+  describe("local progress and cancellation settlement", () => {
+    it.each(["scanning", "packing", "reading-archive", "verifying-source", "encrypting", "decrypting", "extracting", "verifying-profile", "verifying-extras"])("cancels push during %s with lease held until cleanup and no remote publication", async phase => {
+      await seedProfile();
+      const before = inventory(profileRoot()), configHash = sha(fs.readFileSync(config.getConfigPath())), controller = new AbortController();
+      const { onEvent } = await import("../../src/main/services/event-bus.js");
+      let witnessed = false, competing: ReturnType<typeof service.syncService.pull> | undefined;
+      const off = onEvent("sync:progress", (event: any) => {
+        if (witnessed || event.progress?.local?.phase !== phase) return;
+        witnessed = true;
+        expect(event.progress).toMatchObject({ scope: "fullProfile", itemId: ID });
+        expect(event.progress).not.toHaveProperty("transfer");
+        expect(locks.isRestoreLocked(ID)).toBe(true);
+        expect(fs.existsSync(ordinaryLeasePath())).toBe(true);
+        controller.abort();
+        expect(service.syncService.getStatus().operation.active?.operationId).toBe(event.operationId);
+        competing = service.syncService.pull();
+      });
+      let result: any;
+      try { await service.syncService.push(controller.signal, true); }
+      catch (error: any) { result = error.syncResult; }
+      finally { off(); }
+      expect(witnessed).toBe(true);
+      expect(result).toMatchObject({ success: false, outcome: "cancelled", localCommit: "none", remoteCommit: "none" });
+      expect(await competing).toMatchObject({ code: "SYNC_BUSY" });
+      expect(fixture.journal.filter(entry => entry.method === "PUT")).toEqual([]);
+      expect(sha(fs.readFileSync(config.getConfigPath()))).toBe(configHash); sameTree(profileRoot(), before);
+      expect(fs.readdirSync(config.getProfilesDir()).some(name => name.startsWith(".sync-pull-stage-"))).toBe(false);
+      expect(service.syncService.getStatus().operation.active).toBeNull();
+      expect(service.syncService.getStatus().operation.last).toEqual(result);
+      assertFreshAcquireReady();
+    });
+
+    it.each(["decrypting", "extracting", "verifying-profile", "verifying-extras"])("cancels pull during %s before changing the receiver", async phase => {
+      await publish(); await resetDevice("cancel-receiver"); await seedProfile(true);
+      const before = oldReceiver(), controller = new AbortController();
+      const { onEvent } = await import("../../src/main/services/event-bus.js");
+      let witnessed = false;
+      const off = onEvent("sync:progress", (event: any) => {
+        if (witnessed || event.progress?.local?.phase !== phase) return;
+        witnessed = true;
+        expect(event).toMatchObject({ stage: "verifying", progress: { scope: "fullProfile", itemId: ID } });
+        expect(event.progress).not.toHaveProperty("transfer");
+        expect(locks.isRestoreLocked(ID)).toBe(true);
+        controller.abort();
+        expect(service.syncService.getStatus().operation.active?.operationId).toBe(event.operationId);
+      });
+      let result: any;
+      try { await service.syncService.pull(controller.signal); }
+      catch (error: any) { result = error.syncResult; }
+      finally { off(); }
+      expect(witnessed).toBe(true);
+      expect(result).toMatchObject({ success: false, outcome: "cancelled", localCommit: "none", remoteCommit: "none" });
+      assertOld(before); assertFreshAcquireReady();
+      expect(service.syncService.getStatus().operation.active).toBeNull();
+      expect(fs.readdirSync(config.getProfilesDir()).some(name => name.startsWith(".sync-pull-stage-"))).toBe(false);
+    });
+
+    it("retains uncertain remote publication facts when cancellation arrives after config PUT dispatch", async () => {
+      await seedProfile(); const controller = new AbortController();
+      const before = sha(fs.readFileSync(config.getConfigPath()));
+      fixture.putHook(key => { if (key === CONFIG_KEY) controller.abort(); });
+      let result: any;
+      try { await service.syncService.push(controller.signal, true); }
+      catch (error: any) { result = error.syncResult; }
+      expect(result).toMatchObject({ success: false, outcome: "partial", localCommit: "none", remoteCommit: "unknown" });
+      expect(fixture.objects.has(CONFIG_KEY)).toBe(true);
+      expect(sha(fs.readFileSync(config.getConfigPath()))).toBe(before);
+      expect(service.syncService.getStatus().operation.active).toBeNull(); assertFreshAcquireReady();
+    });
+  });
+
   describe("linked proxy credential contract", () => {
     const cases = proxyUsernames.flatMap(entry => (["new-proxy", "remote-wins", "local-wins"] as const).map(decision => ({ ...entry, decision })));
     it.each(cases)("$decision preserves the $label username through persisted restore and native auth", async ({ username, localUsername, decision }) => {

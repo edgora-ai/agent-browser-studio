@@ -156,7 +156,19 @@ describe("required extension packages precede the authoritative snapshot", () =>
     h.onPut = (key) => packageKey(key) && fault === "reject" ? { status: 500 } : undefined;
     h.onGet = (key) => packageKey(key) ? fault === "missing" ? { status: 404 } : fault === "tamper" ? { replacement: Buffer.from("wrong immutable package bytes") } : undefined : undefined;
     const result = await syncService.push();
-    expect(result.success).toBe(false); expect(result.remoteCommit).toBe("none");
+    expect(result).toMatchObject({ success: false, outcome: "partial", localCommit: "none",
+      remoteCommit: fault === "reject" ? "unknown" : "partial" });
+    const packagePuts = h.requests.filter((request) => request.method === "PUT" && packageKey(request.key));
+    expect(packagePuts).toHaveLength(1);
+    const key = packagePuts[0].key;
+    // The fixture knows rejection stored nothing, but the client cannot prove
+    // that from HTTP 500. Missing/tampered GETs leave the accepted object intact.
+    expect(h.objects.has(key)).toBe(fault !== "reject");
+    expect([...h.objects.keys()].filter(packageKey)).toEqual(fault === "reject" ? [] : [key]);
+    if (fault !== "reject") expect(key).toBe(`extension-${id}-${createHash("sha512").update(h.objects.get(key)!).digest("hex")}.zip`);
+    const receipts = result.items?.filter((item) => item.side === "remote" && item.scope === "extensions");
+    expect(receipts).toEqual([expect.objectContaining({ side: "remote", scope: "extensions", id, state: "unknown" })]);
+    expect(receipts![0].bytes).toBeUndefined();
     expect(puts(MAIN)).toHaveLength(0); expect(sha(h.objects.get(MAIN)!)).toBe(beforeHash);
     expect(disk().browserProfiles[ID].syncBaseline).toBeUndefined();
     expect(disk().extensionRepository[id].packageHash).toBe(beforePackageHash);
