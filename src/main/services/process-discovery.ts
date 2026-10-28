@@ -18,15 +18,14 @@ let execFileSyncImpl: typeof execFileSync = execFileSync;
 let execImpl: typeof exec = exec;
 
 interface ProfileProcessFrame {
-  profileDir: string;
+  profileDirs: ReadonlySet<string>;
   observation?: { lines: string[]; processes?: BrowserLaunchProcess[] } | { error: unknown };
 }
 let profileProcessFrame: ProfileProcessFrame | undefined;
 
-/** One lexical, synchronous observation, never a stopped-result/TTL cache. */
-export function withProfileProcessSnapshotSync<T>(profileDir: string, action: () => T): T {
-  const previous = profileProcessFrame, expected = normalizeBrowserProcessPath(profileDir);
-  profileProcessFrame = previous?.profileDir === expected ? previous : { profileDir: expected };
+function inProfileProcessFrameSync<T>(frame: ProfileProcessFrame | undefined, action: () => T): T {
+  const previous = profileProcessFrame;
+  profileProcessFrame = frame;
   try {
     const result = action();
     if (result !== null && result !== undefined && typeof (result as { then?: unknown }).then === "function") {
@@ -37,11 +36,28 @@ export function withProfileProcessSnapshotSync<T>(profileDir: string, action: ()
   } finally { profileProcessFrame = previous; }
 }
 
-/** Independent confirmation, including Firefox's second sentinel observation. */
-export function withoutProfileProcessSnapshotSync<T>(action: () => T): T {
+/** One lexical, synchronous observation, never a stopped-result/TTL cache.
+ * A single-profile slice may reuse an explicitly allowlisted group member. */
+export function withProfileProcessSnapshotSync<T>(profileDir: string, action: () => T): T {
+  const expected = normalizeBrowserProcessPath(profileDir);
+  const frame = profileProcessFrame?.profileDirs.has(expected) ? profileProcessFrame : { profileDirs: new Set([expected]) };
+  return inProfileProcessFrameSync(frame, action);
+}
+
+/** Share one fresh strict observation within one synchronous all-profile check.
+ * Only the captured allowlist may reuse it; differently scoped nested groups
+ * are independent, and no observation survives this lexical frame. */
+export function withProfileProcessSnapshotsSync<T>(profileDirs: readonly string[], action: () => T): T {
+  const expected = new Set(profileDirs.map(normalizeBrowserProcessPath));
   const previous = profileProcessFrame;
-  profileProcessFrame = undefined;
-  try { return action(); } finally { profileProcessFrame = previous; }
+  const sameScope = previous && previous.profileDirs.size === expected.size && [...expected].every((dir) => previous.profileDirs.has(dir));
+  return inProfileProcessFrameSync(sameScope ? previous : { profileDirs: expected }, action);
+}
+
+/** Independent confirmation, including Firefox's second sentinel observation.
+ * The single and group APIs use the same active frame, so both are suspended. */
+export function withoutProfileProcessSnapshotSync<T>(action: () => T): T {
+  return inProfileProcessFrameSync(undefined, action);
 }
 
 export function __setProcessDiscoveryExecForTest(overrides: {
@@ -399,7 +415,11 @@ function collectLinesSync(requireCommandLine = false, strict = false): string[] 
 
 function collectProfileLinesSync(profileDir: string, requireCommandLine: boolean, strict: boolean): string[] {
   const frame = profileProcessFrame;
-  if (!frame || frame.profileDir !== normalizeBrowserProcessPath(profileDir)) return collectLinesSync(requireCommandLine, strict);
+  if (!frame?.profileDirs.has(normalizeBrowserProcessPath(profileDir))) {
+    // Nonmembers never borrow an outer observation, but an active safety frame
+    // still requires an independent strict provider, not a lossy fallback.
+    return collectLinesSync(requireCommandLine, strict || frame !== undefined);
+  }
   if (!frame.observation) {
     // A shared observation is always strict, including when its first reader
     // would ordinarily accept a lossy provider. A failed observation stays failed.

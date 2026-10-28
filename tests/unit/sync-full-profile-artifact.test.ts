@@ -10,7 +10,9 @@ import { spawnSync } from "node:child_process";
 import {
   captureFullProfile, FULL_PROFILE_FORMAT, MAX_FULL_PROFILE_BODY_BYTES, MAX_FULL_PROFILE_DEPTH,
   MAX_FULL_PROFILE_ENTRIES, parseFullProfileArtifact, prepareFullProfile, resealPreparedFullProfile,
-  restorePreparedFullProfile, type CaptureFullProfileOptions, type FullProfileArtifact,
+  restorePreparedFullProfile, restorePreparedFullProfileAsync, stageFullProfileCapture, captureStagedFullProfile,
+  verifyFullProfileArtifact, disposePreparedFullProfileAsync, cleanupOwnedFullProfileDirectory, resealPreparedFullProfileAsync,
+  type CaptureFullProfileOptions, type FullProfileArtifact,
   type PreparedFullProfile,
 } from "../../src/main/services/sync/full-profile-artifact.js";
 import { extractZipEntry, readZipEntries, writeZipArchive, type ZipDirEntry, type ZipFileEntry } from "../../src/main/services/zip-writer.js";
@@ -464,8 +466,8 @@ describe("full-profile cold-source and owned-path safety", () => {
     const root = tmp(), options = captureOptions(root); put(options.profileDir, "safe", "data");
     let running = false, cleanupFailures = 0;
     const runtimeChange = onOwnedZipWrite(options.stagingDir, () => { running = true; });
-    const original = fs.rmSync;
-    vi.spyOn(fsMutable, "rmSync").mockImplementation((file, opts) => {
+    const original = fs.rmdirSync;
+    vi.spyOn(fsMutable, "rmdirSync").mockImplementation((file, opts) => {
       if (String(file).includes("full-profile-capture-")) { cleanupFailures++; throw Object.assign(new Error("SYNTHETIC_CLEANUP_EIO"), { code: "EIO" }); }
       return original(file, opts);
     });
@@ -481,7 +483,7 @@ describe("full-profile local progress callback safety", () => {
   it.each(["callback", "slice-postcheck"] as const)("clears an archive buffer rejected by the final %s before ownership reaches capture", async mode => {
     const root = tmp(), options = captureOptions(root);
     put(options.profileDir, "safe", "synthetic-owned-plaintext");
-    const allocate = Buffer.alloc, owned: Buffer[] = [];
+    const allocate = Buffer.allocUnsafe, owned: Buffer[] = [];
     let archiveSize = -1, archiveRead = false;
     const open = fsMutable.openSync;
     vi.spyOn(fsMutable, "openSync").mockImplementation((file, flags, permissions) => {
@@ -490,7 +492,7 @@ describe("full-profile local progress callback safety", () => {
       }
       return open(file, flags, permissions);
     });
-    vi.spyOn(Buffer, "alloc").mockImplementation(((size: number, ...args: any[]) => {
+    vi.spyOn(Buffer, "allocUnsafe").mockImplementation(((size: number, ...args: any[]) => {
       const buffer = Reflect.apply(allocate, Buffer, [size, ...args]);
       // The owned read buffer is allocated before openRegular; record the
       // unique ZIP-sized allocation using the staging file's real size.
@@ -498,7 +500,7 @@ describe("full-profile local progress callback safety", () => {
       const archive = workspace && path.join(options.stagingDir, workspace, "profile.zip");
       if (archive && fs.existsSync(archive) && fs.statSync(archive).size === size) owned.push(buffer);
       return buffer;
-    }) as typeof Buffer.alloc);
+    }) as typeof Buffer.allocUnsafe);
     syncBuiltinESMExports();
     const scoped = Object.assign(() => guard(), { runSynchronous<T>(action: () => T): T {
       const result = action();
@@ -828,5 +830,231 @@ describe("full-profile staged replacement, rollback and local conversion", () =>
     expect(() => resealPreparedFullProfile({ prepared: incoming, changedPaths: [], guard })).toThrow(/manifest/);
     const plain = await prepare(bundle); mkdir(path.join(plain.directory, "new-directory"));
     expect(() => resealPreparedFullProfile({ prepared: plain, changedPaths: [], guard })).toThrow(/directories/);
+  });
+});
+
+describe("cooperative full-profile restore transactions", () => {
+  it("restores a real prepared artifact containing authenticated environment.bin extras without publishing those extras into the profile", async () => {
+    const bundle = await simpleBundle(), artifact = { ...bundle, ...await captureFullProfile({ ...bundle.options, extraEntries: [{ path: "environment.bin", data: Buffer.from("synthetic-encrypted-transfer-metadata") }] }) };
+    const incoming = await prepare(artifact), target = liveTarget(bundle.root); put(target, "old", "old-state");
+    const result = await restorePreparedFullProfileAsync({ prepared: incoming, profileDir: target, backupSuffix: ".previous", guard });
+    expect(result.files).toBe(incoming.files); expect(readAll(target)).toEqual(readAll(bundle.options.profileDir));
+    expect(fs.existsSync(path.join(target, "environment.bin"))).toBe(false); expect(fs.readFileSync(path.join(incoming.extraDirectory!, "environment.bin"), "utf8")).toBe("synthetic-encrypted-transfer-metadata");
+  });
+  it("keeps payload reads inside bounded synchronous slices, timer/progress outside, and renames outside every frame", async () => {
+    const root = tmp(), options = captureOptions(root); put(options.profileDir, "large-persistent-state", randomBytes(9 * 1024 * 1024));
+    const incoming = await stageFullProfileCapture(options), target = liveTarget(root); put(target, "old", "original-target");
+    let depth = 0, timerRan = false, payloadReads = 0, observeReads = true; const renameDepths: number[] = [], read = fsMutable.readSync, rename = fsMutable.renameSync;
+    const scoped = Object.assign(() => guard(), { runSynchronous<T>(action: () => T): T { depth++; try { return action(); } finally { depth--; } } });
+    vi.spyOn(fsMutable, "readSync").mockImplementation(((...args: Parameters<typeof read>) => { if (observeReads) { expect(depth).toBeGreaterThan(0); payloadReads++; } return Reflect.apply(read, fsMutable, args); }) as typeof read);
+    vi.spyOn(fsMutable, "renameSync").mockImplementation((from, to) => { renameDepths.push(depth); return rename(from, to); }); syncBuiltinESMExports();
+    setImmediate(() => { expect(depth).toBe(0); timerRan = true; });
+    const result = await restorePreparedFullProfileAsync({ prepared: incoming, profileDir: target, backupSuffix: ".previous", guard: scoped, onProgress() { expect(depth).toBe(0); } });
+    expect(timerRan).toBe(true); expect(payloadReads).toBeGreaterThan(0); expect(renameDepths).toEqual([0, 0]); observeReads = false;
+    expect(readAll(target)).toEqual(readAll(options.profileDir)); expect(fs.readFileSync(path.join(result.backupDir!, "old"), "utf8")).toBe("original-target");
+    observeReads = true; result.rollback(); observeReads = false;
+    expect(fs.readFileSync(path.join(target, "old"), "utf8")).toBe("original-target"); expect(fs.existsSync(result.rollbackDir!)).toBe(true);
+  });
+
+  it("cancels a bulk copy before any live rename and awaits complete owned-stage cleanup", async () => {
+    const root = tmp(), options = captureOptions(root); put(options.profileDir, "large-persistent-state", randomBytes(9 * 1024 * 1024));
+    const incoming = await stageFullProfileCapture(options), target = liveTarget(root), controller = new AbortController(); put(target, "old", "original-target");
+    let scheduled = false; const rename = vi.spyOn(fsMutable, "renameSync"); syncBuiltinESMExports();
+    await expect(restorePreparedFullProfileAsync({ prepared: incoming, profileDir: target, backupSuffix: ".previous", guard, signal: controller.signal, onProgress(progress) {
+      if (!scheduled && progress.phase === "extracting" && progress.bytes > 0) { scheduled = true; setImmediate(() => controller.abort()); }
+    } })).rejects.toMatchObject({ code: "ABORT_ERR" });
+    expect(scheduled).toBe(true); expect(rename).not.toHaveBeenCalled(); expect(fs.readdirSync(path.dirname(target))).toEqual([ID]);
+    expect(fs.readFileSync(path.join(target, "old"), "utf8")).toBe("original-target");
+  });
+
+  it("retains old and newly installed copies when cancellation arrives during installed full-payload readback", async () => {
+    const root = tmp(), options = captureOptions(root); put(options.profileDir, "large-persistent-state", randomBytes(9 * 1024 * 1024));
+    const incoming = await stageFullProfileCapture(options), target = liveTarget(root), controller = new AbortController(); put(target, "old", "original-target"); let scheduled = false;
+    await expect(restorePreparedFullProfileAsync({ prepared: incoming, profileDir: target, backupSuffix: ".previous", guard, signal: controller.signal, onProgress(progress) {
+      if (!scheduled && progress.phase === "verifying-profile" && fs.existsSync(target + ".previous") && fs.existsSync(target)) { scheduled = true; setImmediate(() => controller.abort()); }
+    } })).rejects.toMatchObject({ code: "FULL_PROFILE_RECOVERY_REQUIRED" });
+    expect(scheduled).toBe(true); expect(fs.readFileSync(path.join(target + ".previous", "old"), "utf8")).toBe("original-target"); expect(readAll(target)).toEqual(readAll(options.profileDir));
+  });
+
+  it("remembers a one-shot executor lease loss after installed reads instead of treating recovery as permission to undo", async () => {
+    const bundle = await simpleBundle(), incoming = await prepare(bundle), target = liveTarget(bundle.root); put(target, "old", "original-target"); let rejected = false;
+    const scoped = Object.assign(() => guard(), { runSynchronous<T>(action: () => T): T {
+      const result = action(); if (!rejected && fs.existsSync(target) && fs.existsSync(target + ".previous")) { rejected = true; throw new Error("ONE_SHOT_INSTALLED_LEASE_LOSS"); } return result;
+    } });
+    await expect(restorePreparedFullProfileAsync({ prepared: incoming, profileDir: target, backupSuffix: ".previous", guard: scoped })).rejects.toMatchObject({ code: "FULL_PROFILE_RECOVERY_REQUIRED" });
+    expect(rejected).toBe(true); expect(fs.readFileSync(path.join(target, "safe.txt"), "utf8")).toBe("SYNTHETIC_PRIVATE_STATE"); expect(fs.readFileSync(path.join(target + ".previous", "old"), "utf8")).toBe("original-target");
+  });
+
+  it.each(["EIO", "EXDEV"])("preserves original install %s and safely rolls back without an atomicity fallback", async code => {
+    const bundle = await simpleBundle(), incoming = await prepare(bundle), target = liveTarget(bundle.root); put(target, "old", "original-target"); const rename = fsMutable.renameSync;
+    vi.spyOn(fsMutable, "renameSync").mockImplementation((from, to) => {
+      if (String(from).includes(".full-profile-stage-") && to === target) throw Object.assign(new Error("ASYNC_INSTALL_" + code), { code }); return rename(from, to);
+    }); syncBuiltinESMExports();
+    await expect(restorePreparedFullProfileAsync({ prepared: incoming, profileDir: target, backupSuffix: ".previous", guard })).rejects.toThrow("ASYNC_INSTALL_" + code);
+    expect(fs.readFileSync(path.join(target, "old"), "utf8")).toBe("original-target"); expect(fs.readdirSync(path.dirname(target))).toEqual([ID]);
+  });
+
+  it("does not label an installed payload I/O failure as a changed guard, and retains the rolled-back incoming copy", async () => {
+    const bundle = await simpleBundle(), incoming = await prepare(bundle), target = liveTarget(bundle.root); put(target, "old", "original-target"); let injected = false; const read = fsMutable.readSync;
+    vi.spyOn(fsMutable, "readSync").mockImplementation(((...args: Parameters<typeof read>) => {
+      if (!injected && fs.existsSync(target) && fs.existsSync(target + ".previous")) { injected = true; throw Object.assign(new Error("ASYNC_INSTALLED_READ_EIO"), { code: "EIO" }); }
+      return Reflect.apply(read, fsMutable, args);
+    }) as typeof read); syncBuiltinESMExports();
+    await expect(restorePreparedFullProfileAsync({ prepared: incoming, profileDir: target, backupSuffix: ".previous", guard })).rejects.toThrow("ASYNC_INSTALLED_READ_EIO");
+    expect(injected).toBe(true); expect(fs.readFileSync(path.join(target, "old"), "utf8")).toBe("original-target"); expect(fs.existsSync(target + ".previous")).toBe(false);
+    expect(fs.readdirSync(path.dirname(target)).some(name => name.includes(".full-profile-rollback-"))).toBe(true);
+  });
+
+  it("revalidates the final original-tree witness before the first live rename", async () => {
+    const bundle = await simpleBundle(), incoming = await prepare(bundle), target = liveTarget(bundle.root); put(target, "old", "original-target"); let mutated = false;
+    const rename = vi.spyOn(fsMutable, "renameSync"); syncBuiltinESMExports();
+    await expect(restorePreparedFullProfileAsync({ prepared: incoming, profileDir: target, backupSuffix: ".previous", guard, onProgress(progress) {
+      if (!mutated && progress.phase === "verifying-source" && progress.bytes === incoming.bytes) { mutated = true; put(incoming.directory, "safe.txt", "tampered-after-last-hash"); }
+    } })).rejects.toThrow(/changed/);
+    expect(mutated).toBe(true); expect(rename).not.toHaveBeenCalled(); expect(fs.readFileSync(path.join(target, "old"), "utf8")).toBe("original-target"); expect(fs.readdirSync(path.dirname(target))).toEqual([ID]);
+  });
+});
+
+describe("converter-bound cooperative reseal", () => {
+  const converted = Buffer.from("converted-preferences"), convertedMember = { path: "Preferences", size: converted.length, sha256: createHash("sha256").update(converted).digest("hex") };
+  async function fixture() {
+    const root = tmp(), options = captureOptions(root); put(options.profileDir, "Preferences", "original-preferences"); put(options.profileDir, "safe.txt", "original-safe"); put(options.profileDir, "Login Data-wal", "old-sidecar");
+    const artifact = await captureFullProfile({ ...options, extraEntries: [{ path: "environment.bin", data: Buffer.from("synthetic-authenticated-metadata") }] });
+    const incoming = await prepare({ ...artifact, root, options }); put(incoming.directory, "Preferences", converted); fs.unlinkSync(path.join(incoming.directory, "Login Data-wal"));
+    return { incoming, expectations: { files: [{ ...convertedMember }], removedPaths: ["Login Data-wal"] }, changedPaths: ["Preferences", "Login Data-wal"] };
+  }
+  it("seals only the exact converted bytes/removals while preserving the original authenticated source manifest", async () => {
+    const value = await fixture(), resealed = await resealPreparedFullProfileAsync({ prepared: value.incoming, changedPaths: value.changedPaths, expectations: value.expectations, guard });
+    expect(resealed.manifest.files.find(file => file.path === "Preferences")).toEqual(convertedMember);
+    expect(resealed.manifest.files.some(file => file.path === "Login Data-wal")).toBe(false); expect(resealed.sourceManifest.files.some(file => file.path === "Login Data-wal")).toBe(true);
+  });
+  it.each(["converted-file", "removed-sidecar", "mutable-expectations", "final-profile-observer"])("does not bless tampering from a later %s boundary", async mode => {
+    const value = await fixture(); let mutated = false;
+    await expect(resealPreparedFullProfileAsync({ prepared: value.incoming, changedPaths: value.changedPaths, expectations: value.expectations, guard, onProgress(progress) {
+      const phase = mode === "final-profile-observer" ? "verifying-profile" : "verifying-extras";
+      if (mutated || progress.phase !== phase || mode === "final-profile-observer" && progress.items < 2) return;
+      mutated = true;
+      if (mode === "removed-sidecar") put(value.incoming.directory, "Login Data-wal", "reappeared-after-conversion");
+      else {
+        const changed = Buffer.from("tampered-preferences!"); put(value.incoming.directory, "Preferences", changed);
+        if (mode === "mutable-expectations") { value.expectations.files[0].size = changed.length; value.expectations.files[0].sha256 = createHash("sha256").update(changed).digest("hex"); }
+      }
+    } })).rejects.toThrow(/expectation|changed|reappeared/);
+    expect(mutated).toBe(true);
+  });
+  it.each(["missing", "duplicate", "unexpected", "wrong-size"])("rejects %s exact converted expectation coverage", async mode => {
+    const value = await fixture();
+    if (mode === "missing") value.expectations.files = [];
+    if (mode === "duplicate") value.expectations.files.push({ ...convertedMember });
+    if (mode === "unexpected") value.expectations.files.push({ path: "safe.txt", size: 13, sha256: createHash("sha256").update("original-safe").digest("hex") });
+    if (mode === "wrong-size") value.expectations.files[0].size++;
+    await expect(resealPreparedFullProfileAsync({ prepared: value.incoming, changedPaths: value.changedPaths, expectations: value.expectations, guard })).rejects.toThrow(/expectation/);
+  });
+});
+
+describe("strict cooperative owned cleanup ancestry", () => {
+  it("rejects a replaced intermediate parent even when the original descendant is moved back under its old pathname", async () => {
+    const root = mkdir(path.join(tmp(), "owned")), owner = fs.lstatSync(root), originalA = path.join(root, "a"), b = path.join(originalA, "b");
+    for (let i = 0; i < 700; i++) put(b, `file-${i}`, "synthetic-owned-state");
+    let remaining = -1;
+    const timer = new Promise<void>(resolve => setImmediate(() => {
+      remaining = fs.readdirSync(b).length; fs.renameSync(originalA, originalA + "-retained"); mkdir(originalA);
+      fs.renameSync(path.join(originalA + "-retained", "b"), b); put(originalA, "foreign-sentinel", "DO_NOT_DELETE"); resolve();
+    }));
+    await expect(cleanupOwnedFullProfileDirectory(root, owner)).rejects.toMatchObject({ code: "FULL_PROFILE_RECOVERY_REQUIRED" }); await timer;
+    expect(remaining).toBeGreaterThan(0); expect(fs.readdirSync(b)).toHaveLength(remaining); expect(fs.readFileSync(path.join(originalA, "foreign-sentinel"), "utf8")).toBe("DO_NOT_DELETE");
+  });
+
+  it("pins the root parent chain while the same owned root is moved back under a replacement parent", async () => {
+    const outer = tmp(), parent = mkdir(path.join(outer, "parent")), root = mkdir(path.join(parent, "owned")), owner = fs.lstatSync(root);
+    for (let i = 0; i < 500; i++) put(root, `file-${i}`, "synthetic-owned-state"); let remaining = -1;
+    const timer = new Promise<void>(resolve => setImmediate(() => {
+      remaining = fs.readdirSync(root).length; fs.renameSync(parent, parent + "-retained"); mkdir(parent);
+      fs.renameSync(path.join(parent + "-retained", "owned"), root); put(parent, "foreign-sentinel", "DO_NOT_DELETE"); resolve();
+    }));
+    await expect(cleanupOwnedFullProfileDirectory(root, owner)).rejects.toMatchObject({ code: "FULL_PROFILE_RECOVERY_REQUIRED" }); await timer;
+    expect(remaining).toBeGreaterThan(0); expect(fs.readdirSync(root)).toHaveLength(remaining); expect(fs.readFileSync(path.join(parent, "foreign-sentinel"), "utf8")).toBe("DO_NOT_DELETE");
+  });
+
+  it("retains planted hardlinks instead of unlinking a file with more than one owner", async () => {
+    const outer = tmp(), root = mkdir(path.join(outer, "owned")), owner = fs.lstatSync(root), foreign = path.join(outer, "foreign");
+    fs.writeFileSync(foreign, "DO_NOT_UNLINK"); fs.linkSync(foreign, path.join(root, "hardlink"));
+    await expect(cleanupOwnedFullProfileDirectory(root, owner)).rejects.toMatchObject({ code: "FULL_PROFILE_RECOVERY_REQUIRED" });
+    expect(fs.readFileSync(foreign, "utf8")).toBe("DO_NOT_UNLINK"); expect(fs.readFileSync(path.join(root, "hardlink"), "utf8")).toBe("DO_NOT_UNLINK"); expect(fs.statSync(foreign).nlink).toBe(2);
+  });
+});
+
+describe("cooperative artifact payloads and owned source snapshots", () => {
+  it("stages retained website state once without changing the cold source, and binds later capture to that inventory", async () => {
+    const root = tmp(), options = captureOptions(root);
+    put(options.profileDir, "Default/Service Worker/CacheStorage/persistent", "retained-site-response");
+    put(options.profileDir, "Default/Cache/transient", "omitted-transient-only");
+    const before = readAll(options.profileDir), staged = await stageFullProfileCapture(options);
+    expect(fs.readdirSync(options.stagingDir)).toHaveLength(1);
+    expect(fs.readFileSync(path.join(staged.directory, "Default/Service Worker/CacheStorage/persistent"), "utf8")).toBe("retained-site-response");
+    expect(fs.existsSync(path.join(staged.directory, "Default/Cache"))).toBe(false);
+    expect(readAll(options.profileDir)).toEqual(before);
+    put(staged.directory, "Default/Service Worker/CacheStorage/persistent", "changed-after-credential-inspection");
+    await expect(captureStagedFullProfile({ ...options, prepared: staged })).rejects.toThrow(/manifest/);
+    await disposePreparedFullProfileAsync(staged);
+    expect(fs.readdirSync(options.stagingDir)).toEqual([]); expect(readAll(options.profileDir)).toEqual(before);
+  });
+
+  it("preserves the original source double witness while building the one plaintext snapshot", async () => {
+    const root = tmp(), options = captureOptions(root); put(options.profileDir, "safe", "original-source"); let changed = false;
+    await expect(stageFullProfileCapture({ ...options, onProgress(progress) {
+      if (!changed && progress.phase === "verifying-profile") { changed = true; put(options.profileDir, "safe", "mutated-source"); }
+    } })).rejects.toThrow(/source changed/);
+    expect(changed).toBe(true); expect(fs.readdirSync(options.stagingDir)).toEqual([]);
+  });
+
+  it("authenticates all payload hashes and reads a selected capsule without creating another plaintext tree", async () => {
+    const root = tmp(), options = captureOptions(root); put(options.profileDir, "safe", "private-site-data");
+    const capsule = Buffer.from("synthetic-already-encrypted-metadata"), captured = await captureFullProfile({ ...options, extraEntries: [{ path: "environment.bin", data: capsule }] });
+    const result = await verifyFullProfileArtifact({ ...options, ...captured, extraPath: "environment.bin", maxExtraBytes: 1024 });
+    expect(result.extra).toEqual(capsule); expect(result.manifest.files[0].sha256).toBe(digest(Buffer.from("private-site-data")));
+    expect(fs.readdirSync(options.stagingDir)).toEqual([]);
+    const bundle = { root, options, ...captured }, hostile = await repack(bundle, entries => entries.map(entry => entry.name === "profile/safe" ? { name: entry.name, data: Buffer.from("X".repeat("private-site-data".length)) } : entry));
+    await expect(verifyFullProfileArtifact({ ...options, ...hostile, extraPath: "environment.bin", maxExtraBytes: 1024 })).rejects.toThrow(/SHA-256 mismatch/);
+    expect(fs.readdirSync(options.stagingDir)).toEqual([]);
+  });
+
+  it.each(["encrypting", "decrypting"] as const)("admits a real timer cancellation during large %s updates, before plaintext admission", async phase => {
+    const root = tmp(), options = captureOptions(root), controller = new AbortController();
+    put(options.profileDir, "persistent-random-state", randomBytes(12 * 1024 * 1024));
+    const bundle = phase === "decrypting" ? { options, ...await captureFullProfile(options) } : undefined;
+    let scheduled = false, timerRan = false;
+    const onProgress: NonNullable<CaptureFullProfileOptions["onProgress"]> = progress => {
+      if (!scheduled && progress.phase === phase && progress.bytes > 0 && progress.items === 0) {
+        scheduled = true; setImmediate(() => { timerRan = true; controller.abort(); });
+      }
+    };
+    if (phase === "encrypting") await expect(captureFullProfile({ ...options, signal: controller.signal, onProgress })).rejects.toMatchObject({ code: "ABORT_ERR" });
+    else await expect(prepare(bundle!, { signal: controller.signal, onProgress })).rejects.toMatchObject({ code: "ABORT_ERR" });
+    expect(timerRan).toBe(true); expect(fs.readdirSync(options.stagingDir)).toEqual([]);
+  });
+
+  it("cooperatively reseals the same inventory and rejects changes to unapproved website state", async () => {
+    const root = tmp(), options = captureOptions(root); put(options.profileDir, "Default/Preferences", "old"); put(options.profileDir, "Default/Service Worker/CacheStorage/persistent", "site-state");
+    const staged = await stageFullProfileCapture(options); put(staged.directory, "Default/Preferences", "new");
+    const resealed = await resealPreparedFullProfileAsync({ prepared: staged, changedPaths: ["Default/Preferences"], guard });
+    expect(resealed.locallyDerived).toBe(true);
+    put(resealed.directory, "Default/Service Worker/CacheStorage/persistent", "unauthorized-state-change");
+    await expect(resealPreparedFullProfileAsync({ prepared: resealed, changedPaths: ["Default/Preferences"], guard })).rejects.toThrow(/unapproved/i);
+    await disposePreparedFullProfileAsync(resealed); expect(fs.readdirSync(options.stagingDir)).toEqual([]);
+  });
+
+  it("yields during large owned cleanup and refuses to delete a replacement workspace", async () => {
+    const root = tmp(), options = captureOptions(root);
+    for (let i = 0; i < 700; i++) put(options.profileDir, `file-${i}`, "invented-state");
+    const staged = await stageFullProfileCapture(options), workspace = path.dirname(staged.directory), retained = workspace + "-retained";
+    let timerRan = false;
+    const timer = new Promise<void>(resolve => setImmediate(() => {
+      timerRan = true; fs.renameSync(workspace, retained); mkdir(workspace); put(workspace, "foreign-sentinel", "DO_NOT_DELETE"); resolve();
+    }));
+    await expect(disposePreparedFullProfileAsync(staged)).rejects.toThrow(/ownership changed/);
+    await timer;
+    expect(timerRan).toBe(true); expect(fs.readFileSync(path.join(workspace, "foreign-sentinel"), "utf8")).toBe("DO_NOT_DELETE");
+    expect(fs.existsSync(retained)).toBe(true);
   });
 });

@@ -647,11 +647,18 @@ function extensionPublicationFixture(scenario: PublicationScenario) {
     if (scenario !== "complete") fail("unexpected local publication commit")();
     mutate(cfg);
   });
-  const cleanup = vi.fn((target: string, options: any) => {
-    expect(target).toBe(stageRoot); expect(options).toEqual({ recursive: true, force: true });
+  const stageOwner = { dev: 17, ino: 23, isDirectory: () => true, isSymbolicLink: () => false };
+  const cleanupActive: unknown[] = [];
+  const cleanup = vi.fn(async (_target: string, _owner: unknown) => {
+    cleanupActive.push(load("services/sync/operation-state.ts").getSyncOperationState().active);
+    await Promise.resolve();
+    cleanupActive.push(load("services/sync/operation-state.ts").getSyncOperationState().active);
   });
   const modeledFs = unavailable("publication filesystem", {
-    lstatSync: (target: string) => { expect(target).toBe(profileRoot); return { isDirectory: () => true, isSymbolicLink: () => false }; },
+    lstatSync: (target: string) => {
+      expect([profileRoot, stageRoot]).toContain(target);
+      return target === stageRoot ? stageOwner : { isDirectory: () => true, isSymbolicLink: () => false };
+    },
     mkdirSync: (target: string) => { expect(target).toBe(profileRoot); },
     mkdtempSync: (prefix: string) => { expect(prefix).toBe(profileRoot + "/.sync-pull-stage-"); return stageRoot; },
     statSync: (target: string) => { expect(target).toBe(packagePath); return { size: packageBody.length }; },
@@ -660,7 +667,6 @@ function extensionPublicationFixture(scenario: PublicationScenario) {
       if (scenario === "failed-predispatch") throw new Error("Synthetic package read failed before dispatch");
       return Buffer.from(packageBody);
     },
-    rmSync: cleanup,
   });
   const transport = vi.fn(async (raw: string, init: RequestInit) => {
     const url = new URL(raw);
@@ -714,6 +720,7 @@ function extensionPublicationFixture(scenario: PublicationScenario) {
       if (relative === "services/config-manager.ts") return unavailable(relative, {
         getConfig: () => cfg, getSyncConfig: () => sync, getProfilesDir: () => profileRoot,
       });
+      if (relative === "services/sync/full-profile-artifact.ts") return unavailable(relative, { cleanupOwnedFullProfileDirectory: cleanup });
       if (relative === "services/config/store.ts") return { transact };
       if (relative === "services/sync/profile-state.ts") return unavailable(relative, { getProfileSyncTarget: () => "synthetic-target" });
       if (relative === "services/secrets.ts") return { decryptSecretOr: (value: string) => value };
@@ -742,7 +749,12 @@ function extensionPublicationFixture(scenario: PublicationScenario) {
       try { result = await service.push(controller.signal); }
       catch (error: any) { expect(controller.signal.aborted).toBe(true); expect(error.syncResult).toBeDefined(); result = error.syncResult; }
       expect(state.getSyncOperationState()).toMatchObject({ active: null, last: result });
-      expect(cleanup).toHaveBeenCalledExactlyOnceWith(stageRoot, { recursive: true, force: true });
+      expect(cleanup).toHaveBeenCalledExactlyOnceWith(stageRoot, stageOwner);
+      expect(cleanup.mock.calls[0][1]).toBe(stageOwner);
+      // Assert outside cleanup: production may legitimately turn cleanup errors
+      // into warnings, but must not swallow our lease-lifetime evidence.
+      expect(cleanupActive).toHaveLength(2);
+      for (const active of cleanupActive) expect(active).toMatchObject({ operationId: result.operationId });
       expect(timers.size).toBe(0);
       return result;
     },

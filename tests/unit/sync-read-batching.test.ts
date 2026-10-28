@@ -4,6 +4,7 @@ import fsMutable from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { syncBuiltinESMExports } from "node:module";
+import { randomFillSync } from "node:crypto";
 import {
   captureFullProfile, prepareFullProfile, type CaptureFullProfileOptions, type FullProfileProgress,
 } from "../../src/main/services/sync/full-profile-artifact.js";
@@ -45,20 +46,22 @@ afterEach(() => {
   }
   location.root = ""; location.profiles = "";
 });
-interface Frame { bytes: number; reads: number; guards: number; providers: number; }
-function fixture(size = 16 * MIB) {
+interface Frame { bytes: number; reads: number; guards: number; providers: number; artifactReads: number; zipReads: number; }
+function fixture(size = 16 * MIB, incompressible = false) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "sync-read-batching-"));
   fs.chmodSync(root, 0o700); roots.push({ directory: root, stat: fs.lstatSync(root) });
   location.root = root; location.profiles = path.join(root, "profiles");
   const profileDir = path.join(location.profiles, ID), stagingDir = path.join(root, "staging");
   for (const directory of [profileDir, stagingDir]) fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
   const bytes = Buffer.alloc(size, 0x5a), file = path.join(profileDir, "state.bin");
+  if (incompressible) randomFillSync(bytes);
   fs.writeFileSync(file, bytes, { flag: "wx", mode: 0o600 });
   const metadata = path.join(root, "metadata.json"), metadataBytes = Buffer.from('{"syntheticRevision":1}');
   fs.writeFileSync(metadata, metadataBytes, { flag: "wx", mode: 0o600 });
   const state = { running: false, unknown: false, checks: 0, providers: 0, onProvider: () => undefined as void, nonProcess: () => undefined as void };
   let active: Frame | undefined;
   const frames: Frame[] = [], buffers = new Set<Buffer>(), reads: Array<{ file: string; bytes: number }> = [];
+  const producers = new Map<Buffer, { file: string; stack: string; origin: "artifact" | "zip" }>();
   __setProcessDiscoveryExecForTest({ execFileSync: ((command: string) => {
     if (!["ps", "wmic", "tasklist", "powershell.exe"].includes(command)) throw new Error("Unfenced process provider");
     state.providers++; state.onProvider(); if (active) active.providers++;
@@ -78,7 +81,7 @@ function fixture(size = 16 * MIB) {
     }, undefined, { engine: "chromium" });
   }, { runSynchronous<T>(action: () => T): T {
     expect(active).toBeUndefined();
-    const frame = { bytes: 0, reads: 0, guards: 0, providers: 0 }; frames.push(frame); active = frame;
+    const frame = { bytes: 0, reads: 0, guards: 0, providers: 0, artifactReads: 0, zipReads: 0 }; frames.push(frame); active = frame;
     try { return withProfileTransferProcessSnapshot(ID, action); }
     finally { active = undefined; }
   } });
@@ -93,7 +96,16 @@ function fixture(size = 16 * MIB) {
     const count = Reflect.apply(read, fsMutable, args), name = fds.get(args[0]);
     if (active && name && (name.endsWith("/state.bin") || name.endsWith("/profile.zip"))) {
       buffers.add(args[1]);
-      if (count > 0) { active.bytes += count; active.reads++; reads.push({ file: name, bytes: count }); }
+      if (!producers.has(args[1])) {
+        const stack = new Error("Owned read-buffer producer").stack ?? "";
+        const producer = stack.match(/src\/main\/services\/(sync\/full-profile-artifact|zip-writer)\.ts:/)?.[1];
+        expect(producer, stack).toBeDefined();
+        producers.set(args[1], { file: name, stack, origin: producer === "zip-writer" ? "zip" : "artifact" });
+      }
+      if (count > 0) {
+        active.bytes += count; active.reads++; reads.push({ file: name, bytes: count });
+        if (producers.get(args[1])!.origin === "artifact") active.artifactReads++; else active.zipReads++;
+      }
     }
     return count;
   }) as typeof read);
@@ -107,7 +119,11 @@ function fixture(size = 16 * MIB) {
     expect(fs.readFileSync(lease)).toEqual(leaseBytes);
     expect(isRestoreLocked(ID)).toBe(true);
     expect(fds.size).toBe(0);
-    for (const buffer of buffers) expect(buffer.every(byte => byte === 0)).toBe(true);
+    for (const buffer of buffers) {
+      const cleared = buffer.every(byte => byte === 0);
+      const diagnostic = cleared ? undefined : JSON.stringify({ ...producers.get(buffer), length: buffer.length, firstNonzero: buffer.findIndex(byte => byte !== 0), prefixHex: buffer.subarray(0, 24).toString("hex") });
+      expect(cleared, diagnostic).toBe(true);
+    }
   }
   return { root, file, bytes, options, state, frames, reads, buffers, fds, lease, leaseBytes, release, unchanged,
     inFrame: () => active !== undefined };
@@ -115,22 +131,41 @@ function fixture(size = 16 * MIB) {
 
 describe("bounded full-profile synchronous read batches", () => {
   it("amortizes a 16 MiB capture/prepare over batches with real process frames and no weakened per-chunk guards", async () => {
-    const f = fixture(), progress: FullProfileProgress[] = [];
-    const onProgress = (value: FullProfileProgress) => { expect(f.inFrame()).toBe(false); progress.push(value); };
+    // Exercise at least four real archive-read batches even with DEFLATE enabled.
+    const f = fixture(16 * MIB, true), captureProgress: FullProfileProgress[] = [], prepareProgress: FullProfileProgress[] = [];
+    const recordProgress = (progress: FullProfileProgress[]) => (value: FullProfileProgress) => { expect(f.inFrame()).toBe(false); progress.push(value); };
     const started = performance.now();
-    const artifact = await captureFullProfile({ ...f.options, onProgress });
+    const artifact = await captureFullProfile({ ...f.options, onProgress: recordProgress(captureProgress) });
     expect(fs.readdirSync(f.options.stagingDir)).toEqual([]);
     const captureProviders = f.state.providers, captureReads = f.reads.length, captureFrames = f.frames.length;
     expect(captureReads).toBeGreaterThanOrEqual(3 * f.bytes.length / CHUNK);
-    expect(captureProviders).toBeLessThan(captureReads / 4);
-    expect(captureFrames).toBeLessThan(captureReads / 4);
+    // Artifact SHA/raw-archive scans still amortize process admission over bounded
+    // batches. Native codec awaits require independent fresh ZIP frames; counting
+    // those admissions against unrelated source-read totals is not meaningful.
+    const artifactReadFrames = f.frames.filter(frame => frame.artifactReads > 0);
+    const artifactReads = artifactReadFrames.reduce((sum, frame) => sum + frame.artifactReads, 0);
+    const artifactProviders = artifactReadFrames.reduce((sum, frame) => sum + frame.providers, 0);
+    expect(artifactReads).toBeGreaterThanOrEqual(2 * f.bytes.length / CHUNK);
+    expect(artifactProviders).toBeLessThan(artifactReads / 4);
+    expect(artifactReadFrames.length).toBeLessThan(artifactReads / 4);
+    expect(artifactReadFrames.every(frame => frame.zipReads === 0)).toBe(true);
+    const zipReadFrames = f.frames.filter(frame => frame.zipReads > 0);
+    const zipReads = zipReadFrames.reduce((sum, frame) => sum + frame.zipReads, 0);
+    const zipProviders = zipReadFrames.reduce((sum, frame) => sum + frame.providers, 0);
+    expect(zipReads).toBe(captureReads - artifactReads);
+    expect(zipReadFrames.length).toBeGreaterThan(0);
     expect(f.frames.some(frame => frame.reads > 1)).toBe(true);
     expect(f.frames.every(frame => frame.providers <= 1)).toBe(true);
     expect(f.frames.every(frame => frame.bytes <= BATCH)).toBe(true);
     expect(f.state.checks).toBeGreaterThan(captureReads);
-    const prepared = await prepareFullProfile({ ...f.options, ...artifact, onProgress });
+    const prepared = await prepareFullProfile({ ...f.options, ...artifact, onProgress: recordProgress(prepareProgress) });
     expect(fs.readFileSync(path.join(prepared.directory, "state.bin")).equals(f.bytes)).toBe(true);
-    for (const phase of ["scanning", "reading-archive", "verifying-source", "verifying-profile"] as const) {
+    // Each operation owns its progress counters; capture and prepare both have
+    // a reading-archive phase and must not be concatenated into a fake reset.
+    for (const [progress, phases] of [
+      [captureProgress, ["scanning", "reading-archive", "verifying-source"]],
+      [prepareProgress, ["reading-archive", "verifying-profile"]],
+    ] as const) for (const phase of phases) {
       const updates = progress.filter(value => value.phase === phase);
       expect(updates.length).toBeGreaterThanOrEqual(4);
       expect(updates.at(-1)!.bytes).toBeGreaterThanOrEqual(f.bytes.length);
@@ -142,7 +177,7 @@ describe("bounded full-profile synchronous read batches", () => {
       if (phase !== "reading-archive") expect(updates.at(-1)!.items).toBe(1);
     }
     f.unchanged();
-    console.info("synthetic 16MiB capture batching", { captureProviders, captureReads, captureFrames, captureAndPrepareMs: Math.round(performance.now() - started) });
+    console.info("synthetic 16MiB capture batching", { captureProviders, captureReads, captureFrames, artifactReads, artifactProviders, artifactReadFrames: artifactReadFrames.length, zipReads, zipProviders, zipReadFrames: zipReadFrames.length, captureAndPrepareMs: Math.round(performance.now() - started) });
   });
 
   it("keeps uneven file tails within the hard byte cap", async () => {

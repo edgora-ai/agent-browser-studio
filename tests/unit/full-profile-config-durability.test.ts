@@ -10,10 +10,10 @@ import { syncArchiveDirectory } from "../../src/main/services/zip-writer.js";
 // Only the Windows file-flush access rule and explicit failure are injected;
 // directory durability remains a separate gate, never a fabricated success.
 const text = fs.readFileSync(new URL("../../src/main/services/sync-service.ts", import.meta.url), "utf8");
-const start = text.indexOf("function confirmFullProfileConfigCommitted(): void {");
-const end = text.indexOf("\nfunction cleanupFullProfileStage", start);
-if (start < 0 || end < start) throw new Error("Complete-config durability function not found");
-const code = ts.transpileModule(text.slice(start, end), { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;
+const source = ts.createSourceFile("sync-service.ts", text, ts.ScriptTarget.ES2022, true, ts.ScriptKind.TS);
+const confirmation = source.statements.find(statement => ts.isFunctionDeclaration(statement) && statement.name?.text === "confirmFullProfileConfigCommitted");
+if (!confirmation) throw new Error("Complete-config durability function not found");
+const code = ts.transpileModule(confirmation.getText(source), { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;
 let root: string, file: string;
 const config = { version: 1, fixture: "owned-full-config-readback" };
 const descriptors = new Map<number, number | string>();

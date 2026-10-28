@@ -97,13 +97,13 @@ function harness(locale?: "en-US" | "zh-CN") {
     removeListener: vi.fn((channel: string) => listeners.delete(channel)),
     sync: {
       status: vi.fn(async (): Promise<any> => JSON.parse(JSON.stringify(currentStatus))),
-      preview: vi.fn(async (): Promise<any> => JSON.parse(JSON.stringify(currentPreview))),
-      previewDiff: vi.fn(async (): Promise<any> => comparison()),
+      preview: vi.fn(async (_opts?: { requestId?: string }): Promise<any> => JSON.parse(JSON.stringify(currentPreview))),
+      previewDiff: vi.fn(async (_opts?: { requestId?: string }): Promise<any> => comparison()),
       push: vi.fn(async (_opts?: any): Promise<any> => result({ operationId: "manual-push", remoteCommit: "committed" })),
       pull: vi.fn(async (_opts?: any): Promise<any> => result()),
       configure: vi.fn(async (_config: any): Promise<any> => result({ operationId: "manual-configure" })),
       cancel: vi.fn(async (opts: any): Promise<any> => ({ success: true, requestId: opts.requestId, state: "cancelling" })),
-      historyState: vi.fn(async (_dirId: string): Promise<any> => ({ scope: "history-and-firefox-bookmarks", status: "unknown", coverage: "legacy", freshness: "not-covered", capturedAt: null })),
+      historyState: vi.fn(async (_dirId: string, _opts?: { requestId?: string }): Promise<any> => ({ scope: "history-and-firefox-bookmarks", status: "unknown", coverage: "legacy", freshness: "not-covered", capturedAt: null })),
     },
     app: { reloadConfig: vi.fn(async () => { throw new Error("renderer must not reload the live config store"); }), setLanguage: vi.fn(async () => {}) },
     team: { status: vi.fn(async () => ({ team: null, local: { role: "owner" } })) },
@@ -644,6 +644,7 @@ describe("sync mutation events, cache invalidation and request epochs", () => {
     const h = harness(), status = deferred<any>(), preview = deferred<any>(), diff = deferred<any>();
     h.api.sync.status.mockReturnValueOnce(status.promise); h.api.sync.preview.mockReturnValueOnce(preview.promise); h.api.sync.previewDiff.mockReturnValueOnce(diff.promise);
     const a = h.ab.loadSyncConfig(), b = h.ab.loadSyncPreview(), c = h.ab.loadSyncDiff();
+    await flush(); // Let the actual old backend reads start before the mutation.
     h.emit(event("started", 3)); h.emit(event("completed", 4)); await flush();
     status.resolve({ ...h.status(), endpoint: "https://obsolete.example.test", operation: { generation: 0, active: null, last: null } });
     preview.resolve({ configured: true, message: "obsolete preview", runningProfiles: [] }); diff.resolve(comparison(TOKEN_A, "obsolete-profile"));
@@ -1059,7 +1060,8 @@ describe("truthful Compare scope and effective mirrored translations", () => {
   });
 
   const keys = [
-    ...["checking", "in-progress", "waiting-result", "refreshing", "push", "pull", "configure"].map((suffix) => `sync.operation.${suffix}`),
+    ...["cancelling", "read", "read-pending", "read-finished", "preflight-finished", "compare-finished"].map((suffix) => `sync.cancel.${suffix}`),
+    ...["read", "checking", "in-progress", "waiting-result", "refreshing", "push", "pull", "configure"].map((suffix) => `sync.operation.${suffix}`),
     ...["preparing", "publishing", "downloading", "verifying", "applying", "finalizing"].map((suffix) => `sync.progress.stage.${suffix}`),
     ...["items", "items-completed", "items-total", "current-item", "current-upload", "current-download", "indeterminate", "rate", "rate-unknown", "transferring", "waiting-response", "object-complete", "elapsed"].map((suffix) => `sync.progress.${suffix}`),
     "sync.full-profile.size-limit",
@@ -1104,14 +1106,20 @@ describe("safe user-owned renderer sync cancellation", () => {
     const requestId = h.api.sync[kind].mock.calls[0][0].requestId;
     return { h, settle, pending, requestId };
   }
-  it.each(["push", "pull"] as const)("%s cancel is available during preflight, abandons hung reads and never dispatches their later replies", async kind => {
+  it.each(["push", "pull"] as const)("%s cancel owns its preflight read and stays busy until the actual read settles, without dispatching its late reply", async kind => {
     const h = harness(), preview = deferred<any>(); if (kind === "pull") await h.ab.loadSyncDiff();
     h.api.sync.preview.mockReturnValueOnce(preview.promise);
-    const pending = h.ab[kind === "push" ? "syncPush" : "syncPull"](); await flush();
-    expect(cancel(h)?.disabled).toBe(false); cancel(h)!.emit("click");
-    await pending; await flush(); expect(h.api.sync[kind]).not.toHaveBeenCalled(); expect(h.api.sync.cancel).not.toHaveBeenCalled();
-    expect(h.buttons.syncPush.disabled).toBe(false); expect(cancel(h)).toBeUndefined();
-    preview.resolve({ configured: true, runningProfiles: [], message: "obsolete cancelled preflight" }); await flush();
+    let settled = false;
+    const pending = h.ab[kind === "push" ? "syncPush" : "syncPull"]().then(() => { settled = true; }); await flush();
+    const requestId = h.api.sync.preview.mock.calls.at(-1)![0]!.requestId;
+    expect(requestId).toMatch(/^[a-zA-Z0-9_-]{16,128}$/);
+    expect(cancel(h)?.disabled).toBe(false); cancel(h)!.emit("click"); await flush();
+    expect(h.api.sync.cancel).toHaveBeenCalledExactlyOnceWith({ requestId });
+    expect(settled).toBe(false); expect(h.api.sync[kind]).not.toHaveBeenCalled();
+    expect(h.buttons.syncPush.disabled).toBe(true); expect(cancel(h)?.disabled).toBe(true);
+    expect(h.renderedResult()).toBe(""); // An ACK is neither cleanup nor a commit receipt.
+    preview.resolve({ configured: true, runningProfiles: [], message: "obsolete cancelled preflight" }); await pending; await flush();
+    expect(settled).toBe(true); expect(h.buttons.syncPush.disabled).toBe(false); expect(cancel(h)).toBeUndefined();
     expect(h.api.sync[kind]).not.toHaveBeenCalled(); expect(h.elements["sync-preview-message"].textContent).not.toContain("obsolete cancelled preflight");
   });
   it("cancel during a confirmation prevents a later accepted dialog from dispatching", async () => {
@@ -1246,12 +1254,20 @@ describe("safe user-owned renderer sync cancellation", () => {
     h.emit(event("completed", 2, "push", "owned-operation")); settle.resolve(result()); await pending;
   });
 
-  it("a foreign start during preflight invalidates dispatch without exposing foreign cancellation", async () => {
+  it("a foreign start during preflight cancels only the owned read and invalidates dispatch without exposing foreign cancellation", async () => {
     const h = harness(), preview = deferred<any>(); h.api.sync.preview.mockReturnValueOnce(preview.promise);
-    const pending = h.ab.syncPush(); await flush(); h.emit(event("started", 1, "push", "foreign-preflight")); await flush();
-    preview.resolve({ configured: true, runningProfiles: [] }); await pending;
+    let settled = false;
+    const pending = h.ab.syncPush().then(() => { settled = true; }); await flush();
+    const requestId = h.api.sync.preview.mock.calls.at(-1)![0]!.requestId;
+    h.emit(event("started", 1, "push", "foreign-preflight")); await flush();
+    expect(h.api.sync.cancel).toHaveBeenCalledExactlyOnceWith({ requestId });
+    expect(h.api.sync.cancel.mock.calls[0][0]).not.toHaveProperty("operationId");
+    expect(settled).toBe(false); expect(cancel(h)).toBeUndefined(); expect(h.buttons.syncPush.disabled).toBe(true);
+    preview.resolve({ configured: true, runningProfiles: [], message: "obsolete foreign-start preview" }); await pending;
     expect(h.api.sync.push).not.toHaveBeenCalled(); expect(cancel(h)).toBeUndefined(); expect(h.buttons.syncPush.disabled).toBe(true);
-    expect(h.api.sync.cancel).not.toHaveBeenCalled(); h.emit(event("completed", 2, "push", "foreign-preflight")); await flush();
+    expect(h.elements["sync-preview-message"].textContent).not.toContain("obsolete foreign-start preview");
+    h.emit(event("completed", 2, "push", "foreign-preflight")); await flush();
+    expect(h.buttons.syncPush.disabled).toBe(false);
   });
 
 });

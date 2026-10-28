@@ -8,16 +8,25 @@ import type { SyncResult, SyncConfig, SyncComparisonToken } from "../types.js";
 let unsubscribeSyncEvents: (() => void) | undefined;
 
 // Cancellation is an invocation capability, never a lookup of the globally
-// active lease. REST, automation and other renderers cannot be cancelled here.
-// Weak keys keep replay protection for the sender lifetime without retaining a
-// closed WebContents. Do not auto-abort on navigation/destruction.
+// active lease. Read requests do not acquire or identify a write lease. REST,
+// automation and other renderers cannot be cancelled here. Weak keys keep replay
+// protection for the sender lifetime without retaining a closed WebContents.
+// Do not auto-abort on navigation/destruction.
+type OwnedSyncRequestKind = "push" | "pull" | "preview" | "preview-diff" | "history-state";
 interface OwnedSyncRequest {
   controller: AbortController;
   sender: WebContents;
   frame: IpcMainInvokeEvent["senderFrame"];
   requestId: string;
-  kind: "push" | "pull";
+  kind: OwnedSyncRequestKind;
   operationId?: string;
+}
+interface SyncRequestFailure {
+  success: false;
+  code: string;
+  message: string;
+  ok?: false;
+  cancelled?: true;
 }
 const senderRequests = new WeakMap<WebContents, { used: Set<string>; active: Map<string, OwnedSyncRequest> }>();
 const operationRequests = new Map<string, OwnedSyncRequest>();
@@ -35,23 +44,49 @@ function ownedRequestId(operationId: unknown, sender: WebContents, frame: IpcMai
 function validRequestId(value: unknown): value is string {
   return typeof value === "string" && /^[a-zA-Z0-9_-]{16,128}$/.test(value);
 }
-async function runOwnedSync(event: IpcMainInvokeEvent, requestId: unknown, kind: "push" | "pull", invoke: (signal?: AbortSignal) => Promise<SyncResult>): Promise<SyncResult> {
-  // Older callers retain their API, but cannot acquire a cancellation capability.
-  if (requestId === undefined) return invoke();
+function acquireOwnedRequest(event: IpcMainInvokeEvent, requestId: unknown, kind: OwnedSyncRequestKind): { owner: OwnedSyncRequest } | { failure: SyncRequestFailure } {
   const frame = event.senderFrame;
-  if (!validRequestId(requestId) || !attachedSenderFrame(event.sender, frame)) return { success: false, code: "INVALID_SYNC_REQUEST", message: "A valid synchronization request ID and attached sender frame are required" };
+  if (!validRequestId(requestId) || !attachedSenderFrame(event.sender, frame)) return { failure: { success: false, code: "INVALID_SYNC_REQUEST", message: "A valid synchronization request ID and attached sender frame are required" } };
   let requests = senderRequests.get(event.sender);
   if (!requests) {
     requests = { used: new Set(), active: new Map() };
     senderRequests.set(event.sender, requests);
   }
-  if (requests.used.has(requestId)) return { success: false, code: "SYNC_REQUEST_REUSED", message: "Synchronization request IDs cannot be reused" };
+  if (requests.used.has(requestId)) return { failure: { success: false, code: "SYNC_REQUEST_REUSED", message: "Synchronization request IDs cannot be reused" } };
   // Fail closed rather than evict replay protection in an unusually long session.
-  if (requests.used.size >= 10000) return { success: false, code: "SYNC_REQUEST_LIMIT", message: "Reopen this window before starting more synchronization requests" };
+  if (requests.used.size >= 10000) return { failure: { success: false, code: "SYNC_REQUEST_LIMIT", message: "Reopen this window before starting more synchronization requests" } };
   requests.used.add(requestId);
-  const controller = new AbortController();
-  const owner: OwnedSyncRequest = { controller, sender: event.sender, frame, requestId, kind };
+  const owner: OwnedSyncRequest = { controller: new AbortController(), sender: event.sender, frame, requestId, kind };
   requests.active.set(requestId, owner);
+  return { owner };
+}
+function releaseOwnedRequest(owner: OwnedSyncRequest): void {
+  senderRequests.get(owner.sender)?.active.delete(owner.requestId);
+  if (owner.operationId && operationRequests.get(owner.operationId) === owner) operationRequests.delete(owner.operationId);
+}
+async function runOwnedRead<T>(event: IpcMainInvokeEvent, requestId: unknown, kind: "preview" | "preview-diff" | "history-state", invoke: (signal?: AbortSignal) => T | Promise<T>): Promise<T | SyncRequestFailure> {
+  // Legacy callers remain read-compatible but have no cancellation capability.
+  if (requestId === undefined) return invoke();
+  const acquired = acquireOwnedRequest(event, requestId, kind);
+  if ("failure" in acquired) return { ...acquired.failure, ok: false };
+  const { owner } = acquired;
+  const cancelled = (): SyncRequestFailure => ({ success: false, ok: false, code: "SYNC_READ_CANCELLED", cancelled: true, message: "The synchronization read has stopped after cancellation was requested" });
+  try {
+    // Never race/abandon this promise: History may still own a restore lock or
+    // staging files. ACK only signals intent; ownership ends at real settlement.
+    const result = await invoke(owner.controller.signal);
+    return owner.controller.signal.aborted ? cancelled() : result;
+  } catch (error) {
+    if (owner.controller.signal.aborted) return cancelled();
+    throw error;
+  } finally { releaseOwnedRequest(owner); }
+}
+async function runOwnedSync(event: IpcMainInvokeEvent, requestId: unknown, kind: "push" | "pull", invoke: (signal?: AbortSignal) => Promise<SyncResult>): Promise<SyncResult> {
+  // Older callers retain their API, but cannot acquire a cancellation capability.
+  if (requestId === undefined) return invoke();
+  const acquired = acquireOwnedRequest(event, requestId, kind);
+  if ("failure" in acquired) return acquired.failure;
+  const { owner } = acquired;
   try {
     // Current service paths acquire their lease synchronously, before any await.
     // Correlate only the actual start emitted on this invocation's call stack;
@@ -59,7 +94,7 @@ async function runOwnedSync(event: IpcMainInvokeEvent, requestId: unknown, kind:
     const previous = invokingRequest;
     let pending: Promise<SyncResult>;
     invokingRequest = owner;
-    try { pending = invoke(controller.signal); }
+    try { pending = invoke(owner.controller.signal); }
     finally { invokingRequest = previous; }
     return await pending;
   } catch (error: any) {
@@ -68,10 +103,7 @@ async function runOwnedSync(event: IpcMainInvokeEvent, requestId: unknown, kind:
     // commits; an abort acknowledgement is NOT a cancellation result.
     if (error?.syncResult && typeof error.syncResult.success === "boolean") return error.syncResult;
     throw error;
-  } finally {
-    requests.active.delete(requestId);
-    if (owner.operationId) operationRequests.delete(owner.operationId);
-  }
+  } finally { releaseOwnedRequest(owner); }
 }
 
 export function registerSyncHandlers(): void {
@@ -128,9 +160,12 @@ export function registerSyncHandlers(): void {
     const requestId = ownedRequestId(active?.operationId, event.sender, event.senderFrame);
     return requestId && active ? { ...status, operation: { ...status.operation, active: { ...active, requestId } } } : status;
   });
-  ipcMain.handle("sync:history-state", async (_event, dirId: string) => syncService.historyState(dirId));
-  ipcMain.handle("sync:preview", async () => syncService.preview());
-  ipcMain.handle("sync:preview-diff", async () => syncService.previewDiff());
+  ipcMain.handle("sync:history-state", async (event, dirId: string, opts?: { requestId?: string }) =>
+    runOwnedRead(event, opts?.requestId, "history-state", (signal) => syncService.historyState(dirId, signal)));
+  ipcMain.handle("sync:preview", async (event, opts?: { requestId?: string }) =>
+    runOwnedRead(event, opts?.requestId, "preview", (signal) => syncService.previewAsync(signal)));
+  ipcMain.handle("sync:preview-diff", async (event, opts?: { requestId?: string }) =>
+    runOwnedRead(event, opts?.requestId, "preview-diff", (signal) => syncService.previewDiff(signal)));
 
   ipcMain.handle("sync:configure", async (_event, config: Partial<SyncConfig> & { custodyConsent?: boolean; historyConsent?: boolean; fullProfileConsent?: boolean }): Promise<{ success: boolean; error?: string; code?: string }> => {
     const gate = requireSettingsMutation();

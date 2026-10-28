@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as fs from "node:fs";
+import fsMutable from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { createHash, randomBytes } from "node:crypto";
@@ -97,8 +98,9 @@ afterEach(() => { vi.restoreAllMocks(); syncBuiltinESMExports(); for (const root
 
 describe("full-profile transfer coordinator with real native credential conversion", () => {
   it.each([
-    { phase: "sealing", metadataCall: 3, fault: "cancel" }, { phase: "sealing", metadataCall: 3, fault: "guard" },
-    { phase: "opening", metadataCall: 6, fault: "cancel" }, { phase: "opening", metadataCall: 6, fault: "guard" },
+    // Source staging no longer performs a throwaway outer encrypt/decrypt pair.
+    { phase: "sealing", metadataCall: 1, fault: "cancel" }, { phase: "sealing", metadataCall: 1, fault: "guard" },
+    { phase: "opening", metadataCall: 4, fault: "cancel" }, { phase: "opening", metadataCall: 4, fault: "guard" },
   ])("uses asynchronous metadata KDF and rejects $fault after $phase without masking guards or retaining key bytes", async ({ metadataCall, fault }) => {
     const f = fixture(); put(f.source, "Default/Preferences", Buffer.from("synthetic-source-preferences"));
     const before = tree(f.source), controller = new AbortController();
@@ -127,7 +129,22 @@ describe("full-profile transfer coordinator with real native credential conversi
     expect(timerRan).toBe(true); expect(calls).toBe(metadataCall); expect(syncKdf).not.toHaveBeenCalled();
     expect(Buffer.isBuffer(input)).toBe(true); expect(input!.every(byte => byte === 0)).toBe(true);
     expect(Buffer.isBuffer(derived)).toBe(true); expect(derived!.every(byte => byte === 0)).toBe(true);
-    assertTree(f.source, before);
+    assertTree(f.source, before); expect(fs.readdirSync(f.stage)).toEqual([]);
+  });
+
+  it("uses one owned source stage, one final outer seal and authenticated no-tree readback, then fully disposes the stage", async () => {
+    const f = fixture(); await seed(f.source); const original = tree(f.source), realScrypt = cryptoMutable.scrypt;
+    let kdfCalls = 0, sawSourceStage = false, sawSecondPlaintextTree = false;
+    vi.spyOn(cryptoMutable, "scrypt").mockImplementation(((...args: Parameters<typeof cryptoMutable.scrypt>) => {
+      kdfCalls++; return (realScrypt as (...values: unknown[]) => unknown)(...args);
+    }) as typeof cryptoMutable.scrypt);
+    syncBuiltinESMExports();
+    await captureFullProfileTransfer({ ...f.options, profileDir: f.source, sourcePlatform: "darwin", environment: { profileHash: PROFILE_HASH }, onProgress() {
+      const stages = fs.readdirSync(f.stage); sawSourceStage ||= stages.some(name => name.startsWith("full-profile-source-"));
+      sawSecondPlaintextTree ||= stages.some(name => name.startsWith("full-profile-prepare-"));
+    } });
+    expect(kdfCalls).toBe(4); expect(sawSourceStage).toBe(true); expect(sawSecondPlaintextTree).toBe(false);
+    expect(fs.readdirSync(f.stage)).toEqual([]); assertTree(f.source, original);
   });
 
   it.each([false, true])("captures encrypted Mac profile and restores searchable Linux native DBs, original WAL=%s", async wal => {
@@ -184,6 +201,118 @@ describe("full-profile transfer coordinator with real native credential conversi
 
 function tlv(tag: number, data: Buffer): Buffer { if (data.length >= 128) throw new Error("Synthetic DER length"); return Buffer.concat([Buffer.from([tag, data.length]), data]); }
 function sdr(id: Buffer): string { return tlv(48, Buffer.concat([tlv(4, id), tlv(48, Buffer.concat([tlv(6, Buffer.from("2a864886f70d0307", "hex")), tlv(4, randomBytes(8))])), tlv(4, randomBytes(16))])).toString("base64"); }
+/** Fixture-only mutations must remain under this test's owned temporary root. */
+function ownedMutationPath(root: string, file: string): string {
+  const resolved = path.resolve(file);
+  expect(resolved.startsWith(path.resolve(root) + path.sep)).toBe(true);
+  expect(fs.lstatSync(root).isDirectory()).toBe(true);
+  expect(fs.lstatSync(root).isSymbolicLink()).toBe(false);
+  expect(fs.realpathSync(path.dirname(resolved)).startsWith(path.resolve(root) + path.sep) || fs.realpathSync(path.dirname(resolved)) === path.resolve(root)).toBe(true);
+  return resolved;
+}
+
+describe("credential publication and reseal await-boundary custody", () => {
+  it.each(["later-copy", "reseal-extras"] as const)("rejects an earlier verified converted database changed during %s, rather than blessing new bytes", async phase => {
+    const f = fixture(); await seed(f.source);
+    // A later native database really crosses the coordinator's 4 MiB copy turn.
+    if (phase === "later-copy") {
+      const db = new DatabaseSync(path.join(f.source, "Default/Login Data For Account"));
+      const codec = createBasicChromiumAdapter(identityForManagedProfile("chromium", "darwin", ID)), clear = Buffer.alloc(512 * 1024, 0x70);
+      try {
+        const encrypted = await codec.encrypt(clear, ctx("darwin", "Default/Login Data For Account"));
+        const insert = db.prepare("INSERT INTO logins VALUES(?,?,?,?,X'')");
+        for (let row = 2; row < 14; row++) insert.run(row, `https://full-transfer.synthetic.invalid/large-${row}`, "owned-large-row", encrypted);
+      } finally { clear.fill(0); codec.dispose?.(); db.close(); }
+    }
+    const original = tree(f.source), captured = await capture(f), bodyHash = sha(captured.body);
+    fs.mkdirSync(f.target, { mode: 0o700 }); put(f.target, "receiver-only", Buffer.from("existing-owned-receiver")); const oldReceiver = tree(f.target);
+    const rename = fsMutable.renameSync, open = fsMutable.openSync, published: string[] = [];
+    let scheduled = false, mutated = false, publishedWhenChanged = 0;
+    const tamper = () => {
+      publishedWhenChanged = published.length;
+      const target = ownedMutationPath(f.root, published[0]);
+      const bytes = fs.readFileSync(target); bytes[0] ^= 1;
+      fs.writeFileSync(target, bytes); mutated = true; // Same size: only exact SHA binding can reject this new output.
+    };
+    vi.spyOn(fsMutable, "renameSync").mockImplementation((from, to) => {
+      const result = rename(from, to);
+      if (path.basename(String(from)).startsWith(".credential-publish-")) published.push(String(to));
+      return result;
+    });
+    vi.spyOn(fsMutable, "openSync").mockImplementation((file, flags, mode) => {
+      const fd = open(file, flags, mode), name = String(file);
+      if (phase === "later-copy" && !scheduled && published.length === 1 && name.includes(".credentials-converted-") && name.endsWith(path.join("Default", "Login Data For Account"))) {
+        scheduled = true; setImmediate(tamper);
+      }
+      return fd;
+    });
+    syncBuiltinESMExports();
+    await rejects(prepareFullProfileTransfer({ ...f.options, ...captured, receiverPlatform: "linux", profileHash: PROFILE_HASH,
+      onProgress(progress) {
+        if (phase === "reseal-extras" && !scheduled && published.length >= 2 && progress.phase === "verifying-extras") {
+          // The extras drain resolves before its caller resumes the profile scan.
+          scheduled = true; queueMicrotask(tamper);
+        }
+      },
+    }), /FULL_PROFILE_/);
+    expect(scheduled).toBe(true); expect(mutated).toBe(true); expect(published.length).toBeGreaterThanOrEqual(2);
+    expect(publishedWhenChanged).toBe(phase === "later-copy" ? 1 : 3);
+    expect(sha(captured.body)).toBe(bodyHash); assertTree(f.source, original); assertTree(f.target, oldReceiver);
+  });
+
+  it.each(["file", "root-symlink", "parent-symlink"] as const)("does not unlink a sidecar after a guard-queued %s substitution in the digest caller-resume gap", async fault => {
+    const f = fixture(); await seed(f.source, true); const original = tree(f.source), captured = await capture(f);
+    fs.mkdirSync(f.target, { mode: 0o700 }); put(f.target, "receiver-only", Buffer.from("existing-owned-receiver")); const oldReceiver = tree(f.target);
+    const open = fsMutable.openSync, read = fsMutable.readSync, close = fsMutable.closeSync, rename = fsMutable.renameSync, unlink = fsMutable.unlinkSync;
+    let published = 0, sidecar = "", sidecarFd = -1;
+    let readSidecar = false, scheduled = false, mutated = false, closedBeforeMutation = false, digestClosed = false;
+    const unlinked: string[] = [];
+    vi.spyOn(fsMutable, "renameSync").mockImplementation((from, to) => {
+      const result = rename(from, to); if (path.basename(String(from)).startsWith(".credential-publish-")) published++; return result;
+    });
+    vi.spyOn(fsMutable, "openSync").mockImplementation((file, flags, mode) => {
+      const fd = open(file, flags, mode), name = String(file);
+      if (!sidecar && published === 3 && name.endsWith(path.join("Default", "Login Data-wal")) && !name.includes(".credentials-")) { sidecar = name; sidecarFd = fd; }
+      return fd;
+    });
+    vi.spyOn(fsMutable, "readSync").mockImplementation(((...args: Parameters<typeof read>) => {
+      const count = Reflect.apply(read, fsMutable, args); if (args[0] === sidecarFd && count > 0) readSidecar = true; return count;
+    }) as typeof read);
+    vi.spyOn(fsMutable, "closeSync").mockImplementation(fd => {
+      close(fd); if (fd === sidecarFd) digestClosed = true;
+    });
+    vi.spyOn(fsMutable, "unlinkSync").mockImplementation(file => { unlinked.push(String(file)); return unlink(file); });
+    syncBuiltinESMExports();
+    const guard = () => {
+      // Schedule from the digest's FINAL guard (not its nested chunk guard).
+      // Its final fstat/lstat and fd close still see the original file. The
+      // microtask runs before applyCredentialChanges resumes from its await.
+      if (!scheduled && readSidecar && /\bat digestCredentialFile\b/.test(new Error().stack?.split("\n")[3] ?? "")) {
+        scheduled = true;
+        queueMicrotask(() => {
+          closedBeforeMutation = digestClosed;
+          const file = ownedMutationPath(f.root, sidecar);
+          if (fault === "file") {
+            const substitute = ownedMutationPath(f.root, path.join(path.dirname(file), "synthetic-substitute-wal"));
+            fs.writeFileSync(substitute, Buffer.from("synthetic-sidecar-substitute"), { flag: "wx", mode: 0o600 });
+            rename(substitute, file);
+          } else {
+            const parent = fault === "root-symlink" ? path.dirname(path.dirname(file)) : path.dirname(file);
+            const displaced = ownedMutationPath(f.root, path.join(f.root, "displaced-owned-credential-directory"));
+            ownedMutationPath(f.root, parent); rename(parent, displaced); fs.symlinkSync(displaced, parent, "dir");
+          }
+          mutated = true;
+        });
+      }
+    };
+    await rejects(prepareFullProfileTransfer({ ...f.options, ...captured, guard, receiverPlatform: "linux", profileHash: PROFILE_HASH }), /FULL_PROFILE_|STAGING_/);
+    expect(scheduled).toBe(true); expect(mutated).toBe(true); expect(closedBeforeMutation).toBe(true);
+    expect(unlinked).not.toContain(sidecar); expect(fs.existsSync(sidecar)).toBe(true);
+    if (fault === "file") expect(fs.readFileSync(sidecar).equals(Buffer.from("synthetic-sidecar-substitute"))).toBe(true);
+    assertTree(f.source, original); assertTree(f.target, oldReceiver);
+  });
+});
+
 describe("full-profile Firefox paired-file custody", () => {
   it("transports the authenticated original NSS pair without claiming Primary Password/hardware unlock", async () => {
     const f = fixture(), id = randomBytes(16), db = new DatabaseSync(path.join(f.source, "key4.db"));

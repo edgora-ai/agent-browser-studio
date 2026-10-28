@@ -25,12 +25,13 @@ function nextTurn(operation: () => void): void {
   const turn = setImmediate(() => { turns.delete(turn); operation(); });
   turns.add(turn);
 }
-function fixture(size = 2 * BATCH + 17) {
+function fixture(size = 2 * BATCH + 17, incompressible = false) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "full-profile-responsiveness-"));
   fs.chmodSync(directory, 0o700); roots.push({ directory, owner: fs.lstatSync(directory) });
   const profileDir = path.join(directory, "source"), stagingDir = path.join(directory, "staging");
   for (const item of [profileDir, stagingDir]) fs.mkdirSync(item, { mode: 0o700 });
   const bytes = Buffer.alloc(size, 0x5a);
+  if (incompressible) crypto.randomFillSync(bytes);
   if (size > 4 * CHUNK) bytes.write("task113-owned-marker=searchable-byte-readback", 3 * CHUNK);
   const file = path.join(profileDir, "state.bin");
   fs.writeFileSync(file, bytes, { mode: 0o600 });
@@ -199,7 +200,9 @@ describe("cooperative full-profile artifact traversal", () => {
   });
 
   it("cancels owned ZIP readback after one bounded batch and cleans only its workspace", async () => {
-    const f = fixture(), controller = new AbortController();
+    // DEFLATE legitimately shrinks repeated 0x5a bytes below one 64KiB read.
+    // Keep the hard batch/timer assertion on a genuinely multi-batch archive.
+    const f = fixture(2 * BATCH + 17, true), controller = new AbortController();
     const callerFile = path.join(f.options.stagingDir, "caller-owned.txt");
     fs.writeFileSync(callerFile, "not the artifact workspace", { flag: "wx", mode: 0o600 });
     const cancel = vi.fn(() => controller.abort());

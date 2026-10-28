@@ -22,8 +22,11 @@
   var serverOperationId = null;
   var activeOperation = null;
   var localOperation = null;
+  var readOperation = null;
   var cancelControl = null;
   var requestSequence = 0;
+  var activeReads = [];
+  var lastCheckNotice = '';
   // The sequence also separates retries in the same millisecond. The IPC layer
   // rejects any replay for this sender, independently of service operation IDs.
   var requestSession = window.crypto && typeof window.crypto.randomUUID === 'function' ? window.crypto.randomUUID() : Date.now().toString(36) + '-' + Math.random().toString(36).slice(2);
@@ -71,6 +74,7 @@
   }
 
   function operationKind(kind) {
+    if (kind === 'read') return t('sync.operation.read', 'Synchronization checks');
     return kind === 'push' ? t('sync.operation.push', 'Push') : kind === 'pull' ? t('sync.operation.pull', 'Pull') : t('sync.operation.configure', 'Save sync configuration');
   }
 
@@ -125,16 +129,18 @@
   function renderOperationProgress() {
     var panel = syncPanel('sync-operation-state');
     if (!panel) return;
-    var operation = activeOperation || localOperation;
+    var operation = localOperation || readOperation || activeOperation;
     panel.className = operation ? 'health-text-watch sync-operation-state' : '';
-    if (!operation) { panel.textContent = ''; return; }
-    var progress = activeOperation && activeOperation.progress;
-    var stage = activeOperation && Object.prototype.hasOwnProperty.call(PROGRESS_STAGES, activeOperation.stage) && PROGRESS_STAGES[activeOperation.stage];
-    var message = localOperation && localOperation.cancelRequested ? t('sync.cancel.cancelling', 'Cancelling… Waiting for transfers and rollback to settle safely.')
+    if (!operation) { panel.textContent = lastCheckNotice; return; }
+    var progress = activeOperation && !operation.readOnly && activeOperation.progress;
+    var stage = activeOperation && !operation.readOnly && Object.prototype.hasOwnProperty.call(PROGRESS_STAGES, activeOperation.stage) && PROGRESS_STAGES[activeOperation.stage];
+    var message = operation.cancelRequested ? (operation.awaitingReply
+      ? t('sync.cancel.cancelling', 'Cancelling… Waiting for the current step to settle safely. Published or applied items may remain; wait for the final receipt.')
+      : t('sync.cancel.read-pending', 'Cancellation requested — waiting for the active check to stop and release its resources. Sync has not started from this request.'))
       : stage ? t('sync.progress.stage.' + activeOperation.stage, stage)
       : !activeOperation && localOperation && localOperation.serviceCompleted
         ? t('sync.operation.waiting-result', 'Waiting for the operation result; it has not been cancelled.')
-        : localOperation && localOperation.stage === 'checking' && !activeOperation
+        : operation.stage === 'checking' && (!activeOperation || operation.readOnly)
           ? t('sync.operation.checking', 'Checking…')
           : t('sync.operation.in-progress', 'Sync operation in progress…');
     var html = '<div><strong>' + esc(operationKind(operation.kind)) + ' · ' + esc(message) + '</strong>' + (operation.operationId ? ' · ' + esc(shortId(operation.operationId)) : '') + '</div>';
@@ -186,8 +192,8 @@
   }
 
   function renderCancelControl() {
-    var operation = localOperation;
-    var eligible = operation && (operation.kind === 'push' || operation.kind === 'pull');
+    var operation = localOperation || readOperation;
+    var eligible = operation && !operation.invalidated && (operation.kind === 'push' || operation.kind === 'pull' || operation.readOnly);
     var panel = syncPanel('sync-operation-actions');
     if (!panel) return;
     // Never recycle a clickable node for a different invocation. An already
@@ -211,23 +217,58 @@
       cancelControl = { operation: operation, requestId: requestId, button: button };
     }
     cancelControl.button.disabled = !!operation.cancelRequested;
-    setControlLabel(cancelControl.button, operation.cancelRequested ? t('sync.cancel.pending', 'Cancelling…') : t('sync.cancel.action', 'Cancel sync'));
+    setControlLabel(cancelControl.button, operation.cancelRequested ? t('sync.cancel.pending', 'Cancelling…')
+      : operation.readOnly ? t('sync.cancel.read', 'Cancel check') : t('sync.cancel.action', 'Cancel sync'));
+  }
+
+  function stopRead(read) {
+    read.cancelled = true;
+    if (!read.sent || read.settled) return Promise.resolve({ success: true });
+    return Promise.resolve().then(function() { return api.sync.cancel({ requestId: read.requestId }); });
+  }
+
+  function invokeSyncRead(operation, invoke) {
+    if (operation && !ownsOperation(operation)) return Promise.resolve(null);
+    var read = { requestId: newRequestId(), sent: false, settled: false, cancelled: false };
+    activeReads.push(read);
+    if (operation) operation.reads.push(read);
+    return Promise.resolve().then(function() {
+      if (read.cancelled) return null;
+      read.sent = true;
+      return invoke({ requestId: read.requestId });
+    }).then(function(reply) {
+      if (read.cancelled || reply && reply.code === 'SYNC_READ_CANCELLED') return null;
+      if (reply && reply.success === false && typeof reply.code === 'string') throw new Error(reply.message || reply.code);
+      return reply;
+    }).catch(function(error) {
+      if (read.cancelled) return null;
+      throw error;
+    }).finally(function() {
+      read.settled = true;
+      var index = activeReads.indexOf(read);
+      if (index !== -1) activeReads.splice(index, 1);
+    });
   }
 
   function requestCancellation(operation, requestId) {
-    if (localOperation !== operation || operation.requestId !== requestId || operation.cancelRequested) return Promise.resolve(null);
+    if ((localOperation !== operation && readOperation !== operation) || operation.requestId !== requestId || operation.cancelRequested || operation.invalidated) return Promise.resolve(null);
     operation.cancelAttempted = true;
     operation.cancelRequested = true;
     operation.cancelPreflight();
     renderOperationState();
-    if (!operation.requestSent || !operation.awaitingReply) return Promise.resolve(null);
-    // A cancellation acknowledgement means only that abort was requested. Keep
-    // controls locked and the receipt untouched until the ORIGINAL write settles.
-    return Promise.resolve().then(function() { return api.sync.cancel({ requestId: requestId }); }).then(function(reply) {
-      if (!reply || !reply.success) throw new Error('Cancellation was not acknowledged');
-      return reply;
-    }).catch(function() {
-      if (localOperation !== operation || operation.requestId !== requestId || !operation.awaitingReply) return null;
+    var cancellations = operation.reads.filter(function(read) { return !read.settled; }).map(stopRead);
+    if (operation.requestSent && operation.awaitingReply) {
+      cancellations.push(Promise.resolve().then(function() { return api.sync.cancel({ requestId: requestId }); }));
+    }
+    // An ACK is intent, not completion. Backend reads may still own History locks
+    // or staging files; writes may be finishing a safe commit/rollback boundary.
+    // Keep controls locked until the ORIGINAL invocation(s) actually settle.
+    return Promise.all(cancellations.map(function(pending) {
+      return pending.then(function(reply) { return !!(reply && reply.success); }).catch(function() { return false; });
+    })).then(function(acknowledged) {
+      if ((localOperation !== operation && readOperation !== operation) || operation.requestId !== requestId || operation.invalidated) return null;
+      var pending = operation.awaitingReply || operation.reads.some(function(read) { return !read.settled; });
+      if (!pending || acknowledged.every(function(ok) { return ok; })) return null;
       operation.cancelRequested = false;
       renderOperationState();
       toast(t('sync.cancel.unconfirmed', 'Cancellation could not be confirmed. The operation is still pending; try Cancel again or wait for its result.'), 'warning');
@@ -236,7 +277,7 @@
   }
 
   function renderOperationState() {
-    var busy = !!(localOperation || activeOperation);
+    var busy = !!(localOperation || readOperation || activeOperation);
     controls.forEach(function(control) {
       var btn = document.querySelector('#tab-sync [data-cmd="' + control.cmd + '"]');
       if (!btn) return;
@@ -264,6 +305,10 @@
   }
 
   function invalidateViews() {
+    // Revoke reads in main as well as ignoring their eventual stale replies.
+    // This never looks up or aborts the globally active write lease.
+    activeReads.forEach(function(read) { if (!read.cancelled) stopRead(read).catch(function() {}); });
+    if (readOperation) readOperation.invalidated = true;
     viewEpoch++; statusSeq++; previewSeq++; syncDiffSeq++; teamSeq++;
     historyObservations = {};
     clearComparison();
@@ -499,24 +544,46 @@
   }
 
   function operationBusy() {
-    if (!localOperation && !activeOperation) return false;
+    if (!localOperation && !readOperation && !activeOperation) return false;
     toast(t('sync.operation.in-progress', 'Sync operation in progress…'), 'warning');
     return true;
   }
 
+  function newRequestId() { return requestSession + '-' + (++requestSequence); }
+
+  function beginReadOperation() {
+    if (readOperation && (readOperation.cancelAttempted || readOperation.invalidated)) return null;
+    if (!readOperation) {
+      readOperation = { kind: 'read', readOnly: true, stage: 'checking', startedAt: Date.now(), requestId: null, reads: [], jobs: 0, cancelPreflight: function() {} };
+      lastCheckNotice = '';
+    }
+    readOperation.jobs++;
+    renderOperationState();
+    return readOperation;
+  }
+
+  function finishReadOperation(operation) {
+    operation.jobs--;
+    if (readOperation !== operation || operation.jobs > 0) return;
+    if (operation.cancelAttempted && !operation.invalidated) lastCheckNotice = t('sync.cancel.read-finished', 'The checks have finished after cancellation was requested. No synchronization was started by these checks.');
+    readOperation = null;
+    renderOperationState();
+  }
+
   function beginOperation(kind) {
     var operation = { kind: kind, stage: 'checking', startedAt: Date.now(), operationId: null, requestId: null, requestSent: false, cancelRequested: false, cancelAttempted: false,
-      startGeneration: serverGeneration, invalidated: false, awaitingReply: false, serviceCompleted: false };
+      startGeneration: serverGeneration, invalidated: false, awaitingReply: false, serviceCompleted: false, reads: [] };
     operation.preflightCancelled = new Promise(function(resolve) { operation.cancelPreflight = function() { resolve(null); }; });
     localOperation = operation;
+    lastCheckNotice = '';
     invalidateViews(); invalidateSurfaceCaches(); renderOperationState();
     return operation;
   }
 
-  function ownsOperation(operation) { return localOperation === operation && !operation.invalidated && !operation.cancelAttempted; }
+  function ownsOperation(operation) { return (localOperation === operation || readOperation === operation) && !operation.invalidated && !operation.cancelAttempted; }
 
-  // Read-only preflight and confirmation can be abandoned. Never race the
-  // actual service write: only its real settlement can unlock mutation controls.
+  // Only local confirmation dialogs can be abandoned. Never race a backend read
+  // or write: real settlement releases locks/staging and unlocks the controls.
   function waitForPreflight(operation, pending) { return Promise.race([pending, operation.preflightCancelled]); }
 
   function dispatchOperation(operation, invoke) {
@@ -526,7 +593,7 @@
     // Preview/confirmation awaits do not save a newly edited scope or secret.
     if (syncWrite && !fullProfileDraftReady()) return Promise.resolve(null);
     operation.stage = 'running'; operation.dispatched = false; operation.awaitingReply = true; operation.serviceCompleted = false; operation.operationId = null;
-    operation.requestId = syncWrite ? requestSession + '-' + (++requestSequence) : null;
+    operation.requestId = syncWrite ? newRequestId() : null;
     operation.requestSent = false;
     invalidateViews(); invalidateSurfaceCaches(); renderOperationState();
     // These are owned long-running writes, NOT the generic 15-second IPC write
@@ -552,6 +619,7 @@
 
   function finishOperation(operation, savedDraft) {
     if (localOperation !== operation) return Promise.resolve();
+    if (operation.cancelAttempted && !operation.dispatched && !operation.invalidated) lastCheckNotice = t('sync.cancel.preflight-finished', 'The check has finished after cancellation was requested. {kind} was not started by this request.').replace('{kind}', operationKind(operation.kind));
     localOperation = null;
     renderOperationState();
     if (activeOperation && activeOperation.operationId !== operation.operationId) return Promise.resolve();
@@ -636,10 +704,10 @@
     '</div>' : '');
   }
 
-  function fetchPreview() {
+  function fetchPreview(operation) {
     var epoch = viewEpoch, seq = ++previewSeq;
-    return api.sync.preview().then(function(preview) {
-      if (epoch !== viewEpoch) return null;
+    return invokeSyncRead(operation, function(opts) { return api.sync.preview(opts); }).then(function(preview) {
+      if (!preview || epoch !== viewEpoch) return null;
       if (seq === previewSeq) renderPreview(preview);
       return preview;
     });
@@ -756,10 +824,10 @@
     listEl.innerHTML = cards.join('');
   }
 
-  function fetchSyncDiff() {
+  function fetchSyncDiff(operation) {
     var epoch = viewEpoch, seq = ++syncDiffSeq;
-    return api.sync.previewDiff().then(function(diff) {
-      if (epoch !== viewEpoch) return null;
+    return invokeSyncRead(operation, function(opts) { return api.sync.previewDiff(opts); }).then(function(diff) {
+      if (!diff || epoch !== viewEpoch) return null;
       if (seq === syncDiffSeq) {
         var token = comparisonToken(diff);
         viewedComparison = diff && diff.ok && token ? { token: token, epoch: epoch } : null;
@@ -772,19 +840,27 @@
   }
 
   agentBrowser.loadSyncDiff = function() {
+    var operation = beginReadOperation();
+    if (!operation) return Promise.resolve(null);
     viewedComparison = null;
     var listEl = document.getElementById('sync-diff');
     var messageEl = document.getElementById('sync-diff-message');
     if (listEl) listEl.innerHTML = '<div class="loading">' + esc(t('common.loading', 'Loading…')) + '</div>';
     if (messageEl) messageEl.textContent = t('common.loading', 'Loading…');
     var epoch = viewEpoch, seq = syncDiffSeq + 1;
-    return fetchSyncDiff().catch(function(e) {
+    return fetchSyncDiff(operation).then(function(diff) {
+      if (operation.cancelAttempted && !operation.invalidated && epoch === viewEpoch && seq === syncDiffSeq) {
+        if (listEl) listEl.innerHTML = '';
+        if (messageEl) messageEl.textContent = t('sync.cancel.compare-finished', 'Comparison finished after cancellation was requested; no new comparison was adopted.');
+      }
+      return diff;
+    }).catch(function(e) {
       if (epoch !== viewEpoch || seq !== syncDiffSeq) return null;
       if (listEl) listEl.innerHTML = '<div class="empty-state">' + esc(e.message || e) + '</div>';
       if (messageEl) messageEl.textContent = t('sync.compare-failed', 'Comparison failed');
       toast(t('sync.compare-failed-prefix', 'Comparison failed: ') + (e.message || String(e)), 'error');
       return null;
-    });
+    }).finally(function() { finishReadOperation(operation); });
   };
 
 
@@ -824,11 +900,11 @@
       if (force) opts.force = true;
       return dispatchOperation(operation, function(requestId) { opts.requestId = requestId; return api.sync.push(opts); });
     }
-    return waitForPreflight(operation, fetchPreview()).catch(function() {
+    return fetchPreview(operation).catch(function() {
       if (ownsOperation(operation)) toast(t('sync.preview.unavailable', 'Preview unavailable'), 'warning');
       return null;
     }).then(function() {
-      return ownsOperation(operation) ? waitForPreflight(operation, fetchSyncDiff()) : null;
+      return ownsOperation(operation) ? fetchSyncDiff(operation) : null;
     }).then(function(diff) {
       if (!ownsOperation(operation)) return null;
       if (!diff || !diff.ok) throw new Error((diff && diff.message) || t('sync.compare-failed', 'Comparison failed'));
@@ -877,7 +953,7 @@
       if (typeof savedHistoryScope === 'boolean') opts.history = savedHistoryScope;
       return api.sync.pull(opts);
     }); }
-    return waitForPreflight(operation, fetchPreview()).then(function(preview) {
+    return fetchPreview(operation).then(function(preview) {
       if (!ownsOperation(operation) || !preview) return null;
       var running = preview.runningProfiles || [];
       if (!running.length) return pull();
@@ -923,16 +999,23 @@
   }
   agentBrowser.syncRecheckHistory = function() {
     if (operationBusy() || !lastHistoryStatus || typeof api.sync.historyState !== 'function') return Promise.resolve(null);
+    var operation = beginReadOperation();
+    if (!operation) return Promise.resolve(null);
     var epoch = viewEpoch, status = lastHistoryStatus, observations = {};
     var ids = Object.keys(status.history || {});
     return ids.reduce(function(chain, id) {
       return chain.then(function() {
-        if (epoch !== viewEpoch) return;
-        return api.sync.historyState(id).then(function(state) { observations[id] = state; }, function() {
-          observations[id] = Object.assign({}, status.history[id], { status: 'unknown', reason: 'history-read-or-runtime-unconfirmed' });
+        if (epoch !== viewEpoch || !ownsOperation(operation)) return;
+        return invokeSyncRead(operation, function(opts) { return api.sync.historyState(id, opts); }).then(function(state) {
+          if (state && epoch === viewEpoch && ownsOperation(operation)) observations[id] = state;
+        }, function() {
+          if (epoch === viewEpoch && ownsOperation(operation)) observations[id] = Object.assign({}, status.history[id], { status: 'unknown', reason: 'history-read-or-runtime-unconfirmed' });
         });
       });
-    }, Promise.resolve()).then(function() { if (epoch === viewEpoch) { historyObservations = observations; renderHistoryState(status); } return observations; });
+    }, Promise.resolve()).then(function() {
+      if (epoch === viewEpoch && ownsOperation(operation)) { historyObservations = observations; renderHistoryState(status); }
+      return observations;
+    }).finally(function() { finishReadOperation(operation); });
   };
   function consentError(r) {
     return !!(r && (r.code === 'CUSTODY_CONSENT_REQUIRED' || /custody consent/i.test(r.message || '')));

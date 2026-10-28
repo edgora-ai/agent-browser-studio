@@ -4,6 +4,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as zlib from "node:zlib";
 import { spawn } from "node:child_process";
+import { setImmediate as syncNextTurn } from "node:timers/promises";
 import { getSyncConfig, getConfig, getConfigPath, saveConfig, getProfilesDir, getAppDataDir, portableProfileContent } from "./config-manager.js";
 import { transact } from "./config/store.js";
 import { DEFAULT_SYNC_LIMITS } from "./sync/limits.js";
@@ -11,7 +12,7 @@ import type { ArtifactHandler } from "./sync/artifacts/interface.js";
 import { runtimeCookieOps } from "./bidi-cookie-service.js";
 import { writeQueuedCookieImports, readQueuedCookieImports, normalizeCookieForQueue } from "./cdp-cookie-service.js";
 import { normalizeCookiePartitionKey } from "./cookie-partition.js";
-import { acquireRestoreLock, isRestoreLocked, assertProfileTransferStopped, withProfileTransferProcessSnapshot, beginFullProfileRecovery, finishFullProfileRecovery, type FullProfileRecoveryTicket } from "./profile-restore-lock.js";
+import { acquireRestoreLock, isRestoreLocked, assertProfileTransferStopped, withProfileTransferProcessSnapshot, withProfileTransferProcessSnapshots, beginFullProfileRecovery, finishFullProfileRecovery, type FullProfileRecoveryTicket } from "./profile-restore-lock.js";
 import { markProfileDataChanging } from "./profile-data-revision.js";
 import { decryptSecretOr } from "./secrets.js";
 import { sanitizeTeam, mergeTeam, requireSyncPush, requireForcePush, requireSettingsMutation } from "./team.js";
@@ -73,68 +74,95 @@ function assertSyncRole(kind: "push" | "pull", force = false): void {
   if (!gate.ok) throw Object.assign(new Error(`Sync ${kind} blocked by team policy: ${gate.error}`), { code: "TEAM_ROLE_DENIED" });
 }
 
+interface SyncPreviewResult {
+  configured: boolean; profiles: number; runningProfiles: string[]; proxies: number; accounts: number; extensions: number; message: string;
+}
+
+async function syncReadTurn(signal?: AbortSignal): Promise<void> {
+  assertSyncNotAborted(signal);
+  await syncNextTurn();
+  assertSyncNotAborted(signal);
+}
+
+// The REST API's legacy synchronous preview remains source-compatible. Owned IPC
+// reads drain the same work asynchronously, so Cancel can reach the main process.
+function* previewSteps(signal?: AbortSignal): Generator<void, SyncPreviewResult> {
+  assertSyncNotAborted(signal);
+  const cfg = cloneConfig(getConfig()), sync = getSyncConfig();
+  const profileIds = Object.keys(cfg.browserProfiles || {}), runningProfiles: string[] = [];
+  for (const dirId of profileIds) {
+    assertSyncNotAborted(signal);
+    if (isProfileRunningForRestore(dirId)) runningProfiles.push(dirId);
+    yield;
+  }
+  assertSyncNotAborted(signal);
+  let extensions = 0;
+  try { extensions = listExtensionRepository().length; } catch { /* ignore */ }
+  const configured = Boolean(sync.enabled && sync.endpoint && sync.bucket);
+  const skipNote = runningProfiles.length
+    ? `（${runningProfiles.length} 个运行中或退出未确认，pull 时整项跳过；需先停止并确认浏览器退出）` : "";
+  return {
+    configured, profiles: profileIds.length, runningProfiles, proxies: Object.keys(cfg.proxies || {}).length,
+    accounts: (cfg.accounts || []).length, extensions,
+    message: configured ? `将同步 ${profileIds.length} 个 profile${skipNote}` : `同步未配置 (endpoint/bucket/enabled)${skipNote}`,
+  };
+}
+
 export const syncService = {
   // ── Preview (offline pre-flight: what a push would involve + who'd skip on pull) ──
-  preview(): { configured: boolean; profiles: number; runningProfiles: string[]; proxies: number; accounts: number; extensions: number; message: string } {
-    const cfg = getConfig() as any;
-    const sync = getSyncConfig();
-    const profileIds = Object.keys(cfg.browserProfiles || {});
-    const runningProfiles: string[] = [];
-    for (const dirId of profileIds) {
-      if (isProfileRunningForRestore(dirId)) runningProfiles.push(dirId);
+  preview(signal?: AbortSignal): SyncPreviewResult {
+    const steps = previewSteps(signal);
+    for (;;) { const result = steps.next(); if (result.done) return result.value; }
+  },
+  async previewAsync(signal?: AbortSignal): Promise<SyncPreviewResult> {
+    const steps = previewSteps(signal);
+    for (;;) {
+      await syncReadTurn(signal);
+      const result = steps.next();
+      if (result.done) return result.value;
     }
-    let extensions = 0;
-    try { extensions = listExtensionRepository().length; } catch { /* ignore */ }
-    const configured = Boolean(sync.enabled && sync.endpoint && sync.bucket);
-    const skipNote = runningProfiles.length
-      ? `（${runningProfiles.length} 个运行中或退出未确认，pull 时整项跳过；需先停止并确认浏览器退出）`
-      : "";
-    return {
-      configured,
-      profiles: profileIds.length,
-      runningProfiles,
-      proxies: Object.keys(cfg.proxies || {}).length,
-      accounts: (cfg.accounts || []).length,
-      extensions,
-      message: configured
-        ? `将同步 ${profileIds.length} 个 profile${skipNote}`
-        : `同步未配置 (endpoint/bucket/enabled)${skipNote}`,
-    };
   },
   // ── Diff preview (remote vs local, read-only) ──
-  async previewDiff(): Promise<SyncDiffResult> {
+  async previewDiff(signal?: AbortSignal): Promise<SyncDiffResult> {
+    assertSyncNotAborted(signal);
     const sync = structuredClone(getSyncConfig());
     if (!sync.enabled || !sync.endpoint || !sync.bucket) {
       return { ok: false, message: "Sync not enabled or configured", ...emptySyncDiff() };
     }
     try {
-      const fetched = await fetchSyncConfig(sync);
+      const fetched = await fetchSyncConfig(sync, signal);
+      await syncReadTurn(signal);
       if (!fetched.ok) {
         if (fetched.message.startsWith("HTTP 404")) {
           const localSnapshot = sanitizeConfigForSync(cloneConfig(getConfig())) as any;
           const body = buildSyncDiff(localSnapshot, { browserProfiles: {}, proxies: {}, extensionRepository: {}, accounts: [] } as any, {}, getConfig().deviceId);
+          const preferences = await captureComparisonPreferences(localSnapshot, signal);
           return { ok: true, firstPush: true, remoteTimestamp: null,
-            comparisonToken: createComparisonToken(sync, localSnapshot, null),
-            coverage: compareProfilePreferences(body.profiles, localSnapshot.browserProfiles || {}, {}, {}), ...body };
+            comparisonToken: await createComparisonTokenAsync(sync, localSnapshot, null, preferences, signal),
+            coverage: await compareProfilePreferencesAsync(body.profiles, localSnapshot.browserProfiles || {}, {}, {}, preferences, signal), ...body };
         }
         return { ok: false, message: fetched.message, ...emptySyncDiff() };
       }
       const payload = fetched.payload;
+      await syncReadTurn(signal);
       const raw = gunzipBase64Field(payload.data, MAX_CONFIG_GZIP_BYTES, MAX_CONFIG_JSON_BYTES, "sync config");
+      await syncReadTurn(signal);
       const remoteConfig = sanitizeRemoteConfig(JSON.parse(raw.toString()) as MgmtConfig);
       validateArtifactProfileIds(payload, new Set(Object.keys(remoteConfig.browserProfiles || {})));
       parseRemoteHistory(payload, remoteConfig.browserProfiles || {});
       const localSnapshot = sanitizeConfigForSync(cloneConfig(getConfig())) as any;
       const body = buildSyncDiff(localSnapshot, remoteConfig as any, payload, getConfig().deviceId);
-      const coverage = compareProfilePreferences(body.profiles, localSnapshot.browserProfiles || {}, remoteConfig.browserProfiles || {}, payload);
+      const preferences = await captureComparisonPreferences(localSnapshot, signal);
+      const coverage = await compareProfilePreferencesAsync(body.profiles, localSnapshot.browserProfiles || {}, remoteConfig.browserProfiles || {}, payload, preferences, signal);
       return {
         ok: true,
         coverage,
-        comparisonToken: createComparisonToken(sync, localSnapshot, payload),
+        comparisonToken: await createComparisonTokenAsync(sync, localSnapshot, payload, preferences, signal),
         remoteTimestamp: typeof payload.timestamp === "number" ? payload.timestamp : null,
         ...body,
       };
     } catch (e: any) {
+      if (signal?.aborted) throw e;
       return { ok: false, message: e.message || String(e), ...emptySyncDiff() };
     }
   },
@@ -168,7 +196,7 @@ export const syncService = {
   async pull(signal?: AbortSignal, opts?: SyncPullOptions): Promise<SyncResult> {
     assertSyncNotAborted(signal);
     const sync = structuredClone(getSyncConfig());
-    let stageRoot: string | undefined;
+    let stageRoot: string | undefined, stageRootOwner: fs.Stats | undefined;
     let finalResult: SyncResult | undefined;
     let browserBackupIncomplete = false;
     const createdProfileIds = new Set<string>();
@@ -250,7 +278,7 @@ export const syncService = {
         [...selectedRemoteProfiles].map((id) => [id, remoteProfiles[id]]),
       );
 
-      stageRoot = createPullStagingRoot();
+      stageRoot = createPullStagingRoot(); stageRootOwner = fs.lstatSync(stageRoot);
       type PullArtifacts = { cookies?: CookieInfo[]; localStorage?: PreparedLocalStorage; preferences?: Buffer; history?: PreparedHistory; historyCoverage?: HistoryCoverage;
         cookieCoverage: NonNullable<SyncItemResult["browserData"]>; localStorageCoverage: NonNullable<SyncItemResult["browserData"]> };
       const prepared = new Map<string, PullArtifacts>();
@@ -654,7 +682,9 @@ export const syncService = {
         } catch (error) { operation.warnings.push(`Could not clean uncommitted profile ${dirId}: ${(error as Error).message}`); }
       }
       if (stageRoot) {
-        try { fs.rmSync(stageRoot, { recursive: true, force: true }); }
+        try {
+          await cleanupSyncStagingRoot(stageRoot, stageRootOwner);
+        }
         catch (error) { operation.warnings.push(`Could not clean owned sync staging directory: ${(error as Error).message}`); }
       }
       for (const release of [...profileLocks.values()].reverse()) release();
@@ -669,12 +699,18 @@ export const syncService = {
     const sync = getSyncConfig();
     if (!profile) throw new Error("Profile not found");
     const release = acquireRestoreLock(dirId);
-    let root: string | undefined;
+    let root: string | undefined, owner: fs.Stats | undefined;
     try {
-      root = createPullStagingRoot();
+      root = createPullStagingRoot(); owner = fs.lstatSync(root);
       const guard = () => { assertActiveHistoryScope(sync, true); assertSelectedProfileUnchanged({ [dirId]: profile }, getConfig().browserProfiles || {}, dirId); assertHistoryStopped(dirId); assertHistoryRestorable(dirId, historyEngine(profile)); };
       return await readProfileHistorySyncState(dirId, profile, root, guard, signal);
-    } finally { try { if (root) fs.rmSync(root, { recursive: true }); } finally { release(); } }
+    } finally {
+      try {
+        if (root) {
+          await cleanupSyncStagingRoot(root, owner);
+        }
+      } finally { release(); }
+    }
   },
 
   getStatus() {
@@ -769,13 +805,13 @@ function confirmFullProfileConfigCommitted(): void {
   } finally { fs.closeSync(fd); }
   if (!syncArchiveDirectory(path.dirname(file))) throw new Error("Complete migration config directory durability is unconfirmed");
 }
-function cleanupFullProfileStage(root: string | undefined, owner: fs.Stats | undefined, operation: SyncOperationResult, retain: boolean): void {
+async function cleanupFullProfileStage(root: string | undefined, owner: fs.Stats | undefined, operation: SyncOperationResult, retain: boolean): Promise<void> {
   if (!root || !owner) return;
   if (retain) { operation.warnings.push(`Complete migration staging retained for recovery: ${root}`); return; }
   try {
     const current = fs.lstatSync(root);
     if (!current.isDirectory() || current.isSymbolicLink() || current.dev !== owner.dev || current.ino !== owner.ino) throw new Error("Staging ownership changed");
-    fs.rmSync(root, { recursive: true });
+    await cleanupSyncStagingRoot(root, owner);
   } catch { operation.warnings.push(`Complete migration staging cleanup was not confirmed: ${root}`); }
 }
 
@@ -790,6 +826,7 @@ async function pushFullProfileSnapshot(sync: SyncConfig, force: boolean, signal?
     assertSyncRole("push", force); assertSyncNotAborted(signal);
     const initial = cloneConfig(getConfig()), snapshot = sanitizeConfigForSync(initial), timestamp = Date.now();
     const ids = Object.keys(snapshot.browserProfiles || {});
+    const verifyAllSources = () => withProfileTransferProcessSnapshots(ids, () => { for (const guard of sourceGuards) guard(); });
     if (ids.length > MAX_SYNC_PROFILES) throw new Error("Too many profiles in complete snapshot");
     lease.stage("downloading", { scope: "config" });
     const previous = await fetchSyncConfig(sync, signal, lease);
@@ -855,21 +892,21 @@ async function pushFullProfileSnapshot(sync: SyncConfig, force: boolean, signal?
     const publishVerified = async (key: string, bytes: Buffer, scope: "fullProfile" | "extensions", id: string): Promise<void> => {
       lease.stage("publishing", { scope, itemId: id, completedItems: publishedCount, totalItems: captured.length + extensions.length });
       assertSyncRole("push", force); assertFullProfileScope(sync, opts?.history); assertSyncNotAborted(signal);
-      for (const guard of sourceGuards) guard();
+      verifyAllSources();
       const publication = await publishS3Object(sync, key, bytes, signal, lease);
       operation.remoteCommit = publication.state === "accepted" ? "partial" : "unknown";
       lease.stage("verifying");
       const readback = publication.state === "rejected" ? null : await s3Get(sync, key, signal, bytes.length, lease);
       assertSyncRole("push", force); assertFullProfileScope(sync, opts?.history); assertSyncNotAborted(signal);
       if (!readback?.equals(bytes)) throw fullProfileError("FULL_PROFILE_UPLOAD_UNCONFIRMED", "Complete migration object upload/readback was not confirmed; previous snapshot retained");
-      for (const guard of sourceGuards) guard();
+      verifyAllSources();
       operation.add({ side: "remote", scope, id, state: "uploaded", bytes: bytes.length });
       lease.progress({ scope, itemId: id, completedItems: ++publishedCount, totalItems: captured.length + extensions.length });
     };
     for (const item of captured) await publishVerified(item.descriptor.key, item.body, "fullProfile", item.id);
     for (const extension of extensions) await publishVerified(extensionObjectKey(extension.entry), fs.readFileSync(extension.packagePath), "extensions", extension.entry.id);
     assertComparisonUnchanged(comparisonToken, sync, previous.ok ? previous.payload : null);
-    for (const guard of sourceGuards) guard();
+    verifyAllSources();
     assertSyncRole("push", force); assertFullProfileScope(sync, opts?.history); assertSyncNotAborted(signal);
     lease.stage("publishing", { scope: "config" });
     await publishS3Object(sync, SYNC_CONFIG_KEY, body, signal, lease); operation.remoteCommit = "unknown";
@@ -880,7 +917,7 @@ async function pushFullProfileSnapshot(sync: SyncConfig, force: boolean, signal?
     lease.stage("finalizing", { scope: "baseline" });
     transact((draft: MgmtConfig) => {
       assertSyncRole("push", force); assertFullProfileScope(sync, opts?.history);
-      for (const guard of sourceGuards) guard();
+      verifyAllSources();
       for (const id of ids) {
         assertSelectedProfileUnchanged(initial.browserProfiles, draft.browserProfiles || {}, id);
         const current = draft.browserProfiles[id], published = snapshot.browserProfiles[id];
@@ -896,7 +933,7 @@ async function pushFullProfileSnapshot(sync: SyncConfig, force: boolean, signal?
     if (signal?.aborted) { error.syncResult = result; throw error; }
     return result;
   } finally {
-    cleanupFullProfileStage(root, owner, operation, retain);
+    await cleanupFullProfileStage(root, owner, operation, retain);
     for (const release of releases.reverse()) release();
     if (result) result.warnings = [...operation.warnings];
     lease.finish(result ?? operation.failure(new Error("Complete push did not confirm its result")));
@@ -914,7 +951,7 @@ async function pullFullProfileSnapshot(sync: SyncConfig, signal?: AbortSignal, o
   try {
     const passphrase = assertFullProfileScope(sync, opts?.history, true);
     if (opts?.allowRunningPartial) throw fullProfileError("FULL_PROFILE_STOP_REQUIRED", "Complete migration cannot be partially applied to a running profile");
-    const { parseFullProfileArtifact, restorePreparedFullProfile } = await import("./sync/full-profile-artifact.js");
+    const { parseFullProfileArtifact, restorePreparedFullProfileAsync } = await import("./sync/full-profile-artifact.js");
     const { prepareFullProfileTransfer, fullProfileProxyHash } = await import("./sync/full-profile-transfer.js");
     lease.stage("downloading", { scope: "config" });
     const fetched = await fetchSyncConfig(sync, signal, lease);
@@ -997,7 +1034,7 @@ async function pullFullProfileSnapshot(sync: SyncConfig, signal?: AbortSignal, o
       pendingRecovery.add(ticket);
       markProfileDataChanging(item.id);
       let applied: import("./sync/full-profile-artifact.js").RestoredFullProfile;
-      try { applied = restorePreparedFullProfile({ prepared: item.value.prepared, profileDir: resolveProfileDir(item.id), backupSuffix: ".full-profile-backup-" + operation.operationId, guard }); }
+      try { applied = await restorePreparedFullProfileAsync({ prepared: item.value.prepared, profileDir: resolveProfileDir(item.id), backupSuffix: ".full-profile-backup-" + operation.operationId, guard, signal, onProgress: lease.local().update }); }
       catch (error: any) { throw error?.code === "FULL_PROFILE_RECOVERY_REQUIRED" ? fullProfileRecoveryFailure(error, ticket) : error; }
       restored.push({ value: applied, ticket });
       operation.add({ scope: "fullProfile", id: item.id, state: "applied", bytes: applied.bytes,
@@ -1090,7 +1127,7 @@ async function pullFullProfileSnapshot(sync: SyncConfig, signal?: AbortSignal, o
     if (signal?.aborted) { error.syncResult = result; throw error; }
     return result;
   } finally {
-    cleanupFullProfileStage(root, owner, operation, retain);
+    await cleanupFullProfileStage(root, owner, operation, retain);
     for (const release of releases.reverse()) release();
     if (result) result.warnings = [...operation.warnings];
     lease.finish(result ?? operation.failure(new Error("Complete pull did not confirm its result")));
@@ -1165,7 +1202,7 @@ async function pushFrozenSnapshot(sync: SyncConfig, force: boolean, signal?: Abo
   const lease = beginSyncOperation("push");
   if ("busy" in lease) return lease.busy;
   const operation = lease.operation;
-  let stageRoot: string | undefined;
+  let stageRoot: string | undefined, stageRootOwner: fs.Stats | undefined;
   let result: SyncResult | undefined;
   let browserBackupIncomplete = false;
   try {
@@ -1183,7 +1220,7 @@ async function pushFrozenSnapshot(sync: SyncConfig, force: boolean, signal?: Abo
     assertComparisonUnchanged(comparisonToken, sync, fetched.ok ? fetched.payload : null);
     const locks = await collectRemoteLocksBlockingPush(sync, signal, fetched);
     if (!force && locks.length) throw new Error(`Push blocked: ${locks.length} profile(s) locked by another device (${locks.map((lock) => lock.id).slice(0, 8).join(", ")}). Release their locks or force push.`);
-    stageRoot = createPullStagingRoot();
+    stageRoot = createPullStagingRoot(); stageRootOwner = fs.lstatSync(stageRoot);
     const cookies: Record<string, string> = {};
     const localStorage: Record<string, string> = {};
     const preferences: Record<string, string> = {};
@@ -1486,7 +1523,7 @@ async function pushFrozenSnapshot(sync: SyncConfig, force: boolean, signal?: Abo
     return result;
   } finally {
     if (stageRoot) {
-      try { fs.rmSync(stageRoot, { recursive: true, force: true }); }
+      try { await cleanupSyncStagingRoot(stageRoot, stageRootOwner); }
       catch (error) { operation.warnings.push(`Owned push staging cleanup failed: ${(error as Error).message}`); }
     }
     if (result) result.warnings = [...operation.warnings];
@@ -1495,6 +1532,16 @@ async function pushFrozenSnapshot(sync: SyncConfig, force: boolean, signal?: Abo
 }
 
 interface PreparedPullExtension { id: string; remoteEntry: any; packagePath: string; }
+
+async function cleanupSyncStagingRoot(root: string, owner: fs.Stats | undefined): Promise<void> {
+  if (!owner || path.resolve(root) !== root || path.dirname(root) !== path.resolve(getProfilesDir()) || !path.basename(root).startsWith(".sync-pull-stage-")) {
+    throw new Error("Unexpected or unowned sync staging cleanup path");
+  }
+  // No recursive pathname deletion after an await. The shared secure walker
+  // checks creation ownership, every ancestor and each member at each resume.
+  const { cleanupOwnedFullProfileDirectory } = await import("./sync/full-profile-artifact.js");
+  await cleanupOwnedFullProfileDirectory(root, owner);
+}
 
 function createPullStagingRoot(): string {
   const root = getProfilesDir();
@@ -2853,7 +2900,7 @@ function markAllProfilesSynced(config: MgmtConfig | SyncSafeConfig, timestamp: n
   }
 }
 
-function compareProfilePreferences(section: SyncDiffSection, localProfiles: Record<string, any>, remoteProfiles: Record<string, any>, payload: any): NonNullable<SyncDiffResult["coverage"]> {
+function compareProfilePreferences(section: SyncDiffSection, localProfiles: Record<string, any>, remoteProfiles: Record<string, any>, payload: any, preferences?: Record<string, ProfilePreferencesSnapshot>): NonNullable<SyncDiffResult["coverage"]> {
   const unverified: Array<{ id: string; reason: string }> = [];
   for (const id of Object.keys(localProfiles)) {
     if (!Object.hasOwn(remoteProfiles, id)) continue;
@@ -2876,7 +2923,8 @@ function compareProfilePreferences(section: SyncDiffSection, localProfiles: Reco
         unverified.push({ id, reason: "remote-baseline-mismatch" });
         continue;
       }
-      const localEvidence = profilePreferencesSnapshot(capturePreferences(id, false));
+      const localEvidence = preferences ? preferences[id] : profilePreferencesSnapshot(capturePreferences(id, false));
+      if (!localEvidence) throw new Error("Missing local comparison evidence");
       if (stableStringify(localEvidence) === stableStringify(remoteEvidence)) continue;
       const existing = section.changed.find((item) => item.id === id);
       if (existing) existing.fields = [...new Set([...existing.fields, "preferences"])].sort();
@@ -2888,9 +2936,44 @@ function compareProfilePreferences(section: SyncDiffSection, localProfiles: Reco
     notCompared: ["live-cookies", "localStorage-database", "history-database", "full-profile-files"], unverified };
 }
 
+async function compareProfilePreferencesAsync(section: SyncDiffSection, localProfiles: Record<string, any>, remoteProfiles: Record<string, any>, payload: any, preferences: Record<string, ProfilePreferencesSnapshot>, signal?: AbortSignal): Promise<NonNullable<SyncDiffResult["coverage"]>> {
+  const coverage = compareProfilePreferences(section, {}, remoteProfiles, payload);
+  for (const id of Object.keys(localProfiles)) {
+    if (!Object.hasOwn(remoteProfiles, id)) continue;
+    await syncReadTurn(signal);
+    const item = compareProfilePreferences(section, { [id]: localProfiles[id] }, remoteProfiles, payload, preferences);
+    coverage.unverified.push(...item.unverified);
+  }
+  await syncReadTurn(signal);
+  return coverage;
+}
+
+async function captureComparisonPreferences(local: any, signal?: AbortSignal): Promise<Record<string, ProfilePreferencesSnapshot>> {
+  const preferences: Record<string, ProfilePreferencesSnapshot> = {};
+  for (const id of Object.keys(local.browserProfiles || {})) {
+    await syncReadTurn(signal);
+    preferences[id] = profilePreferencesSnapshot(capturePreferences(id, false));
+  }
+  await syncReadTurn(signal);
+  return preferences;
+}
+
+async function createComparisonTokenAsync(sync: SyncConfig, local: any, payload: any, preferences: Record<string, ProfilePreferencesSnapshot>, signal?: AbortSignal): Promise<SyncComparisonToken> {
+  await syncReadTurn(signal);
+  const token = comparisonTokenFromPreferences(sync, local, payload, preferences);
+  // Serialization/hashing remains byte-compatible with write admission. Do not
+  // admit a late result if Cancel arrived while that finite native work ran.
+  await syncReadTurn(signal);
+  return token;
+}
+
 function createComparisonToken(sync: SyncConfig, local: any, payload: any): SyncComparisonToken {
   const preferences: Record<string, ProfilePreferencesSnapshot> = {};
   for (const id of Object.keys(local.browserProfiles || {})) preferences[id] = profilePreferencesSnapshot(capturePreferences(id, false));
+  return comparisonTokenFromPreferences(sync, local, payload, preferences);
+}
+
+function comparisonTokenFromPreferences(sync: SyncConfig, local: any, payload: any, preferences: Record<string, ProfilePreferencesSnapshot>): SyncComparisonToken {
   return {
     targetId: getProfileSyncTarget(sync),
     localHash: sha256Hex(stableStringify({ profiles: profileDecisionMap(local.browserProfiles || {}), preferences,
