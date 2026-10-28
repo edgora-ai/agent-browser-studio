@@ -1,8 +1,10 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { createHash, randomBytes } from "node:crypto";
+import cryptoMutable from "node:crypto";
+import { syncBuiltinESMExports } from "node:module";
 import { DatabaseSync } from "node:sqlite";
 import { captureFullProfileTransfer, prepareFullProfileTransfer } from "../../src/main/services/sync/full-profile-transfer.js";
 import { captureFullProfile, prepareFullProfile, restorePreparedFullProfile } from "../../src/main/services/sync/full-profile-artifact.js";
@@ -91,9 +93,43 @@ async function rejects(operation: Promise<unknown>, code: string | RegExp): Prom
   let error: unknown; try { await operation; } catch (caught) { error = caught; }
   expect(Boolean(error)).toBe(true); const actual = (error as { code?: unknown })?.code; expect(typeof actual === "string" && (typeof code === "string" ? actual === code : code.test(actual))).toBe(true);
 }
-afterEach(() => { for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true }); });
+afterEach(() => { vi.restoreAllMocks(); syncBuiltinESMExports(); for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true }); });
 
 describe("full-profile transfer coordinator with real native credential conversion", () => {
+  it.each([
+    { phase: "sealing", metadataCall: 3, fault: "cancel" }, { phase: "sealing", metadataCall: 3, fault: "guard" },
+    { phase: "opening", metadataCall: 6, fault: "cancel" }, { phase: "opening", metadataCall: 6, fault: "guard" },
+  ])("uses asynchronous metadata KDF and rejects $fault after $phase without masking guards or retaining key bytes", async ({ metadataCall, fault }) => {
+    const f = fixture(); put(f.source, "Default/Preferences", Buffer.from("synthetic-source-preferences"));
+    const before = tree(f.source), controller = new AbortController();
+    let calls = 0, changed = false, timerRan = false, input: Buffer | undefined, derived: Buffer | undefined;
+    const realScrypt = cryptoMutable.scrypt;
+    const syncKdf = vi.spyOn(cryptoMutable, "scryptSync").mockImplementation(() => { throw new Error("Unexpected synchronous metadata KDF"); });
+    vi.spyOn(cryptoMutable, "scrypt").mockImplementation(((password, salt, length, options, callback) => {
+      const call = ++calls;
+      return realScrypt(password, salt, length, options, (error, key) => {
+        if (call !== metadataCall) { callback(error, key); return; }
+        input = password as Buffer; derived = key;
+        expect(options).toEqual({ N: 32768, r: 8, p: 1, maxmem: 64 * 1024 * 1024 });
+        setImmediate(() => {
+          timerRan = true;
+          if (fault === "cancel") controller.abort(); else changed = true;
+          callback(error, key);
+        });
+      });
+    }) as typeof cryptoMutable.scrypt);
+    syncBuiltinESMExports();
+    const guard = () => { if (changed) throw Object.assign(new Error("Synthetic metadata scope changed"), { code: "SYNTHETIC_METADATA_SCOPE_CHANGED" }); };
+    await expect(captureFullProfileTransfer({ ...f.options, guard, signal: controller.signal, profileDir: f.source,
+      sourcePlatform: "darwin", environment: { profileHash: PROFILE_HASH } })).rejects.toMatchObject({
+      code: fault === "cancel" ? "SYNC_CANCELLED" : "SYNTHETIC_METADATA_SCOPE_CHANGED",
+    });
+    expect(timerRan).toBe(true); expect(calls).toBe(metadataCall); expect(syncKdf).not.toHaveBeenCalled();
+    expect(Buffer.isBuffer(input)).toBe(true); expect(input!.every(byte => byte === 0)).toBe(true);
+    expect(Buffer.isBuffer(derived)).toBe(true); expect(derived!.every(byte => byte === 0)).toBe(true);
+    assertTree(f.source, before);
+  });
+
   it.each([false, true])("captures encrypted Mac profile and restores searchable Linux native DBs, original WAL=%s", async wal => {
     const f = fixture(); await seed(f.source, wal); const original = tree(f.source), captured = await capture(f), originalBody = sha(captured.body);
     expect(captured.body.includes(PASSWORD)).toBe(false); expect(captured.body.includes(Buffer.from(PROXY_SECRET))).toBe(false); expect(captured.body.includes(COOKIE)).toBe(false); assertTree(f.source, original);

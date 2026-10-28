@@ -21,7 +21,8 @@ import { listExtensionRepository, getExtensionRepoEntryDir, prepareSyncedExtensi
 import { tMain } from "./main-i18n.js";
 import type { SyncConfig, MgmtConfig, CookieInfo, ProxyConfig, SyncResult, SyncItemResult, SyncComparisonToken, SyncProfileRuntimeEffect } from "../types.js";
 import { SyncOperationResult } from "./sync/operation-result.js";
-import { beginSyncOperation, getSyncOperationState } from "./sync/operation-state.js";
+import { beginSyncOperation, getSyncOperationState, type SyncProgressReporter, type SyncTransferReporter } from "./sync/operation-state.js";
+import { syncUploadBody, forEachSyncSidecar, syncRequestDeadline } from "./sync/transfer-progress.js";
 import { withSyncBidiMutationSettlement } from "./sync/bidi-mutation-settlement.js";
 import { createProfileSyncBaseline, getProfileSyncTarget, parseProfileSyncBaseline, profileContentHash, profilePreferencesSnapshot, profileHistoryCoverage, readProfileHistorySyncState } from "./sync/profile-state.js";
 import type { ProfilePreferencesSnapshot, ExtensionRepositoryEntry } from "../types.js";
@@ -200,7 +201,8 @@ export const syncService = {
       const selectedHistory = historySelected(sync, opts);
       assertActiveHistoryScope(sync, selectedHistory);
       const appliedHistory = new Map<string, HistoryCoverage>();
-      const fetched = await fetchSyncConfig(sync, signal);
+      lease.stage("downloading", { scope: "config" });
+      const fetched = await fetchSyncConfig(sync, signal, lease);
       if (!fetched.ok) {
         finalResult = operation.failure(new Error(fetched.message));
         return finalResult;
@@ -257,8 +259,10 @@ export const syncService = {
       let aggregateLocalStorageBytes = 0;
       let aggregatePreferenceBytes = 0;
       let archiveCount = 0;
+      let preparedProfileCount = 0;
       // Prepare every selected artifact before the first profile/queue write.
       for (const dirId of selectedRemoteProfiles) {
+        lease.stage("preparing", { scope: "profiles", itemId: dirId, completedItems: preparedProfileCount, totalItems: selectedRemoteProfiles.size });
         assertSyncNotAborted(signal);
         assertSelectedProfileUnchanged(profileSnapshot, getConfig().browserProfiles || {}, dirId);
         assertProfilePathsSafe(dirId);
@@ -295,9 +299,11 @@ export const syncService = {
           aggregateHistoryBytes += artifact.members.reduce((n, member) => n + member.bytes, 0);
           if (aggregateHistoryBytes > MAX_SYNC_HISTORY_BYTES) throw new Error("Aggregate history byte limit exceeded");
           assertSyncRole("pull"); assertActiveHistoryScope(sync, true);
-          const body = await s3Get(sync, artifact.object.key, signal, MAX_HISTORY_OBJECT_BYTES);
+          lease.stage("downloading", { scope: "history", itemId: dirId, completedItems: preparedProfileCount, totalItems: selectedRemoteProfiles.size });
+          const body = await s3Get(sync, artifact.object.key, signal, MAX_HISTORY_OBJECT_BYTES, lease);
           assertSyncRole("pull"); assertActiveHistoryScope(sync, true);
           if (!body) throw new Error(`History object unavailable: ${dirId}`);
+          lease.stage("verifying");
           item.history = await prepareHistoryArtifact(body, artifact, stageRoot, signal);
           assertSyncRole("pull"); assertActiveHistoryScope(sync, true);
           assertSelectedProfileUnchanged(profileSnapshot, getConfig().browserProfiles || {}, dirId);
@@ -314,15 +320,18 @@ export const syncService = {
           }
         }
         prepared.set(dirId, item);
+        lease.progress({ scope: "profiles", itemId: dirId, completedItems: ++preparedProfileCount, totalItems: selectedRemoteProfiles.size });
       }
-      const preparedExtensions = await preparePullExtensions(sync, remoteConfig, stageRoot, signal, [2, 3].includes(payload.artifactVersion));
+      const preparedExtensions = await preparePullExtensions(sync, remoteConfig, stageRoot, signal, [2, 3].includes(payload.artifactVersion), lease);
       assertSyncNotAborted(signal);
       let importedCookies = 0;
       let queuedCookies = 0;
       let importedLs = 0;
       let importedPrefs = 0;
       lease.stage("applying");
+      let appliedProfileCount = 0;
       for (const [dirId, artifacts] of prepared) {
+        lease.progress({ scope: "profiles", itemId: dirId, completedItems: appliedProfileCount++, totalItems: prepared.size });
         assertSyncRole("pull");
         assertSelectedProfileUnchanged(profileSnapshot, getConfig().browserProfiles || {}, dirId);
         const release = acquireRestoreLock(dirId);
@@ -495,6 +504,8 @@ export const syncService = {
         }
       }
 
+      lease.progress({ scope: "profiles", completedItems: appliedProfileCount, totalItems: prepared.size });
+      lease.stage("finalizing", { scope: "config" });
       const proxyResolve = (id: string): MergeStrategy | null => resolutionFor(resolutions, "proxies", id);
       const accountResolve = (id: string): MergeStrategy | null =>
         resolutionFor(resolutions, "accounts", id.split("\u0000").join(" @ "));
@@ -780,7 +791,8 @@ async function pushFullProfileSnapshot(sync: SyncConfig, force: boolean, signal?
     const initial = cloneConfig(getConfig()), snapshot = sanitizeConfigForSync(initial), timestamp = Date.now();
     const ids = Object.keys(snapshot.browserProfiles || {});
     if (ids.length > MAX_SYNC_PROFILES) throw new Error("Too many profiles in complete snapshot");
-    const previous = await fetchSyncConfig(sync, signal);
+    lease.stage("downloading", { scope: "config" });
+    const previous = await fetchSyncConfig(sync, signal, lease);
     if (!previous.ok && !previous.message.startsWith("HTTP 404")) throw new Error("Cannot verify the previous remote snapshot");
     assertComparisonUnchanged(comparisonToken, sync, previous.ok ? previous.payload : null);
     const locks = await collectRemoteLocksBlockingPush(sync, signal, previous);
@@ -789,7 +801,9 @@ async function pushFullProfileSnapshot(sync: SyncConfig, force: boolean, signal?
     const preferences: Record<string, ProfilePreferencesSnapshot> = {};
     const captured: Array<{ id: string; body: Buffer; descriptor: import("./sync/full-profile-artifact.js").FullProfileArtifact }> = [];
     let total = 0;
+    let capturedCount = 0;
     for (const id of ids) {
+      lease.stage("preparing", { scope: "fullProfile", itemId: id, completedItems: capturedCount, totalItems: ids.length });
       releases.push(acquireRestoreLock(id));
       const guard = fullProfileReadGuard(id, () => {
         assertSyncRole("push", force); assertFullProfileScope(sync, opts?.history); assertSyncNotAborted(signal);
@@ -815,9 +829,13 @@ async function pushFullProfileSnapshot(sync: SyncConfig, force: boolean, signal?
       captured.push({ id, body: item.body, descriptor: item.descriptor });
       operation.add({ side: "remote", scope: "credentials", id, state: "preserved", required: false,
         count: item.credentials.databases.reduce((sum, db) => sum + db.fields, 0), code: "SOURCE_CREDENTIALS_VERIFIED" });
+      lease.progress({ scope: "fullProfile", itemId: id, completedItems: ++capturedCount, totalItems: ids.length });
     }
+    if (ids.some(id => historyEngine(snapshot.browserProfiles[id]) === "chromium")) operation.warnings.push("Re-downloadable Chromium components and caches are excluded; offline speech/translation models may need to download again after restore. Site storage, sessions and installed extensions are retained.");
     const extensions: FrozenExtensionSnapshot[] = [];
+    lease.stage("preparing", { scope: "extensions" });
     for (const entry of Object.values(initial.extensionRepository || {})) {
+      lease.progress({ scope: "extensions", itemId: entry.id });
       assertSyncRole("push", force); assertFullProfileScope(sync, opts?.history); assertSyncNotAborted(signal);
       if (extensions.length >= MAX_SYNC_EXTENSIONS) throw new Error("Too many extension packages");
       const capture = (await import("./extension-repository.js")).captureRepositoryExtensionForSync;
@@ -833,26 +851,33 @@ async function pushFullProfileSnapshot(sync: SyncConfig, force: boolean, signal?
       data: compressed.toString("base64"), fullProfiles: Object.fromEntries(captured.map(item => [item.id, item.descriptor])) };
     const body = Buffer.from(JSON.stringify(document));
     lease.stage("publishing");
+    let publishedCount = 0;
     const publishVerified = async (key: string, bytes: Buffer, scope: "fullProfile" | "extensions", id: string): Promise<void> => {
+      lease.stage("publishing", { scope, itemId: id, completedItems: publishedCount, totalItems: captured.length + extensions.length });
       assertSyncRole("push", force); assertFullProfileScope(sync, opts?.history); assertSyncNotAborted(signal);
       for (const guard of sourceGuards) guard();
-      const publication = await publishS3Object(sync, key, bytes, signal);
+      const publication = await publishS3Object(sync, key, bytes, signal, lease);
       operation.remoteCommit = publication.state === "accepted" ? "partial" : "unknown";
-      const readback = publication.state === "rejected" ? null : await s3Get(sync, key, signal, bytes.length);
+      lease.stage("verifying");
+      const readback = publication.state === "rejected" ? null : await s3Get(sync, key, signal, bytes.length, lease);
       assertSyncRole("push", force); assertFullProfileScope(sync, opts?.history); assertSyncNotAborted(signal);
       if (!readback?.equals(bytes)) throw fullProfileError("FULL_PROFILE_UPLOAD_UNCONFIRMED", "Complete migration object upload/readback was not confirmed; previous snapshot retained");
       for (const guard of sourceGuards) guard();
       operation.add({ side: "remote", scope, id, state: "uploaded", bytes: bytes.length });
+      lease.progress({ scope, itemId: id, completedItems: ++publishedCount, totalItems: captured.length + extensions.length });
     };
     for (const item of captured) await publishVerified(item.descriptor.key, item.body, "fullProfile", item.id);
     for (const extension of extensions) await publishVerified(extensionObjectKey(extension.entry), fs.readFileSync(extension.packagePath), "extensions", extension.entry.id);
     assertComparisonUnchanged(comparisonToken, sync, previous.ok ? previous.payload : null);
     for (const guard of sourceGuards) guard();
     assertSyncRole("push", force); assertFullProfileScope(sync, opts?.history); assertSyncNotAborted(signal);
-    await publishS3Object(sync, SYNC_CONFIG_KEY, body, signal); operation.remoteCommit = "unknown";
-    const observed = await fetchSyncConfig(sync, signal);
+    lease.stage("publishing", { scope: "config" });
+    await publishS3Object(sync, SYNC_CONFIG_KEY, body, signal, lease); operation.remoteCommit = "unknown";
+    lease.stage("verifying");
+    const observed = await fetchSyncConfig(sync, signal, lease);
     if (!observed.ok || stableStringify(observed.payload) !== stableStringify(document)) throw fullProfileError("REMOTE_COMMIT_UNCONFIRMED", "Complete snapshot publication could not be verified");
     operation.remoteCommit = "committed"; operation.add({ side: "remote", scope: "config", state: "uploaded", bytes: body.length });
+    lease.stage("finalizing", { scope: "baseline" });
     transact((draft: MgmtConfig) => {
       assertSyncRole("push", force); assertFullProfileScope(sync, opts?.history);
       for (const guard of sourceGuards) guard();
@@ -891,7 +916,8 @@ async function pullFullProfileSnapshot(sync: SyncConfig, signal?: AbortSignal, o
     if (opts?.allowRunningPartial) throw fullProfileError("FULL_PROFILE_STOP_REQUIRED", "Complete migration cannot be partially applied to a running profile");
     const { parseFullProfileArtifact, restorePreparedFullProfile } = await import("./sync/full-profile-artifact.js");
     const { prepareFullProfileTransfer, fullProfileProxyHash } = await import("./sync/full-profile-transfer.js");
-    const fetched = await fetchSyncConfig(sync, signal);
+    lease.stage("downloading", { scope: "config" });
+    const fetched = await fetchSyncConfig(sync, signal, lease);
     if (!fetched.ok) throw new Error(fetched.message);
     const payload = fetched.payload;
     if (payload.artifactVersion !== 4) throw fullProfileError("FULL_PROFILE_SNAPSHOT_REQUIRED", "The remote snapshot has no complete browser backup. Push a complete snapshot from the original machine first; nothing was restored");
@@ -925,13 +951,16 @@ async function pullFullProfileSnapshot(sync: SyncConfig, signal?: AbortSignal, o
       assertSelectedProfileUnchanged(initial.browserProfiles, getConfig().browserProfiles || {}, id); assertHistoryStopped(id);
       assertFullProfileCookieQueueEmpty(id);
     });
+    let downloadedCount = 0;
     for (const id of selected) {
+      lease.stage("downloading", { scope: "fullProfile", itemId: id, completedItems: downloadedCount, totalItems: selected.size });
       const descriptor = descriptors.get(id)!, guard = guardFor(id); guard();
       total += descriptor.size;
       if (total > 1024 * 1024 * 1024) throw new Error("Complete migration aggregate byte limit exceeded");
-      const body = await s3Get(sync, descriptor.key, signal, descriptor.size);
+      const body = await s3Get(sync, descriptor.key, signal, descriptor.size, lease);
       if (!body) throw fullProfileError("FULL_PROFILE_OBJECT_UNAVAILABLE", "Complete browser data object is unavailable; nothing was restored");
       guard();
+      lease.stage("verifying");
       const value = await prepareFullProfileTransfer({ body, descriptor, stagingDir: root, passphrase,
         dirId: id, engine: descriptor.engine, snapshotId: payload.snapshotId, receiverPlatform: process.platform,
         profileHash: profileContentHash(remote.browserProfiles[id], profilePreferencesSnapshot(null)), guard, signal });
@@ -946,10 +975,13 @@ async function pullFullProfileSnapshot(sync: SyncConfig, signal?: AbortSignal, o
         credentialProxyNames.add(proxy.name);
       }
       prepared.push({ id, value });
+      lease.progress({ scope: "fullProfile", itemId: id, completedItems: ++downloadedCount, totalItems: selected.size });
     }
-    const extensions = await preparePullExtensions(sync, remote, root, signal, true);
+    const extensions = await preparePullExtensions(sync, remote, root, signal, true, lease);
     assertSyncRole("pull"); assertFullProfileScope(sync, opts?.history); assertSyncNotAborted(signal);
+    lease.stage("applying", { scope: "extensions" });
     for (const extension of extensions) {
+      lease.progress({ scope: "extensions", itemId: extension.id });
       const applied = await restoreSyncedExtensionPackage(extension.id, extension.packagePath, extension.remoteEntry, signal);
       operation.add({ scope: "extensions", id: extension.id, state: "applied" });
       for (const warning of applied.repositoryCommit?.cleanupWarnings || []) operation.warnings.push(warning.message);
@@ -957,7 +989,9 @@ async function pullFullProfileSnapshot(sync: SyncConfig, signal?: AbortSignal, o
     lease.stage("applying");
     confirmFullProfileConfigCommitted();
     const preferenceHashes: Record<string, string> = {}, preferenceIds = new Set<string>();
+    let appliedCount = 0;
     for (const item of prepared) {
+      lease.progress({ scope: "fullProfile", itemId: item.id, completedItems: appliedCount, totalItems: prepared.length });
       const guard = guardFor(item.id); guard();
       const ticket = beginFullProfileRecovery({ dirId: item.id, operationId: operation.operationId, stagingDir: root });
       pendingRecovery.add(ticket);
@@ -975,7 +1009,9 @@ async function pullFullProfileSnapshot(sync: SyncConfig, signal?: AbortSignal, o
       if (applied.backupDir) operation.warnings.push(`Previous complete profile retained: ${applied.backupDir}`);
       const raw = capturePreferences(item.id);
       if (raw !== null) { preferenceIds.add(item.id); preferenceHashes[item.id] = raw.toString("base64"); }
+      lease.progress({ scope: "fullProfile", itemId: item.id, completedItems: ++appliedCount, totalItems: prepared.length });
     }
+    lease.stage("finalizing", { scope: "config" });
     configBeforeCommit = getConfig();
     transact((draft: MgmtConfig) => {
       assertSyncRole("pull"); assertFullProfileScope(sync, opts?.history);
@@ -1139,7 +1175,8 @@ async function pushFrozenSnapshot(sync: SyncConfig, force: boolean, signal?: Abo
     const targetId = getProfileSyncTarget(sync);
     const ids = Object.keys(snapshot.browserProfiles || {});
     if (ids.length > MAX_SYNC_PROFILES) throw new Error("Too many profiles in sync snapshot");
-    const fetched = await fetchSyncConfig(sync, signal);
+    lease.stage("downloading", { scope: "config" });
+    const fetched = await fetchSyncConfig(sync, signal, lease);
     if (!fetched.ok && !fetched.message.startsWith("HTTP 404")) throw new Error(`Cannot verify the previous remote snapshot: ${fetched.message}`);
     const previous = fetched.ok ? fetched.payload : {};
     if (previous.artifactVersion === 4) throw fullProfileError("FULL_PROFILE_DOWNGRADE_BLOCKED", "The remote contains a complete browser backup; limited synchronization must not replace it. Enable complete migration first");
@@ -1166,7 +1203,9 @@ async function pushFrozenSnapshot(sync: SyncConfig, force: boolean, signal?: Abo
     let cookieCount = 0;
     let preferenceBytes = 0;
     let localStorageBytes = 0;
+    let capturedCount = 0;
     for (const id of ids) {
+      lease.stage("preparing", { scope: "profiles", itemId: id, completedItems: capturedCount++, totalItems: ids.length });
       assertSyncNotAborted(signal);
       const release = acquireRestoreLock(id);
       try {
@@ -1268,7 +1307,9 @@ async function pushFrozenSnapshot(sync: SyncConfig, force: boolean, signal?: Abo
               assertSyncRole("push", force); assertActiveHistoryScope(sync, true);
               historyBytes += old.artifact.members.reduce((n, member) => n + member.bytes, 0);
               if (historyBytes > MAX_SYNC_HISTORY_BYTES) throw new Error("Aggregate history byte limit exceeded");
-              const body = await s3Get(sync, old.artifact.object.key, signal, MAX_HISTORY_OBJECT_BYTES);
+              lease.stage("downloading", { scope: "history", itemId: id });
+              const body = await s3Get(sync, old.artifact.object.key, signal, MAX_HISTORY_OBJECT_BYTES, lease);
+              lease.stage("preparing");
               assertSyncRole("push", force); assertActiveHistoryScope(sync, true);
               if (!body) throw new Error("Cannot verify the previous history object; previous remote envelope retained");
               await prepareHistoryArtifact(body, old.artifact, stageRoot, signal);
@@ -1287,11 +1328,14 @@ async function pushFrozenSnapshot(sync: SyncConfig, force: boolean, signal?: Abo
         if (captureError) operation.warnings.push(`History for ${id} was not freshly captured: ${(captureError as Error).message}; ${coverage.state === "preserved" ? "previous verified object preserved" : "no verified history snapshot available"}.`);
       } finally { release(); }
     }
+    lease.progress({ scope: "profiles", completedItems: capturedCount, totalItems: ids.length });
     const extensions: FrozenExtensionSnapshot[] = [];
     const entries = Object.values(initial.extensionRepository || {});
     if (entries.length > MAX_SYNC_EXTENSIONS) throw new Error("Too many extensions in sync snapshot");
     let packageBytes = 0;
+    lease.stage("preparing", { scope: "extensions" });
     for (const entry of entries) {
+      lease.progress({ scope: "extensions", itemId: entry.id });
       assertSyncNotAborted(signal);
       const capture = (await import("./extension-repository.js")).captureRepositoryExtensionForSync;
       const frozen = await capture(entry, path.join(stageRoot, `extension-snapshot-${randomUUID()}`), signal);
@@ -1313,7 +1357,8 @@ async function pushFrozenSnapshot(sync: SyncConfig, force: boolean, signal?: Abo
     lease.stage("publishing");
     for (const object of historyObjects) {
       assertSyncRole("push", force); assertActiveHistoryScope(sync, true); assertSyncNotAborted(signal);
-      const publication = await publishS3Object(sync, object.artifact.object.key, object.body, signal);
+      lease.stage("publishing", { scope: "history", itemId: object.id });
+      const publication = await publishS3Object(sync, object.artifact.object.key, object.body, signal, lease);
       // Even a non-2xx response follows dispatch, not positive proof of no
       // object-side effects. Never mark such a history failure retry-safe.
       operation.remoteCommit = publication.state === "accepted" ? "partial" : "unknown";
@@ -1322,7 +1367,8 @@ async function pushFrozenSnapshot(sync: SyncConfig, force: boolean, signal?: Abo
       operation.add(pendingItem); uploadedHistoryItems.set(object.id, pendingItem);
       assertSyncNotAborted(signal); assertSyncRole("push", force); assertActiveHistoryScope(sync, true);
       if (publication.state === "rejected") throw Object.assign(new Error(`History object upload rejected: ${object.id}`), { code: "HISTORY_OBJECT_UNCONFIRMED" });
-      const readback = await s3Get(sync, object.artifact.object.key, signal, MAX_HISTORY_OBJECT_BYTES);
+      lease.stage("verifying");
+      const readback = await s3Get(sync, object.artifact.object.key, signal, MAX_HISTORY_OBJECT_BYTES, lease);
       const item = uploadedHistoryItems.get(object.id)!;
       if (readback?.equals(object.body)) {
         operation.remoteCommit = "partial"; item.state = "uploaded"; item.code = "HISTORY_OBJECT_ONLY";
@@ -1334,19 +1380,23 @@ async function pushFrozenSnapshot(sync: SyncConfig, force: boolean, signal?: Abo
     for (const extension of extensions) {
       const pkg = fs.readFileSync(extension.packagePath);
       const key = extensionObjectKey(extension.entry);
-      const publication = await publishS3Object(sync, key, pkg, signal);
+      lease.stage("publishing", { scope: "extensions", itemId: extension.entry.id });
+      const publication = await publishS3Object(sync, key, pkg, signal, lease);
       assertSyncNotAborted(signal);
       if (publication.state !== "accepted") throw new Error(`Extension package was not confirmed uploaded: ${extension.entry.id} (${publication.message})`);
-      const readback = await s3Get(sync, key, signal);
+      lease.stage("verifying");
+      const readback = await s3Get(sync, key, signal, MAX_EXTENSION_PACKAGE_BYTES, lease);
       if (!readback || !readback.equals(pkg)) throw new Error(`Extension package remote readback mismatch: ${extension.entry.id}`);
       operation.add({ side: "remote", scope: "extensions", id: extension.entry.id, state: "uploaded", bytes: pkg.length });
     }
     assertSyncNotAborted(signal);
     assertSyncRole("push", force); assertActiveHistoryScope(sync, selectedHistory);
-    const publication = await publishS3Object(sync, SYNC_CONFIG_KEY, body, signal);
+    lease.stage("publishing", { scope: "config" });
+    const publication = await publishS3Object(sync, SYNC_CONFIG_KEY, body, signal, lease);
     operation.remoteCommit = publication.state === "accepted" ? "committed" : "unknown";
     assertSyncNotAborted(signal);
-    const observed = await fetchSyncConfig(sync, signal);
+    lease.stage("verifying");
+    const observed = await fetchSyncConfig(sync, signal, lease);
     if (!observed.ok || stableStringify(observed.payload) !== stableStringify(document)) {
       throw Object.assign(new Error(`Remote publication could not be verified${observed.ok ? ": snapshot differs" : ": " + observed.message}`), { code: "REMOTE_COMMIT_UNCONFIRMED" });
     }
@@ -1404,15 +1454,18 @@ async function pushFrozenSnapshot(sync: SyncConfig, force: boolean, signal?: Abo
     for (const [id, inventory] of Object.entries(extensionInventories)) {
       sidecars.push({ key: `extensions-${id}.json`, body: Buffer.from(JSON.stringify({ dirId: id, profileName: getSyncProfileName(snapshot, id), timestamp, extensions: inventory })) });
     }
-    for (const sidecar of sidecars) {
+    let completedSidecars = 0;
+    lease.progress({ scope: "sidecar", completedItems: 0, totalItems: sidecars.length });
+    await forEachSyncSidecar(sidecars, async (sidecar) => {
       assertSyncNotAborted(signal);
       const written = await publishS3Object(sync, sidecar.key, sidecar.body, signal);
       const readback = written.state !== "rejected" && !signal?.aborted ? await s3Get(sync, sidecar.key, signal) : null;
       const verified = readback !== null && readback.equals(sidecar.body);
       operation.add({ side: "remote", scope: "sidecar", id: sidecar.key, state: verified ? "uploaded" : written.state === "rejected" || readback !== null ? "failed" : "unknown", code: verified ? undefined : "COMPAT_SIDECAR_UPLOAD_FAILED" });
       if (!verified) operation.warnings.push(`Authoritative snapshot is published; compatibility sidecar ${sidecar.key} was not confirmed by byte readback.`);
+      lease.progress({ scope: "sidecar", completedItems: ++completedSidecars, totalItems: sidecars.length });
       assertSyncNotAborted(signal);
-    }
+    });
     result = operation.complete(`Configuration published: ${ids.length} profile configuration(s), ${extensions.length} extension package(s). ${browserBackupIncomplete ? "Browser backup incomplete; running, preserved or unavailable data was not freshly backed up." : "Cookie/LocalStorage coverage is recorded separately; this is not runtime fingerprint proof."}`, body.length + packageBytes);
     if (browserBackupIncomplete) {
       result.browserBackupIncomplete = true;
@@ -1445,34 +1498,41 @@ function createPullStagingRoot(): string {
   return fs.mkdtempSync(path.join(root, ".sync-pull-stage-"));
 }
 
-async function preparePullExtensions(sync: SyncConfig, remoteConfig: MgmtConfig, stageRoot: string, signal?: AbortSignal, addressed = false): Promise<PreparedPullExtension[]> {
+async function preparePullExtensions(sync: SyncConfig, remoteConfig: MgmtConfig, stageRoot: string, signal?: AbortSignal, addressed = false, progress?: SyncProgressReporter): Promise<PreparedPullExtension[]> {
   const remoteEntries = Object.entries(remoteConfig.extensionRepository || {});
   if (remoteEntries.length > MAX_SYNC_EXTENSIONS) throw new Error("Remote config contains too many extensions");
   const localEntries = new Map(listExtensionRepository().map((entry) => [entry.id, entry]));
   const prepared: PreparedPullExtension[] = [];
   let bytes = 0;
-  for (const [id, remoteEntry] of remoteEntries) {
+  progress?.stage("preparing", { scope: "extensions", completedItems: 0, totalItems: remoteEntries.length });
+  for (const [index, [id, remoteEntry]] of remoteEntries.entries()) {
     assertSyncNotAborted(signal);
     if (!/^[a-zA-Z0-9_-]{1,96}$/.test(id)) throw new Error("Invalid remote extension ID");
     if (!EXTENSION_HASH_RE.test(remoteEntry.packageHash || "") || !EXTENSION_HASH_RE.test(remoteEntry.manifestHash || "")) {
       throw new Error("Remote extension is missing verified hashes");
     }
     const local = localEntries.get(id);
-    if (local?.packageHash === remoteEntry.packageHash && local.manifestHash === remoteEntry.manifestHash) continue;
+    if (local?.packageHash === remoteEntry.packageHash && local.manifestHash === remoteEntry.manifestHash) {
+      progress?.progress({ scope: "extensions", itemId: id, completedItems: index + 1, totalItems: remoteEntries.length });
+      continue;
+    }
     const suffix = remoteEntry.source === "chrome-web-store" ? "crx" : "zip";
-    let pkg = await s3Get(sync, extensionObjectKey({ ...remoteEntry, id }, addressed), signal);
-    if (!pkg && !addressed) pkg = await s3Get(sync, `extension-${id}.${suffix === "zip" ? "crx" : "zip"}`, signal);
+    progress?.stage("downloading", { scope: "extensions", itemId: id, completedItems: index, totalItems: remoteEntries.length });
+    let pkg = await s3Get(sync, extensionObjectKey({ ...remoteEntry, id }, addressed), signal, MAX_EXTENSION_PACKAGE_BYTES, progress);
+    if (!pkg && !addressed) pkg = await s3Get(sync, `extension-${id}.${suffix === "zip" ? "crx" : "zip"}`, signal, MAX_EXTENSION_PACKAGE_BYTES, progress);
     if (!pkg) throw new Error(`Remote extension package is unavailable: ${id}`);
     bytes += pkg.length;
     if (bytes > MAX_PULL_EXTENSION_BYTES) throw new Error("Remote extension packages are too large");
     const packagePath = path.join(stageRoot, `package-${randomUUID()}.${suffix}`);
     fs.writeFileSync(packagePath, pkg, { flag: "wx", mode: 0o600 });
     const validationRoot = path.join(stageRoot, `extension-validation-${randomUUID()}`);
+    progress?.stage("verifying");
     const verified = prepareSyncedExtensionPackage(id, packagePath, remoteEntry, validationRoot, signal);
     fs.rmSync(verified.stagedDir, { recursive: true });
     if (verified.archivePath !== verified.packagePath) fs.rmSync(verified.archivePath);
     fs.rmSync(packagePath);
     prepared.push({ id, remoteEntry, packagePath: verified.packagePath });
+    progress?.progress({ scope: "extensions", itemId: id, completedItems: index + 1, totalItems: remoteEntries.length });
   }
   return prepared;
 }
@@ -2285,10 +2345,10 @@ async function collectRemoteLocksBlockingPush(sync: ReturnType<typeof getSyncCon
   return out;
 }
 
-async function fetchSyncConfig(sync: ReturnType<typeof getSyncConfig>, signal?: AbortSignal): Promise<{ ok: true; payload: any } | { ok: false; message: string }> {
-  const payload = await fetchSyncPayload(sync, SYNC_CONFIG_KEY, false, signal);
+async function fetchSyncConfig(sync: ReturnType<typeof getSyncConfig>, signal?: AbortSignal, progress?: SyncProgressReporter): Promise<{ ok: true; payload: any } | { ok: false; message: string }> {
+  const payload = await fetchSyncPayload(sync, SYNC_CONFIG_KEY, false, signal, progress);
   if (payload.ok || !payload.message.startsWith("HTTP 404")) return payload;
-  return fetchSyncPayload(sync, LEGACY_SYNC_CONFIG_KEY, false, signal);
+  return fetchSyncPayload(sync, LEGACY_SYNC_CONFIG_KEY, false, signal, progress);
 }
 
 async function fetchRemoteCookiesForPush(sync: ReturnType<typeof getSyncConfig>, signal?: AbortSignal): Promise<Record<string, string>> {
@@ -2311,7 +2371,7 @@ async function fetchRemoteCookiesForPush(sync: ReturnType<typeof getSyncConfig>,
   return merged;
 }
 
-async function fetchSyncPayload(sync: ReturnType<typeof getSyncConfig>, key: string, cookiesOnly = false, signal?: AbortSignal): Promise<{ ok: true; payload: any } | { ok: false; message: string }> {
+async function fetchSyncPayload(sync: ReturnType<typeof getSyncConfig>, key: string, cookiesOnly = false, signal?: AbortSignal, progress?: SyncProgressReporter): Promise<{ ok: true; payload: any } | { ok: false; message: string }> {
   assertSyncNotAborted(signal);
   const objPath = `/${sync.bucket}/${key}`;
   const url = `${sync.endpoint}${objPath}`;
@@ -2322,41 +2382,64 @@ async function fetchSyncPayload(sync: ReturnType<typeof getSyncConfig>, key: str
     accessKey: sync.accessKey,
     secretKey: decryptSecretOr(sync.secretKey),
   });
-  const resp = await fetch(url, { method: "GET", headers, signal: combineAbortSignals(signal, 30000) });
-  if (!resp.ok) {
-    const detail = await readS3ErrorDetail(resp);
-    return { ok: false, message: `HTTP ${resp.status}${detail ? `: ${detail}` : ""}` };
-  }
-  const length = Number(resp.headers.get("content-length") || "0");
-  if (length > MAX_REMOTE_PAYLOAD_JSON_BYTES) return { ok: false, message: "Remote config is too large" };
-  const payload = JSON.parse(await readResponseTextLimited(resp, MAX_REMOTE_PAYLOAD_JSON_BYTES, signal));
-  validateSyncPayloadShape(payload, cookiesOnly);
-  return { ok: true, payload };
+  const transfer = progress?.transfer("download");
+  const deadline = syncRequestDeadline(signal);
+  try {
+    const resp = await fetch(url, { method: "GET", headers, signal: deadline.signal });
+    if (!resp.ok) {
+      const detail = await readS3ErrorDetail(resp);
+      return { ok: false, message: `HTTP ${resp.status}${detail ? `: ${detail}` : ""}` };
+    }
+    const length = Number(resp.headers.get("content-length") || "0");
+    if (length > MAX_REMOTE_PAYLOAD_JSON_BYTES) {
+      await resp.body?.cancel();
+      return { ok: false, message: "Remote config is too large" };
+    }
+    const payload = JSON.parse(await readResponseTextLimited(resp, MAX_REMOTE_PAYLOAD_JSON_BYTES, deadline.signal, transfer, deadline.touch));
+    validateSyncPayloadShape(payload, cookiesOnly);
+    return { ok: true, payload };
+  } finally { deadline.dispose(); }
 }
 
-async function readResponseBytesLimited(resp: Response, maxBytes: number, tooLargeMessage: string, signal?: AbortSignal): Promise<Buffer> {
+function responseTransferLength(resp: Response): number | undefined {
+  // fetch decodes Content-Encoding, whereas Content-Length describes wire bytes.
+  if (resp.headers.get("content-encoding") && resp.headers.get("content-encoding") !== "identity") return undefined;
+  const header = resp.headers.get("content-length");
+  const length = header === null ? NaN : Number(header);
+  return Number.isSafeInteger(length) && length >= 0 ? length : undefined;
+}
+
+async function readResponseBytesLimited(resp: Response, maxBytes: number, tooLargeMessage: string, signal?: AbortSignal, transfer?: SyncTransferReporter, onBytes?: () => void): Promise<Buffer> {
   const body = resp.body;
   if (!body) throw new Error("Remote response is not stream-readable");
   const reader = body.getReader();
   const chunks: Uint8Array[] = [];
   let total = 0;
-  while (true) {
-    assertSyncNotAborted(signal);
-    const { done, value } = await reader.read();
-    if (done) break;
-    if (!value) continue;
-    total += value.byteLength;
-    if (total > maxBytes) {
-      try { await reader.cancel(); } catch (e) { console.error("[sync] failed to cancel oversized response reader:", e); }
-      throw new Error(tooLargeMessage);
+  const expected = responseTransferLength(resp);
+  transfer?.update(0, expected);
+  try {
+    while (true) {
+      assertSyncNotAborted(signal);
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+      total += value.byteLength;
+      if (total > maxBytes) throw new Error(tooLargeMessage);
+      chunks.push(value);
+      onBytes?.();
+      transfer?.update(total, expected);
     }
-    chunks.push(value);
-  }
-  return Buffer.concat(chunks, total);
+    assertSyncNotAborted(signal);
+    transfer?.finish();
+    return Buffer.concat(chunks, total);
+  } catch (error) {
+    try { await reader.cancel(); } catch (cancelError) { console.error("[sync] failed to cancel response reader:", cancelError); }
+    throw error;
+  } finally { reader.releaseLock(); }
 }
 
-async function readResponseTextLimited(resp: Response, maxBytes: number, signal?: AbortSignal): Promise<string> {
-  return (await readResponseBytesLimited(resp, maxBytes, "Remote config is too large", signal)).toString("utf-8");
+async function readResponseTextLimited(resp: Response, maxBytes: number, signal?: AbortSignal, transfer?: SyncTransferReporter, onBytes?: () => void): Promise<string> {
+  return (await readResponseBytesLimited(resp, maxBytes, "Remote config is too large", signal, transfer, onBytes)).toString("utf8");
 }
 
 function validateSyncPayloadShape(payload: any, cookiesOnly = false): void {
@@ -2405,18 +2488,26 @@ function validateArtifactProfileIds(payload: any, allowedProfileIds: Set<string>
 
 type S3Publication = { state: "accepted" | "rejected" | "unknown"; message?: string };
 
-async function publishS3Object(sync: ReturnType<typeof getSyncConfig>, key: string, body: Buffer, signal?: AbortSignal): Promise<S3Publication> {
+async function publishS3Object(sync: ReturnType<typeof getSyncConfig>, key: string, body: Buffer, signal?: AbortSignal, progress?: SyncProgressReporter): Promise<S3Publication> {
   assertSyncNotAborted(signal);
   const objPath = `/${sync.bucket}/${key}`;
   const headers = signS3Request({ method: "PUT", endpoint: sync.endpoint, objectPath: objPath, body, accessKey: sync.accessKey, secretKey: decryptSecretOr(sync.secretKey) });
+  const transfer = progress?.transfer("upload", body.length);
+  const deadline = syncRequestDeadline(signal);
+  const upload = syncUploadBody(body, transfer, deadline.signal, deadline.touch);
+  headers["content-length"] = String(body.length);
   try {
-    const response = await fetch(`${sync.endpoint}${objPath}`, { method: "PUT", headers, body: body as any, signal: combineAbortSignals(signal, 30000) });
+    const pending = fetch(`${sync.endpoint}${objPath}`, { method: "PUT", headers, ...upload, signal: deadline.signal });
+    if (Buffer.isBuffer(upload.body)) { transfer?.update(body.length); transfer?.waiting(); }
+    const response = await pending;
     if (!response.ok) return { state: "rejected", message: `HTTP ${response.status}: ${await readS3ErrorDetail(response)}` };
+    await response.body?.cancel();
+    transfer?.finish();
     return { state: "accepted" };
   } catch (error) {
     // A lost response/abort after dispatch does not prove the object stayed old.
     return { state: "unknown", message: signal?.aborted ? "Upload interrupted after dispatch" : (error as Error).message };
-  }
+  } finally { deadline.dispose(); }
 }
 
 async function s3Put(sync: ReturnType<typeof getSyncConfig>, key: string, body: Buffer, signal?: AbortSignal): Promise<boolean> {
@@ -2427,7 +2518,7 @@ async function s3Put(sync: ReturnType<typeof getSyncConfig>, key: string, body: 
 }
 
 /** Fetch an object from S3 as a Buffer (for extension package pull). Returns null on 404/error. */
-async function s3Get(sync: ReturnType<typeof getSyncConfig>, key: string, signal?: AbortSignal, maxBytes = MAX_EXTENSION_PACKAGE_BYTES): Promise<Buffer | null> {
+async function s3Get(sync: ReturnType<typeof getSyncConfig>, key: string, signal?: AbortSignal, maxBytes = MAX_EXTENSION_PACKAGE_BYTES, progress?: SyncProgressReporter): Promise<Buffer | null> {
   assertSyncNotAborted(signal);
   const objPath = `/${sync.bucket}/${key}`;
   const url = `${sync.endpoint}${objPath}`;
@@ -2438,35 +2529,34 @@ async function s3Get(sync: ReturnType<typeof getSyncConfig>, key: string, signal
     accessKey: sync.accessKey,
     secretKey: decryptSecretOr(sync.secretKey),
   });
+  const transfer = progress?.transfer("download");
+  const deadline = syncRequestDeadline(signal);
   try {
-    const resp = await fetch(url, { method: "GET", headers: h, signal: combineAbortSignals(signal, 60000) });
+    const resp = await fetch(url, { method: "GET", headers: h, signal: deadline.signal });
     if (!resp.ok) {
       if (resp.status !== 404) {
         const detail = await readS3ErrorDetail(resp);
         console.error(`[sync] GET ${key} failed: HTTP ${resp.status} ${detail}`);
-      }
+      } else await resp.body?.cancel();
       return null;
     }
     const length = Number(resp.headers.get("content-length") || "0");
-    if (length > maxBytes) throw new Error("Remote artifact object is too large");
+    if (length > maxBytes) {
+      await resp.body?.cancel();
+      throw new Error("Remote artifact object is too large");
+    }
     assertSyncNotAborted(signal);
-    return await readResponseBytesLimited(resp, maxBytes, "Remote artifact object is too large", signal);
+    return await readResponseBytesLimited(resp, maxBytes, "Remote artifact object is too large", deadline.signal, transfer, deadline.touch);
   } catch (e: any) {
     if (signal?.aborted) throw e;
     console.error(`[sync] GET ${key} error:`, e?.message || String(e));
     return null;
-  }
+  } finally { deadline.dispose(); }
 }
 
 function combineAbortSignals(parent: AbortSignal | undefined, timeoutMs: number): AbortSignal {
   const timeout = AbortSignal.timeout(timeoutMs);
-  if (!parent) return timeout;
-  if (parent.aborted) return parent;
-  const controller = new AbortController();
-  const abort = () => controller.abort();
-  parent.addEventListener("abort", abort, { once: true });
-  timeout.addEventListener("abort", abort, { once: true });
-  return controller.signal;
+  return parent ? AbortSignal.any([parent, timeout]) : timeout;
 }
 
 /** Best-effort extraction of an S3 error message body for diagnostics (size-capped). */

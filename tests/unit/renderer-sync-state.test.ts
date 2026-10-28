@@ -131,6 +131,8 @@ function harness(locale?: "en-US" | "zh-CN") {
     listeners.get("sync:state-changed")?.(event);
   };
   return { ab, api, elements, buttons, entries, order, document, window, emit,
+    emitProgress: (progress: any) => listeners.get("sync:progress")?.(progress),
+    renderedProgress: () => elements["sync-operation-state"]?.innerHTML || "",
     loadModule: (name: "proxies" | "extensions") => vm.runInNewContext(fs.readFileSync(path.join(ROOT, `src/renderer/js/app/${name}.js`), "utf8"), context, { filename: `${name}.js` }),
     status: () => currentStatus, setStatus: (value: any) => { currentStatus = value; },
     setPreview: (value: any) => { currentPreview = value; },
@@ -141,7 +143,200 @@ function harness(locale?: "en-US" | "zh-CN") {
 function event(phase: "started" | "completed", generation: number, kind = "pull", operationId = "service-operation") {
   return { phase, generation, kind, operationId, scopes: ["config", "profiles", "accounts", "proxies", "extensions"], ...(phase === "completed" ? { result: { success: true, outcome: "complete", localCommit: "committed", remoteCommit: "none" } } : {}) };
 }
+function progressEvent(sequence = 1, overrides: Record<string, any> = {}) {
+  return { generation: 1, operationId: "service-progress", kind: "push", stage: "publishing", startedAt: 1000,
+    progress: { sequence, updatedAt: 5000, scope: "profiles", itemId: "profile-a", completedItems: 1, totalItems: 4,
+      transfer: { direction: "upload", bytes: 524288, totalBytes: 1048576, startedAt: 1000, state: "transferring" } }, ...overrides };
+}
 afterEach(() => vi.useRealTimers());
+
+describe("owned sync progress rendering and races", () => {
+  const labels = {
+    "en-US": { stages: ["Preparing…", "Publishing…", "Downloading…", "Verifying…", "Applying…", "Finalizing…"],
+      count: "Profiles / objects: 1 / 4", item: "Current item: Profiles · profile-a", upload: "Current object upload", download: "Current object download",
+      rate: "Average rate: 128 KiB/s", elapsed: "Elapsed: 00:10", waiting: "Waiting for server confirmation", incomplete: "sync is not complete", objectComplete: "Current object transferred" },
+    "zh-CN": { stages: ["正在准备…", "正在发布…", "正在下载…", "正在校验…", "正在应用…", "正在收尾…"],
+      count: "配置／对象：1 / 4", item: "当前项目：浏览器配置 · profile-a", upload: "当前对象上传", download: "当前对象下载",
+      rate: "平均速率：128 KiB/s", elapsed: "已用时：00:10", waiting: "正在等待服务器确认", incomplete: "同步尚未完成", objectComplete: "当前对象传输完毕" },
+  } as const;
+  async function active(locale: "en-US" | "zh-CN" = "en-US", kind = "push") {
+    const h = harness(locale); h.emit(event("started", 1, kind, "service-progress")); await flush(); return h;
+  }
+  for (const locale of ["en-US", "zh-CN"] as const) {
+    it.each(["push", "pull"])(`${locale} %s shows current-object byte progress, item counts, rate, elapsed and ARIA without a global percentage`, async kind => {
+      vi.useFakeTimers(); vi.setSystemTime(11000);
+      const h = await active(locale, kind), svg = h.buttons.syncPush.querySelector("svg"), fixture = progressEvent();
+      fixture.kind = kind; fixture.stage = kind === "push" ? "publishing" : "downloading";
+      fixture.progress.transfer.direction = kind === "push" ? "upload" : "download";
+      h.emitProgress(fixture);
+      const body = h.renderedProgress(), text = labels[locale];
+      for (const label of [text.count, text.item, text.rate, text.elapsed, kind === "push" ? text.upload : text.download]) expect(body).toContain(label);
+      expect(body).toContain("512 KiB / 1 MiB"); expect(body).toContain('style="width:50%"');
+      expect(h.banner()).not.toContain("50%"); expect(h.banner()).not.toContain("25%");
+      expect(body).toContain('role="progressbar"'); expect(body).toContain('aria-valuenow="524288"'); expect(body).toContain('aria-valuemax="1048576"');
+      expect(body).toContain('aria-label="' + (kind === "push" ? text.upload : text.download) + '"');
+      expect(h.elements["sync-operation-state"].getAttribute("role")).toBe("status");
+      expect(h.elements["sync-operation-state"].getAttribute("aria-live")).toBe("polite");
+      expect(h.elements["tab-sync"].getAttribute("aria-busy")).toBe("true");
+      expect(h.buttons.syncPush.querySelector("svg")).toBe(svg);
+    });
+    it(`${locale} localizes all stages and clears stale transfer and item information at stage boundaries`, async () => {
+      const h = await active(locale); h.emitProgress(progressEvent());
+      const stages = ["preparing", "publishing", "downloading", "verifying", "applying", "finalizing"];
+      for (let i = 0; i < stages.length; i++) {
+        h.emitProgress(progressEvent(i + 2, { stage: stages[i], progress: { sequence: i + 2, updatedAt: 6000 + i } }));
+        const body = h.renderedProgress(); expect(body).toContain(labels[locale].stages[i]);
+        expect(body).toContain("is-indeterminate"); expect(body).not.toContain("aria-valuenow"); expect(body).not.toContain("aria-valuemax");
+        expect(body).not.toContain("profile-a"); expect(body).not.toContain("512 KiB"); expect(body).not.toContain(labels[locale].upload);
+      }
+    });
+    it(`${locale} distinguishes uploaded bytes and server confirmation from actual sync completion`, async () => {
+      const h = await active(locale), fixture = progressEvent();
+      fixture.progress.transfer.bytes = fixture.progress.transfer.totalBytes; fixture.progress.transfer.state = "waiting-response";
+      h.emitProgress(fixture);
+      expect(h.banner()).toContain(labels[locale].waiting); expect(h.banner()).toContain(labels[locale].incomplete);
+      expect(h.renderedProgress()).toContain('style="width:100%"'); expect(h.renderedResult()).toBe("");
+      for (const button of [h.buttons.syncPush, h.buttons.syncPull, h.buttons.syncSave]) expect(button.disabled).toBe(true);
+      fixture.progress.sequence++; fixture.progress.transfer.state = "complete"; h.emitProgress(fixture);
+      expect(h.banner()).toContain(labels[locale].objectComplete); expect(h.banner()).toContain(labels[locale].incomplete);
+      expect(h.renderedResult()).toBe(""); expect(h.buttons.syncPush.disabled).toBe(true);
+      h.emit(event("completed", 2, "push", "service-progress")); await flush();
+      expect(h.banner()).toBe(""); expect(h.buttons.syncPush.disabled).toBe(false); expect(h.renderedResult()).not.toBe("");
+      h.emitProgress(progressEvent(99, { generation: 2 })); expect(h.banner()).toBe("");
+    });
+  }
+  it("uses indeterminate progress for unknown byte totals, keeps known counts, and escapes item identifiers", async () => {
+    const h = await active(), fixture = progressEvent();
+    delete (fixture.progress.transfer as any).totalBytes;
+    fixture.progress.itemId = '<img src=x onerror="fixture">'; h.emitProgress(fixture);
+    expect(h.renderedProgress()).toContain("is-indeterminate"); expect(h.renderedProgress()).not.toContain("aria-valuenow");
+    expect(h.renderedProgress()).toContain("512 KiB"); expect(h.renderedProgress()).toContain(labels["en-US"].count);
+    expect(h.renderedProgress()).toContain("&lt;img"); expect(h.renderedProgress()).not.toContain("<img");
+    fixture.progress.sequence++; fixture.progress.updatedAt = fixture.progress.transfer.startedAt;
+    h.emitProgress(fixture); expect(h.banner()).toContain("Rate not yet available");
+    expect(h.banner()).not.toMatch(/Infinity|NaN/);
+  });
+  it("progress chunks do not invalidate comparisons or pending reads, rebuild buttons, refresh surfaces, or request status/previews", async () => {
+    const h = await active(); await h.ab.loadSyncDiff(); h.entries()[0].value = "remote";
+    h.ab.invalidateProxiesForSync = vi.fn(); h.ab.invalidateExtensionsForSync = vi.fn();
+    const pending = deferred<any>(); h.api.sync.preview.mockReturnValueOnce(pending.promise);
+    const preview = h.ab.loadSyncPreview(); await flush();
+    const requests = [h.api.sync.status, h.api.sync.preview, h.api.sync.previewDiff, h.api.team.status, h.api.app.reloadConfig,
+      h.ab.loadProfiles, h.ab.loadAccountsTab, h.ab.loadProxies, h.ab.loadExtensionsTab, h.ab.invalidateProfilesForSync, h.ab.invalidateAccountsForSync,
+      h.ab.invalidateProxiesForSync, h.ab.invalidateExtensionsForSync];
+    const counts = requests.map(request => request.mock.calls.length), entries = h.entries().slice(), nodes = h.buttons.syncPush.childNodes.slice();
+    for (let sequence = 1; sequence <= 40; sequence++) h.emitProgress(progressEvent(sequence));
+    await flush(); expect(requests.map(request => request.mock.calls.length)).toEqual(counts);
+    expect(h.entries()).toEqual(entries); expect(h.entries()[0].value).toBe("remote"); expect(h.buttons.syncPush.childNodes).toEqual(nodes);
+    pending.resolve({ configured: true, profiles: 1, runningProfiles: [], message: "owned pending preview survived progress" });
+    await preview; await flush(); expect(h.elements["sync-preview-message"].textContent).toContain("owned pending preview survived progress");
+  });
+  it("ignores duplicate, older, foreign, future-generation, and malformed progress without losing the valid owner's sequence", async () => {
+    vi.useFakeTimers(); vi.setSystemTime(11000);
+    const h = await active(); h.emitProgress(progressEvent(8)); const body = h.renderedProgress();
+    const stale = [progressEvent(7), progressEvent(8), progressEvent(99, { generation: 0 }), progressEvent(99, { generation: 2 }),
+      progressEvent(99, { operationId: "foreign" }), progressEvent(99, { kind: "pull" }), progressEvent(99, { stage: "unknown" }),
+      progressEvent(99, { startedAt: NaN }), progressEvent(99, { progress: { sequence: -1, updatedAt: 7000 } }),
+      progressEvent(99, { progress: { sequence: 99, updatedAt: Infinity } })];
+    for (const fixture of stale) { h.emitProgress(fixture); expect(h.renderedProgress()).toBe(body); }
+    h.emitProgress(progressEvent(9, { stage: "verifying", progress: { sequence: 9, updatedAt: 8000 } }));
+    expect(h.banner()).toContain("Verifying…"); expect(h.renderedProgress()).not.toContain("512 KiB");
+  });
+  it.each(["absent", "older", "equal"])("does not regress a newer event when pending same-generation status has %s progress", async snapshot => {
+    vi.useFakeTimers(); vi.setSystemTime(11000);
+    const h = await active(), response = deferred<any>(), stale = progressEvent(snapshot === "equal" ? 8 : 2);
+    const status = JSON.parse(JSON.stringify(h.status()));
+    status.operation.active = { operationId: "service-progress", kind: "push", stage: "preparing", startedAt: 1000,
+      ...(snapshot !== "absent" ? { progress: stale.progress } : {}) };
+    h.api.sync.status.mockReturnValueOnce(response.promise); const read = h.ab.loadSyncConfig();
+    const latest = progressEvent(8); latest.progress.transfer.bytes = 786432; h.emitProgress(latest);
+    response.resolve(status); await read; await flush();
+    expect(h.banner()).toContain("Publishing…"); expect(h.banner()).toContain("768 KiB / 1 MiB");
+    expect(h.renderedProgress()).toContain('aria-valuenow="786432"');
+  });
+  it("keeps the owner through stale idle/foreign status, but accepts a newer sequence and status completion evidence", async () => {
+    const h = await active(); h.emitProgress(progressEvent(8));
+    h.status().operation.active = null; await h.ab.loadSyncConfig(); expect(h.banner()).toContain("Publishing…"); expect(h.buttons.syncPush.disabled).toBe(true);
+    h.status().operation.active = { operationId: "foreign", kind: "push", stage: "preparing" }; await h.ab.loadSyncConfig();
+    expect(h.banner()).toContain("Publishing…"); expect(h.banner()).not.toContain("foreign");
+    const newer = progressEvent(9, { stage: "applying", progress: { sequence: 9, updatedAt: 9000, completedItems: 3, totalItems: 4 } });
+    h.status().operation.active = { operationId: newer.operationId, kind: newer.kind, stage: newer.stage, startedAt: newer.startedAt, progress: newer.progress };
+    await h.ab.loadSyncConfig(); expect(h.banner()).toContain("Applying…"); expect(h.banner()).toContain("3 / 4"); expect(h.renderedProgress()).not.toContain("512 KiB");
+    h.status().operation.active = null; h.status().operation.last = result({ operationId: "service-progress" });
+    await h.ab.loadSyncConfig(); await flush(); expect(h.banner()).toBe(""); expect(h.buttons.syncPush.disabled).toBe(false);
+    h.emitProgress(progressEvent(10)); expect(h.banner()).toBe("");
+  });
+  it("hydrates active progress on reopening and cannot resurrect it after same-generation completion", async () => {
+    const h = harness("zh-CN"), initial = progressEvent(8);
+    h.status().operation = { generation: 1, active: { operationId: initial.operationId, kind: initial.kind, stage: initial.stage, startedAt: initial.startedAt, progress: initial.progress }, last: null };
+    await h.ab.loadSyncConfig(); expect(h.banner()).toContain(labels["zh-CN"].upload); expect(h.banner()).toContain("512 KiB / 1 MiB");
+    const obsolete = JSON.parse(JSON.stringify(h.status()));
+    h.emit(event("completed", 1, "push", "service-progress")); await flush();
+    h.setStatus(obsolete); await h.ab.loadSyncConfig(); h.emitProgress(progressEvent(99));
+    expect(h.banner()).toBe(""); expect(h.buttons.syncPush.disabled).toBe(false);
+  });
+  it("retains a manual write through byte completion, a late completion event, and its pending reply beyond 15 seconds", async () => {
+    vi.useFakeTimers(); vi.setSystemTime(11000);
+    const h = harness(), write = deferred<any>(); await h.ab.loadSyncDiff(); h.api.sync.pull.mockReturnValueOnce(write.promise);
+    const pending = h.ab.syncPull(); await flush(); h.emit(event("started", 1, "pull", "manual-pull")); await flush();
+    const fixture = progressEvent(1, { operationId: "manual-pull", kind: "pull", stage: "downloading" });
+    fixture.progress.transfer.direction = "download"; fixture.progress.transfer.state = "complete";
+    fixture.progress.transfer.bytes = fixture.progress.transfer.totalBytes; h.emitProgress(fixture);
+    await vi.advanceTimersByTimeAsync(20000); expect(h.buttons.syncPull.disabled).toBe(true); expect(h.banner()).toContain("sync is not complete");
+    h.emit(event("completed", 2, "pull", "manual-pull")); await flush(); expect(h.banner()).toContain("Waiting for the operation result");
+    h.emitProgress(progressEvent(99, { generation: 2, operationId: "manual-pull", kind: "pull" }));
+    await h.ab.syncPush(); expect(h.api.sync.push).not.toHaveBeenCalled(); expect(h.buttons.syncPull.disabled).toBe(true);
+    write.resolve(result()); await pending; await flush(); expect(h.buttons.syncPull.disabled).toBe(false); expect(h.banner()).toBe("");
+  });
+  it("keeps an active transfer across a newer unrelated idle status until matching completion", async () => {
+    const h = await active(); h.emitProgress(progressEvent());
+    h.status().operation = { generation: 2, active: null, last: result({ operationId: "unrelated-configure" }) };
+    await h.ab.loadSyncConfig(); expect(h.buttons.syncPush.disabled).toBe(true); expect(h.banner()).toContain("Publishing…");
+    h.emitProgress(progressEvent(2, { generation: 2, stage: "verifying", progress: { sequence: 2, updatedAt: 6000 } }));
+    expect(h.banner()).toContain("Verifying…");
+    h.emit(event("completed", 3, "push", "service-progress")); await flush(); expect(h.banner()).toBe(""); expect(h.buttons.syncPush.disabled).toBe(false);
+  });
+  it("an older manual write settling cannot hide a newer service owner's progress", async () => {
+    const h = harness("en-US"), write = deferred<any>(); await h.ab.loadSyncDiff(); h.api.sync.pull.mockReturnValueOnce(write.promise);
+    const pending = h.ab.syncPull(); await flush(); h.emit(event("started", 1, "pull", "manual-pull"));
+    h.emit(event("completed", 2, "pull", "manual-pull")); await flush();
+    h.emit(event("started", 3, "push", "service-progress")); await flush(); h.emitProgress(progressEvent(1, { generation: 3 }));
+    write.resolve(result()); await pending; await flush();
+    expect(h.banner()).toContain("Publishing…"); expect(h.banner()).toContain("512 KiB / 1 MiB"); expect(h.buttons.syncPull.disabled).toBe(true);
+    h.emit(event("completed", 4, "push", "service-progress")); await flush(); expect(h.banner()).toBe(""); expect(h.buttons.syncPush.disabled).toBe(false);
+  });
+  it("does not invent percentages for empty objects or partial item counts", async () => {
+    const h = await active(), fixture = progressEvent();
+    fixture.progress.transfer.bytes = 0; fixture.progress.transfer.totalBytes = 0;
+    delete (fixture.progress as any).completedItems; h.emitProgress(fixture);
+    expect(h.banner()).toContain("Profiles / objects total: 4"); expect(h.banner()).toContain("0 B / 0 B");
+    expect(h.renderedProgress()).toContain("is-indeterminate"); expect(h.renderedProgress()).not.toContain("aria-valuenow");
+    fixture.progress.sequence++; fixture.progress.completedItems = 2; delete (fixture.progress as any).totalItems;
+    h.emitProgress(fixture); expect(h.banner()).toContain("Profiles / objects completed: 2"); expect(h.banner()).not.toMatch(/NaN|Infinity/);
+  });
+  it("relocalizes the current progress in place without requests and preserves hydrated SVG controls", async () => {
+    const h = await active(), svg = h.buttons.syncPull.querySelector("svg"); h.emitProgress(progressEvent());
+    const calls = h.api.sync.status.mock.calls.length; h.window.i18n.set("zh-CN");
+    expect(h.banner()).toContain(labels["zh-CN"].upload); expect(h.banner()).toContain(labels["zh-CN"].stages[1]);
+    expect(h.api.sync.status).toHaveBeenCalledTimes(calls); expect(h.buttons.syncPull.querySelector("svg")).toBe(svg);
+    h.window.i18n.set("en-US"); expect(h.banner()).toContain(labels["en-US"].upload); expect(h.buttons.syncPull.querySelector("svg")).toBe(svg);
+  });
+});
+
+describe("actionable bilingual full-profile size-limit results", () => {
+  for (const locale of ["en-US", "zh-CN"] as const) {
+    it.each(["structured", "legacy", "item"])(`${locale} %s appends a safe explanatory hint without replacing backend limits or profile/path`, async variant => {
+      const h = harness(locale), diagnostic = 'Full-profile expanded size limit exceeded (actualBytes=1234567890, limitBytes=1073741824, dirId=profile-size, memberPath=Default/<website>&data)';
+      const failure = result({ operationId: "size-limit", success: false, outcome: "failed", localCommit: "none", remoteCommit: "none",
+        ...(variant === "item" ? { code: "FULL_PROFILE_INVALID", message: "A browser backup failed", items: [{ scope: "fullProfile", id: "profile-size", state: "failed", code: "FULL_PROFILE_SIZE_LIMIT", message: diagnostic }] }
+          : { code: variant === "structured" ? "FULL_PROFILE_SIZE_LIMIT" : "FULL_PROFILE_INVALID", message: diagnostic }) });
+      h.emit(event("completed", 1, "push", "size-limit"), failure); await flush(); const body = h.renderedResult();
+      for (const value of ["1234567890", "1073741824", "profile-size", "Default/&lt;website&gt;&amp;data"]) expect(body).toContain(value);
+      expect(body).not.toContain("<website>"); expect(body).toContain(variant === "legacy" ? "FULL_PROFILE_INVALID" : "FULL_PROFILE_SIZE_LIMIT");
+      for (const value of locale === "zh-CN" ? ["完整浏览器备份超出体积上限", "持久网站数据不会被静默丢弃", "不等同于完整迁移"] : ["full browser backup exceeds the size limit", "persistent website data is never silently discarded", "not a full migration"]) expect(body).toContain(value);
+    });
+  }
+});
 
 describe("separate history scope and truthful bilingual coverage", () => {
   it("requires explicit separate consent before saving the selected automatic scope", async () => {
@@ -864,6 +1059,9 @@ describe("truthful Compare scope and effective mirrored translations", () => {
 
   const keys = [
     ...["checking", "in-progress", "waiting-result", "refreshing", "push", "pull", "configure"].map((suffix) => `sync.operation.${suffix}`),
+    ...["preparing", "publishing", "downloading", "verifying", "applying", "finalizing"].map((suffix) => `sync.progress.stage.${suffix}`),
+    ...["items", "items-completed", "items-total", "current-item", "current-upload", "current-download", "indeterminate", "rate", "rate-unknown", "transferring", "waiting-response", "object-complete", "elapsed"].map((suffix) => `sync.progress.${suffix}`),
+    "sync.full-profile.size-limit",
     ...["scope", "unverified", "coverage-unavailable", "required", "stale"].map((suffix) => `sync.compare.${suffix}`),
     "sync.refresh.failed", "sync.credentials.saved", "sync.result.title", "sync.result.limited", "sync.result.local-commit", "sync.result.remote-commit", "sync.result.unavailable", "sync.result.warnings", "sync.result.recovery",
     ...["complete", "partial", "failed", "cancelled", "recovery-required"].map((suffix) => `sync.result.outcome.${suffix}`),

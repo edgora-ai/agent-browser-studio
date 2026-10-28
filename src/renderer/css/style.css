@@ -3370,6 +3370,19 @@ kbd {
   transition: width 0.3s ease;
 }
 
+/* Sync meters describe the current object's bytes, never overall completion. */
+.sync-progress-detail { margin-top: 4px; color: var(--text-muted); font-size: 12px; line-height: 1.6; font-variant-numeric: tabular-nums; }
+.sync-transfer-progress { margin-top: 8px; max-width: 560px; }
+.sync-transfer-progress.is-indeterminate > .progress-fill { width: 35%; animation: syncTransferIndeterminate 1.4s ease-in-out infinite; }
+@keyframes syncTransferIndeterminate {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(300%); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .sync-transfer-progress > .progress-fill { transition: none; }
+  .sync-transfer-progress.is-indeterminate > .progress-fill { animation: none; margin-left: 32.5%; }
+}
+
 /* ── Profile card with animated status dot ── */
 /* R35: 6→8px (retina visibility) — merged with the duplicate def below
    (dotPulse) into a single source. */

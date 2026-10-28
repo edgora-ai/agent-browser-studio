@@ -69,6 +69,100 @@
     return kind === 'push' ? t('sync.operation.push', 'Push') : kind === 'pull' ? t('sync.operation.pull', 'Pull') : t('sync.operation.configure', 'Save sync configuration');
   }
 
+  var PROGRESS_STAGES = { preparing: 'Preparing…', publishing: 'Publishing…', downloading: 'Downloading…', verifying: 'Verifying…', applying: 'Applying…', finalizing: 'Finalizing…' };
+  function nonnegative(value) { return typeof value === 'number' && Number.isFinite(value) && value >= 0; }
+  function itemCount(value) { return Number.isSafeInteger(value) && value >= 0; }
+
+  function syncProgress(value) {
+    if (!value || !itemCount(value.sequence) || !nonnegative(value.updatedAt)) return null;
+    var progress = { sequence: value.sequence, updatedAt: value.updatedAt };
+    if (typeof value.scope === 'string' && value.scope) progress.scope = value.scope;
+    if (typeof value.itemId === 'string' && value.itemId) progress.itemId = value.itemId;
+    ['completedItems', 'totalItems'].forEach(function(key) { if (itemCount(value[key])) progress[key] = value[key]; });
+    var transfer = value.transfer;
+    if (transfer && ['upload', 'download'].indexOf(transfer.direction) >= 0 && nonnegative(transfer.bytes) && nonnegative(transfer.startedAt) &&
+      ['transferring', 'waiting-response', 'complete'].indexOf(transfer.state) >= 0) {
+      progress.transfer = { direction: transfer.direction, bytes: transfer.bytes, startedAt: transfer.startedAt, state: transfer.state };
+      if (nonnegative(transfer.totalBytes)) progress.transfer.totalBytes = transfer.totalBytes;
+    }
+    return progress;
+  }
+
+  function mergeActiveOperation(incoming) {
+    if (!incoming) return null;
+    var progress = syncProgress(incoming.progress);
+    // Generation covers mutations, not chunks. A status read can therefore be
+    // older than an event in the SAME generation, including its stage/transfer.
+    if (activeOperation && incoming.operationId === activeOperation.operationId && incoming.kind === activeOperation.kind && activeOperation.progress &&
+      (!progress || progress.sequence <= activeOperation.progress.sequence)) return activeOperation;
+    return Object.assign({}, incoming, { progress: progress });
+  }
+
+  function progressBytes(bytes) {
+    var units = ['B', 'KiB', 'MiB', 'GiB', 'TiB'], unit = 0;
+    while (bytes >= 1024 && unit < units.length - 1) { bytes /= 1024; unit++; }
+    return (unit ? bytes.toFixed(1).replace(/\.0$/, '') : String(Math.round(bytes))) + ' ' + units[unit];
+  }
+
+  function progressElapsed(startedAt) {
+    var seconds = Math.floor(Math.max(0, Date.now() - startedAt) / 1000);
+    var pad = function(value) { return value < 10 ? '0' + value : String(value); };
+    return (seconds >= 3600 ? Math.floor(seconds / 3600) + ':' : '') + pad(Math.floor(seconds / 60) % 60) + ':' + pad(seconds % 60);
+  }
+
+  function renderOperationProgress() {
+    var panel = syncPanel('sync-operation-state');
+    if (!panel) return;
+    var operation = activeOperation || localOperation;
+    panel.className = operation ? 'health-text-watch sync-operation-state' : '';
+    if (!operation) { panel.textContent = ''; return; }
+    var progress = activeOperation && activeOperation.progress;
+    var stage = activeOperation && Object.prototype.hasOwnProperty.call(PROGRESS_STAGES, activeOperation.stage) && PROGRESS_STAGES[activeOperation.stage];
+    var message = stage ? t('sync.progress.stage.' + activeOperation.stage, stage)
+      : !activeOperation && localOperation && localOperation.serviceCompleted
+        ? t('sync.operation.waiting-result', 'Waiting for the operation result; it has not been cancelled.')
+        : localOperation && localOperation.stage === 'checking' && !activeOperation
+          ? t('sync.operation.checking', 'Checking…')
+          : t('sync.operation.in-progress', 'Sync operation in progress…');
+    var html = '<div><strong>' + esc(operationKind(operation.kind)) + ' · ' + esc(message) + '</strong>' + (operation.operationId ? ' · ' + esc(shortId(operation.operationId)) : '') + '</div>';
+    if (progress) {
+      var completed = progress.completedItems, total = progress.totalItems;
+      var count = itemCount(completed) && itemCount(total)
+        ? t('sync.progress.items', 'Profiles / objects: {completed} / {total}').replace('{completed}', String(completed)).replace('{total}', String(total))
+        : itemCount(completed) ? t('sync.progress.items-completed', 'Profiles / objects completed: {n}').replace('{n}', String(completed))
+          : itemCount(total) ? t('sync.progress.items-total', 'Profiles / objects total: {n}').replace('{n}', String(total)) : '';
+      if (count) html += '<div class="sync-progress-detail">' + esc(count) + '</div>';
+      var current = [progress.scope ? resultLabel('sync.result.scope.', SCOPE, progress.scope) : '', progress.itemId || ''].filter(Boolean).join(' · ');
+      if (current) html += '<div class="sync-progress-detail">' + esc(t('sync.progress.current-item', 'Current item: {item}').replace('{item}', current)) + '</div>';
+    }
+    var transfer = progress && progress.transfer;
+    var transferLabel = transfer ? t('sync.progress.current-' + transfer.direction, transfer.direction === 'upload' ? 'Current object upload' : 'Current object download')
+      : t('sync.progress.indeterminate', 'Current stage · total progress unknown');
+    var transferText = transferLabel;
+    var knownTotal = transfer && nonnegative(transfer.totalBytes) && transfer.totalBytes > 0;
+    if (transfer) {
+      var bytes = progressBytes(transfer.bytes) + (nonnegative(transfer.totalBytes) ? ' / ' + progressBytes(transfer.totalBytes) : '');
+      var duration = (progress.updatedAt - transfer.startedAt) / 1000;
+      var rate = duration > 0 ? t('sync.progress.rate', 'Average rate: {rate}/s').replace('{rate}', progressBytes(transfer.bytes / duration))
+        : t('sync.progress.rate-unknown', 'Rate not yet available');
+      transferText += ' · ' + bytes;
+      html += '<div class="sync-progress-detail">' + esc(transferText) + ' · ' + esc(rate) + '</div>';
+      var state = transfer.state === 'waiting-response' ? t('sync.progress.waiting-response', 'Waiting for server confirmation — sync is not complete.')
+        : transfer.state === 'complete' ? t('sync.progress.object-complete', 'Current object transferred — sync is not complete.')
+          : t('sync.progress.transferring', 'Transferring current object…');
+      html += '<div class="sync-progress-detail">' + esc(state) + '</div>';
+      transferText += ' · ' + state;
+    } else html += '<div class="sync-progress-detail">' + esc(transferLabel) + '</div>';
+    // Only this object's real byte total can make the bar determinate. Item
+    // counts and a completed upload are never a global sync percentage/result.
+    var value = knownTotal ? Math.min(transfer.bytes, transfer.totalBytes) : 0;
+    html += '<div class="progress-bar sync-transfer-progress' + (knownTotal ? '' : ' is-indeterminate') + '" role="progressbar" aria-label="' + escAttr(transferLabel) + '" aria-valuetext="' + escAttr(transferText) + '"' +
+      (knownTotal ? ' aria-valuemin="0" aria-valuemax="' + escAttr(String(transfer.totalBytes)) + '" aria-valuenow="' + escAttr(String(value)) + '"' : '') +
+      '><div class="progress-fill"' + (knownTotal ? ' style="width:' + (value / transfer.totalBytes * 100) + '%"' : '') + '></div></div>';
+    if (nonnegative(operation.startedAt)) html += '<div class="sync-progress-detail">' + esc(t('sync.progress.elapsed', 'Elapsed: {time}').replace('{time}', progressElapsed(operation.startedAt))) + '</div>';
+    panel.innerHTML = html;
+  }
+
   function renderOperationState() {
     var busy = !!(localOperation || activeOperation);
     controls.forEach(function(control) {
@@ -85,17 +179,7 @@
     });
     var tab = document.getElementById('tab-sync');
     if (tab) tab.setAttribute('aria-busy', busy ? 'true' : 'false');
-    var panel = syncPanel('sync-operation-state');
-    if (!panel) return;
-    var operation = activeOperation || localOperation;
-    panel.className = busy ? 'health-text-watch' : '';
-    if (!operation) { panel.textContent = ''; return; }
-    var message = !activeOperation && localOperation && localOperation.serviceCompleted
-      ? t('sync.operation.waiting-result', 'Waiting for the operation result; it has not been cancelled.')
-      : localOperation && localOperation.stage === 'checking' && !activeOperation
-        ? t('sync.operation.checking', 'Checking…')
-        : t('sync.operation.in-progress', 'Sync operation in progress…');
-    panel.textContent = operationKind(operation.kind) + ' · ' + message + (operation.operationId ? ' · ' + shortId(operation.operationId) : '');
+    renderOperationProgress();
   }
 
   function clearComparison(message) {
@@ -280,6 +364,12 @@
       default: return '';
     }
   }
+  function fullProfileSizeLimit(value) {
+    return !!(value && (value.code === 'FULL_PROFILE_SIZE_LIMIT' || /Full-profile expanded size limit exceeded/i.test(value.message || '')));
+  }
+  function fullProfileSizeLimitHint() {
+    return t('sync.full-profile.size-limit', 'The full browser backup exceeds the size limit. Re-downloadable component caches are excluded; persistent website data is never silently discarded. Check the profile data size, or explicitly choose limited sync (not a full migration).');
+  }
   function resultOutcome(r) { return fullProfileFailureMessage(r.code) ? 'failed' : OUTCOME[r.outcome] ? r.outcome : r.success ? 'complete' : 'failed'; }
   function limitedResult(r) {
     return r.browserBackupIncomplete === true || resultOutcome(r) !== 'complete' || !r.success || (r.warnings || []).length ||
@@ -315,6 +405,7 @@
     var message = staticFailure || r.message;
     if (message) html += '<div>' + esc(message) + '</div>';
     if (r.code) html += '<div><code>' + esc(r.code) + '</code></div>';
+    if (fullProfileSizeLimit(r) || (r.items || []).some(fullProfileSizeLimit)) html += '<div class="health-text-watch">' + esc(fullProfileSizeLimitHint()) + '</div>';
     (r.items || []).forEach(function(item) {
       // Queue parser diagnostics may contain Cookie values. Known full-mode
       // failures use static instructions, never free-text error payloads.
@@ -341,7 +432,7 @@
   }
 
   function beginOperation(kind) {
-    var operation = { kind: kind, stage: 'checking', operationId: null, startGeneration: serverGeneration, invalidated: false, awaitingReply: false, serviceCompleted: false };
+    var operation = { kind: kind, stage: 'checking', startedAt: Date.now(), operationId: null, startGeneration: serverGeneration, invalidated: false, awaitingReply: false, serviceCompleted: false };
     localOperation = operation;
     invalidateViews(); invalidateSurfaceCaches(); renderOperationState();
     return operation;
@@ -395,7 +486,7 @@
     if (own) localOperation.operationId = event.operationId;
     else if (localOperation) localOperation.invalidated = true;
     serverGeneration = event.generation; serverOperationId = event.operationId; serverPhase = event.phase;
-    if (event.phase === 'started') activeOperation = { kind: event.kind, operationId: event.operationId };
+    if (event.phase === 'started') activeOperation = { kind: event.kind, operationId: event.operationId, stage: event.kind === 'configure' ? 'running' : 'preparing' };
     else if (event.kind !== 'configure' && activeOperation && activeOperation.operationId === event.operationId) activeOperation = null;
     // A result-less configure completion invalidates reads, not a different
     // push/pull lease. Keep that owner until fresh status or its own completion.
@@ -407,7 +498,25 @@
     } else loadSyncConfig();
   }
 
-  if (typeof api.on === 'function') api.on('sync:state-changed', applyStateEvent);
+  function applyProgressEvent(event) {
+    if (!event || event.generation !== serverGeneration || !activeOperation || event.operationId !== activeOperation.operationId || event.kind !== activeOperation.kind ||
+      ['push', 'pull'].indexOf(event.kind) < 0 || !Object.prototype.hasOwnProperty.call(PROGRESS_STAGES, event.stage) || !nonnegative(event.startedAt)) return;
+    if (serverPhase === 'completed' && serverOperationId === event.operationId) return;
+    var progress = syncProgress(event.progress);
+    if (!progress || (activeOperation.progress && progress.sequence <= activeOperation.progress.sequence)) return;
+    // A progress payload is a full snapshot. In particular a stage-only report
+    // drops the previous object's transfer; it cannot retain a stale 100% bar.
+    activeOperation = { operationId: event.operationId, kind: event.kind, stage: event.stage, startedAt: event.startedAt, progress: progress };
+    // No view epoch changes, cache invalidations, requests or button rebuilding
+    // per chunk. Started/completed events still own the mutation boundaries.
+    renderOperationProgress();
+  }
+
+  if (typeof api.on === 'function') {
+    api.on('sync:state-changed', applyStateEvent);
+    api.on('sync:progress', applyProgressEvent);
+  }
+  document.addEventListener('agent-browser-language-change', renderOperationState);
 
   function previewCountCard(label, value, detail) {
     var displayValue = value == null ? 0 : value;
@@ -822,7 +931,14 @@
     if (!operation || !Number.isSafeInteger(operation.generation)) return true;
     if (operation.generation < serverGeneration) return false;
     var active = operation.active || null;
-    if (active && operation.generation === serverGeneration && serverPhase === 'completed' && active.operationId === serverOperationId) return false;
+    if (operation.generation === serverGeneration) {
+      if (active && serverPhase === 'completed' && active.operationId === serverOperationId) return false;
+      if (active && activeOperation && (active.operationId !== activeOperation.operationId || active.kind !== activeOperation.kind)) return false;
+    }
+    // A generation can advance for an unrelated configuration mutation. No
+    // active owner in a status alone is not proof this transfer completed.
+    if (!active && activeOperation && (!operation.last || operation.last.operationId !== activeOperation.operationId)) active = activeOperation;
+    active = mergeActiveOperation(active);
     var changed = operation.generation !== serverGeneration || (active && active.operationId) !== (activeOperation && activeOperation.operationId);
     serverGeneration = operation.generation;
     if (changed) {

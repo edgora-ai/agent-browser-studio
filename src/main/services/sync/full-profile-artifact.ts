@@ -135,6 +135,18 @@ function failure(code: string, message: string, cause?: unknown): Error & { code
   return Object.assign(new Error(message, cause === undefined ? undefined : { cause }), { code });
 }
 function invalid(message: string): never { throw failure("FULL_PROFILE_INVALID", message); }
+function sizeLimit(kind: "entry" | "expanded" | "body", bytes: number, limitBytes: number, memberPath?: string, estimated = false): never {
+  throw Object.assign(failure("FULL_PROFILE_SIZE_LIMIT", `Full-profile ${kind} size limit exceeded: ${estimated ? "estimated " : ""}${bytes} bytes; limit ${limitBytes} bytes` +
+    (memberPath ? `; retained member ${JSON.stringify(memberPath)}` : "") + ". Persistent browser data is not omitted to fit this limit."),
+  { limitKind: kind, ...(estimated ? { estimatedBytes: bytes } : { actualBytes: bytes }), limitBytes, ...(memberPath ? { memberPath } : {}) });
+}
+function sizeContext(cause: unknown, dirId: string): unknown {
+  if ((cause as { code?: unknown })?.code === "FULL_PROFILE_SIZE_LIMIT") {
+    const error = cause as Error & { dirId?: string };
+    if (error.dirId === undefined) Object.assign(error, { dirId, message: `Profile ${dirId}: ${error.message}` });
+  }
+  return cause;
+}
 function errorText(error: unknown): string { return error instanceof Error ? error.message : String(error); }
 function combine(original: unknown, subsequent: unknown, context: string): Error {
   return Object.assign(new Error(`${errorText(original)}; ${context}: ${errorText(subsequent)}`, { cause: original }), {
@@ -265,14 +277,18 @@ function rejectRecoveryOrQueue(relative: string): void {
   }
 }
 /** Deliberately contextual: CacheStorage, SW ScriptCache and blob_storage are
- * persistent state. Never reuse the old profile ZIP cache-name filter here. */
+ * persistent state. Browser-managed component downloads are omitted ONLY at the
+ * Chromium user-data root, never by basename inside a profile or site storage.
+ * Never reuse the old profile ZIP cache-name filter here. */
 function temporaryPath(relative: string, engine: BrowserEngine): boolean {
   const parts = relative.split("/"), leaf = parts.at(-1)!;
   const processFiles = ["SingletonLock", "SingletonSocket", "SingletonCookie", "DevToolsActivePort", "lockfile", "parent.lock", ".parentlock", "lock", "MarionetteActivePort", "WebDriverBiDiServer.json"];
   if (leaf === "LOCK" || parts.length === 1 && processFiles.includes(leaf)) return true;
   if (engine === "firefox") return ["cache2", "startupCache", "shader-cache"].includes(parts[0]);
-  const caches = ["Cache", "Code Cache", "GPUCache", "DawnCache", "DawnGraphiteCache", "GraphiteDawnCache", "GrShaderCache", "ShaderCache"];
-  return caches.includes(parts[0]) || parts.length >= 2 && /^(?:Default|Profile [0-9]+|Guest Profile|System Profile)$/.test(parts[0]) && caches.includes(parts[1]);
+  const caches = ["Cache", "Code Cache", "GPUCache", "DawnCache", "DawnGraphiteCache", "DawnWebGPUCache", "GraphiteDawnCache", "GrShaderCache", "ShaderCache"];
+  const componentDownloads = ["component_crx_cache", "SODA", "SODALanguagePacks", "TranslateKit", "WasmTtsEngine"];
+  return componentDownloads.includes(parts[0]) || caches.includes(parts[0]) ||
+    parts.length >= 2 && /^(?:Default|Profile [0-9]+|Guest Profile|System Profile)$/.test(parts[0]) && caches.includes(parts[1]);
 }
 type Traversal<T> = Generator<void, T, void>;
 function drain<T>(steps: Traversal<T>, guard: FullProfileGuard): T {
@@ -345,7 +361,9 @@ function* scanTreeSteps(directory: string, engine: BrowserEngine, guard: FullPro
         yield* visit(file, relative, skip);
       } else if (!skip) {
         bytes += stat.size;
-        if (!Number.isSafeInteger(stat.size) || stat.size < 0 || stat.size > MAX_ZIP_ENTRY_BYTES || bytes > MAX_FULL_PROFILE_EXPANDED_BYTES) invalid("Full-profile expanded size limit exceeded");
+        if (!Number.isSafeInteger(stat.size) || stat.size < 0) invalid("Invalid full-profile file size");
+        if (stat.size > MAX_ZIP_ENTRY_BYTES) sizeLimit("entry", stat.size, MAX_ZIP_ENTRY_BYTES, relative);
+        if (bytes > MAX_FULL_PROFILE_EXPANDED_BYTES) sizeLimit("expanded", bytes, MAX_FULL_PROFILE_EXPANDED_BYTES, relative);
         files.push({ path: relative, size: stat.size, sha256: hashFiles ? yield* visitFileSteps(file, stat, guard, signal) : "", stat });
       }
     }
@@ -503,7 +521,7 @@ async function deriveKey(passphrase: string, salt: Buffer, guard: FullProfileGua
 }
 function* readOwnedFileSteps(file: string, limit: number, guard: FullProfileGuard, signal?: AbortSignal): Traversal<Buffer> {
   const stat = fs.lstatSync(file); regular(file, stat);
-  if (stat.size > limit) invalid("Full-profile object size limit exceeded");
+  if (stat.size > limit) sizeLimit("body", stat.size, limit);
   const bytes = Buffer.alloc(stat.size);
   let complete = false;
   try {
@@ -522,7 +540,8 @@ export async function captureFullProfile(options: CaptureFullProfileOptions): Pr
   if (!validIdentity(id as unknown as Record<string, unknown>)) invalid("Invalid full-profile capture identity");
   const source = ensureArchiveDirectory(profileDir), staging = ensureArchiveDirectory(stagingDir);
   if (isPathInside(staging, source)) invalid("Full-profile staging must be outside the source profile");
-  const before = await drainCooperatively(scanTreeSteps(source, id.engine, guard, signal, true), guard);
+  const before = await drainCooperatively(scanTreeSteps(source, id.engine, guard, signal, true), guard)
+    .catch(cause => { throw sizeContext(cause, options.dirId); });
   // Even an empty traversal settles asynchronously; recheck its caller's turn.
   check(guard, signal);
   const extraCopies: FullProfileExtraEntry[] = [];
@@ -534,7 +553,8 @@ export async function captureFullProfile(options: CaptureFullProfileOptions): Pr
     for (const extra of options.extraEntries ?? []) {
       if (!extra || typeof extra.path !== "string" || !Buffer.isBuffer(extra.data)) invalid("Invalid full-profile extra entry");
       validateRelative(extra.path); extraBytes += extra.data.length;
-      if (extraBytes + profileBytes > MAX_FULL_PROFILE_BODY_BYTES || extraCopies.length >= MAX_FULL_PROFILE_ENTRIES) invalid("Full-profile extras exceed size/count limit");
+      if (extraBytes + profileBytes > MAX_FULL_PROFILE_BODY_BYTES) sizeLimit("body", extraBytes + profileBytes, MAX_FULL_PROFILE_BODY_BYTES);
+      if (extraCopies.length >= MAX_FULL_PROFILE_ENTRIES) invalid("Full-profile extras exceed count limit");
       extraCopies.push({ path: extra.path, data: Buffer.from(extra.data) });
     }
     extraCopies.sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
@@ -545,7 +565,7 @@ export async function captureFullProfile(options: CaptureFullProfileOptions): Pr
     const expected = expectedZipNames(manifest);
     const predictedZipBytes = 22 + [...expected].reduce((sum, [name, item]) => sum + 76 + 2 * Buffer.byteLength(name) + item.size, 0);
     // Reserve the maximum header before doing any plaintext disk writes.
-    if (predictedZipBytes + PREFIX_BYTES + MAX_HEADER_BYTES + TAG_BYTES > MAX_FULL_PROFILE_BODY_BYTES) invalid("Full-profile encrypted body size limit exceeded");
+    if (predictedZipBytes + PREFIX_BYTES + MAX_HEADER_BYTES + TAG_BYTES > MAX_FULL_PROFILE_BODY_BYTES) sizeLimit("body", predictedZipBytes + PREFIX_BYTES + MAX_HEADER_BYTES + TAG_BYTES, MAX_FULL_PROFILE_BODY_BYTES, undefined, true);
     workspace = makeWorkspace(staging, "full-profile-capture-");
     const archive = path.join(workspace.directory, "profile.zip");
     const entries: Array<ZipFileEntry | ZipDirEntry> = [{ name: "manifest.json", data: metadata }, { name: "profile/", isDirectory: true },
@@ -570,10 +590,10 @@ export async function captureFullProfile(options: CaptureFullProfileOptions): Pr
     const cipher = createCipheriv("aes-256-gcm", key, iv); cipher.setAAD(Buffer.concat([prefix, headerBytes]));
     const encrypted = cipher.update(zip), final = cipher.final();
     const body = Buffer.concat([prefix, headerBytes, encrypted, final, cipher.getAuthTag()]);
-    if (body.length > MAX_FULL_PROFILE_BODY_BYTES) invalid("Full-profile encrypted body size limit exceeded");
+    if (body.length > MAX_FULL_PROFILE_BODY_BYTES) sizeLimit("body", body.length, MAX_FULL_PROFILE_BODY_BYTES);
     const digest = sha256(body), descriptor = parseFullProfileArtifact({ ...id, key: `full-profile-v1-${digest}.bin`, sha256: digest, size: body.length })!;
     check(guard, signal); result = { body, descriptor };
-  } catch (cause) { error = cause; }
+  } catch (cause) { error = sizeContext(cause, options.dirId); }
   finally {
     key?.fill(0); zip?.fill(0); extraCopies.forEach((extra) => extra.data.fill(0));
     error = finishCleanup(workspace, error);
@@ -652,7 +672,7 @@ export async function prepareFullProfile(options: PrepareFullProfileOptions): Pr
     fs.unlinkSync(archive); fs.unlinkSync(path.join(workspace.directory, "contents", "manifest.json"));
     check(guard, signal);
     prepared = preparedValue(directory, extraDirectory, { workspace, profileOwner: tree.root, extraOwner, manifest, sourceManifest: manifest });
-  } catch (cause) { error = cause; }
+  } catch (cause) { error = sizeContext(cause, options.dirId); }
   finally {
     key?.fill(0); zip?.fill(0); unauthenticated?.fill(0); body.fill(0);
     if (!prepared) error = finishCleanup(workspace, error);

@@ -203,6 +203,51 @@ describe("full-profile encrypted artifact: actual cold disk round trips", () => 
     expect(readAll(options.profileDir)).toEqual(original);
   });
 
+  it("excludes disposable DawnWebGPUCache only at Chromium cache roots while preserving persistent namesakes", async () => {
+    const root = tmp(), options = captureOptions(root);
+    for (const prefix of ["", "Default/", "Profile 12/", "Guest Profile/", "System Profile/"]) {
+      put(options.profileDir, prefix + "DawnWebGPUCache/shader", Buffer.alloc(16 * 1024, 0x5a));
+    }
+    const retained = ["Default/Preferences", "Default/Service Worker/CacheStorage/DawnWebGPUCache/response",
+      "Default/Service Worker/ScriptCache/script", "Default/blob_storage/DawnWebGPUCache/blob",
+      "Default/IndexedDB/DawnWebGPUCache/value", "site-owned/DawnWebGPUCache/value"];
+    for (const relative of retained) put(options.profileDir, relative, "owned-persistent-state:" + relative);
+    const original = readAll(options.profileDir), artifact = { options, ...await captureFullProfile(options) };
+    const incoming = await prepare(artifact), destination = liveTarget(root);
+    expect(incoming.manifest.files.map(file => file.path).sort()).toEqual([...retained].sort());
+    restorePreparedFullProfile({ prepared: incoming, profileDir: destination, backupSuffix: ".previous", guard });
+    for (const relative of retained) expect(fs.readFileSync(path.join(destination, relative), "utf8")).toBe("owned-persistent-state:" + relative);
+    expect(readAll(options.profileDir)).toEqual(original);
+  });
+
+  it("omits only root Chromium component downloads, even oversized sparse payloads, without dropping nested site state", async () => {
+    const root = tmp(), options = captureOptions(root), componentRoots = ["component_crx_cache", "SODA", "SODALanguagePacks", "TranslateKit", "WasmTtsEngine"];
+    const retained: string[] = [];
+    for (const component of componentRoots) {
+      const payload = put(options.profileDir, component + "/sparse-download", "synthetic-browser-component");
+      fs.truncateSync(payload, MAX_FULL_PROFILE_BODY_BYTES * 2 + 1);
+      for (const relative of ["Default/" + component + "/site-owned", "Default/Service Worker/CacheStorage/" + component + "/response"]) {
+        put(options.profileDir, relative, "owned-persistent-state:" + relative); retained.push(relative);
+      }
+    }
+    const artifact = { options, ...await captureFullProfile(options) }, incoming = await prepare(artifact), destination = liveTarget(root);
+    expect(artifact.body.length).toBeLessThan(64 * 1024);
+    expect(incoming.manifest.files.map(file => file.path).sort()).toEqual(retained.sort());
+    restorePreparedFullProfile({ prepared: incoming, profileDir: destination, backupSuffix: ".previous", guard });
+    for (const relative of retained) expect(fs.readFileSync(path.join(destination, relative), "utf8")).toBe("owned-persistent-state:" + relative);
+    for (const component of componentRoots) {
+      expect(fs.statSync(path.join(options.profileDir, component, "sparse-download")).size).toBe(MAX_FULL_PROFILE_BODY_BYTES * 2 + 1);
+      expect(fs.existsSync(path.join(destination, component))).toBe(false);
+    }
+  });
+
+  it("does not omit root Chromium component names from Firefox profiles", async () => {
+    const root = tmp(), options = captureOptions(root, { engine: "firefox" });
+    for (const name of ["component_crx_cache", "SODA", "SODALanguagePacks", "TranslateKit", "WasmTtsEngine", "DawnWebGPUCache"]) put(options.profileDir, name + "/site-data", "persistent-firefox-state");
+    const original = readAll(options.profileDir), artifact = { options, ...await captureFullProfile(options) }, incoming = await prepare(artifact);
+    expect(Object.fromEntries(incoming.manifest.files.map(file => [file.path, file.sha256]))).toEqual(original);
+  });
+
   it("moves Firefox logins with its paired key4 DB, site storage/CacheStorage/blob, preferences and sessionstore intact and searchable", async () => {
     const root = tmp(), options = captureOptions(root, { engine: "firefox", sourcePlatform: "win32", browserVersion: "154.0.fixture" }); firefox(options.profileDir);
     const original = readAll(options.profileDir), artifact = { options, ...await captureFullProfile(options) };
@@ -344,9 +389,9 @@ describe("full-profile authentication, identity and archive rejection", () => {
 });
 
 describe("full-profile cold-source and owned-path safety", () => {
-  it.each(["normal", "cache", "lock"])("fails closed on source symlinks, including excluded %s names, without following them", async (kind) => {
+  it.each(["normal", "cache", "dawn-cache", "component", "lock"])("fails closed on source symlinks, including excluded %s names, without following them", async (kind) => {
     const root = tmp(), options = captureOptions(root), sentinel = put(root, "outside-synthetic-sentinel", "DO_NOT_READ_OR_CHANGE");
-    const relative = kind === "cache" ? "Default/Cache" : kind === "lock" ? "SingletonLock" : "linked";
+    const relative = kind === "cache" ? "Default/Cache" : kind === "dawn-cache" ? "Default/DawnWebGPUCache" : kind === "component" ? "component_crx_cache" : kind === "lock" ? "SingletonLock" : "linked";
     mkdir(path.dirname(path.join(options.profileDir, relative))); fs.symlinkSync(sentinel, path.join(options.profileDir, relative));
     await expect(captureFullProfile(options)).rejects.toThrow(/symlink|special/i);
     expect(fs.readFileSync(sentinel, "utf8")).toBe("DO_NOT_READ_OR_CHANGE"); expect(fs.readdirSync(options.stagingDir)).toEqual([]);
@@ -356,6 +401,24 @@ describe("full-profile cold-source and owned-path safety", () => {
     const made = spawnSync("mkfifo", [fifo], { encoding: "utf8" }); expect(made.status, made.stderr).toBe(0);
     await expect(captureFullProfile(options)).rejects.toThrow(/special/);
   });
+  it("reports actionable retained-file size limits before reading oversized persistent data", async () => {
+    const root = tmp(), options = captureOptions(root), relative = "Default/Service Worker/CacheStorage/large-response";
+    const file = put(options.profileDir, relative, "synthetic-persistent-response");
+    fs.truncateSync(file, MAX_FULL_PROFILE_BODY_BYTES + 1);
+    await expect(captureFullProfile(options)).rejects.toMatchObject({ code: "FULL_PROFILE_SIZE_LIMIT", dirId: ID, message: expect.stringContaining(ID),
+      limitKind: "entry", actualBytes: MAX_FULL_PROFILE_BODY_BYTES + 1, limitBytes: MAX_FULL_PROFILE_BODY_BYTES, memberPath: relative });
+    expect(fs.statSync(file).size).toBe(MAX_FULL_PROFILE_BODY_BYTES + 1);
+    expect(fs.readdirSync(options.stagingDir)).toEqual([]);
+  });
+
+  it("does not let omitted component downloads hide pending Cookie or recovery material", async () => {
+    const root = tmp(), options = captureOptions(root), relative = "component_crx_cache/.queued-cookie-imports.json";
+    put(options.profileDir, relative, "must-not-hide-pending-queue");
+    await expect(captureFullProfile(options)).rejects.toMatchObject({ code: "FULL_PROFILE_COOKIE_QUEUE_UNRESOLVED" });
+    expect(fs.readFileSync(path.join(options.profileDir, relative), "utf8")).toBe("must-not-hide-pending-queue");
+    expect(fs.readdirSync(options.stagingDir)).toEqual([]);
+  });
+
   it("rejects symlink staging paths and staging nested in the source", async () => {
     const root = tmp(), options = captureOptions(root), actual = mkdir(path.join(root, "actual-stage")), linked = path.join(root, "linked-stage");
     put(options.profileDir, "safe", "data"); fs.symlinkSync(actual, linked);
