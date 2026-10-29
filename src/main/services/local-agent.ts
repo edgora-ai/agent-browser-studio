@@ -493,33 +493,45 @@ export function deriveProfileName(url: string, username: string, existing: Set<s
   let host = "";
   try { host = new URL(url).hostname.replace(/^www\./, ""); } catch { host = String(url).split("/")[0] || ""; }
   const base = (host ? host + " · " : "") + username;
-  let name = base.slice(0, 80);
-  let n = 2;
-  while (existing.has(name)) { name = (base + " #" + n).slice(0, 80); n++; }
-  return name;
+  const name = base.slice(0, 80);
+  if (!existing.has(name)) return name;
+  // The raw name can itself equal a suffix candidate (e.g. already ends #2).
+  // Probe S+1 distinct suffixed candidates in addition to the raw name, so S
+  // occupied names cannot exhaust the budget. Reserve room for every suffix.
+  const maxSuffix = existing.size + 2;
+  for (let n = 2; n <= maxSuffix; n++) {
+    const suffix = " #" + n;
+    const candidate = base.slice(0, 80 - suffix.length) + suffix;
+    if (!existing.has(candidate)) return candidate;
+  }
+  throw new Error("Unable to allocate a unique profile name");
 }
 
 /** Bulk import accounts AND create a bound profile for each (RoxyBrowser 3.8.9
- *  "template bulk import → bulk create profiles" workflow). The profile is
- *  created before its account, so a profile-create error skips the account
- *  entirely — no half-created (profile-without-account) pairs. */
+ *  "template bulk import → bulk create profiles" workflow). Known account
+ *  capacity is checked before creating profiles; profile-create errors skip
+ *  their accounts. Profile creation and the final account write are otherwise
+ *  separate operations, not a cross-resource transaction. */
 export function bulkCreateProfilesWithAccounts(
   items: ParsedAccountLine[],
   options: BulkCreateProfilesOptions = {},
 ): BulkAccountResult & { created: number } {
   const entries: PlatformAccount[] = [];
   const errors: BulkAccountResult["errors"] = [];
+  const planned: { item: ParsedAccountLine; entry: PlatformAccount; line: number }[] = [];
+  for (let i = 0; i < items.length; i++) {
+    try { planned.push({ item: items[i], entry: bulkAccountEntry(items[i]), line: i + 1 }); }
+    catch (e) { errors.push({ line: i + 1, error: e instanceof Error ? e.message : String(e) }); }
+  }
+  if (!planned.length) return { added: 0, skipped: items.length, created: 0, errors };
+  // Reject predictable overflow for the whole valid plan before any profile
+  // creation. appendBulkAccounts still rechecks against the final live base.
+  requireAccountCapacity(getAccounts().length + planned.length);
   const existingNames = new Set<string>();
   for (const p of listBrowserProfiles()) existingNames.add(p.name);
   let added = 0;
   let created = 0;
-  for (let i = 0; i < items.length; i++) {
-    const it = items[i];
-    let entry: PlatformAccount;
-    try { entry = bulkAccountEntry(it); }
-    catch (e) { errors.push({ line: i + 1, error: e instanceof Error ? e.message : String(e) }); continue; }
-    // Reject known capacity overflow before creating any further profile.
-    requireAccountCapacity(getAccounts().length + entries.length + 1);
+  for (const { item: it, entry, line } of planned) {
     let dirId: string;
     try {
       const name = deriveProfileName(it.url, it.username, existingNames);
@@ -531,7 +543,7 @@ export function bulkCreateProfilesWithAccounts(
       dirId = r.dirId;
       existingNames.add(name);
     } catch (e) {
-      errors.push({ line: i + 1, error: (e instanceof Error ? e.message : String(e)) });
+      errors.push({ line, error: (e instanceof Error ? e.message : String(e)) });
       continue;
     }
     entries.push({ ...entry, profileIds: [dirId] });
@@ -539,6 +551,8 @@ export function bulkCreateProfilesWithAccounts(
     created++;
   }
   appendBulkAccounts(entries);
+  // Validation is planned first, but callers still receive input-order errors.
+  errors.sort((a, b) => (a.line ?? 0) - (b.line ?? 0));
   return { added, skipped: items.length - added, created, errors };
 }
 

@@ -312,14 +312,20 @@ export function registerProfileHandlers(): void {
     dirId,
     domain,
     name,
+    path,
+    partitionKey,
+    deleteIdentityVerified,
   }: {
     dirId: string;
     domain: string;
     name: string;
+    path: string;
+    partitionKey?: unknown;
+    deleteIdentityVerified?: unknown;
   }): Promise<{ success: boolean; error?: string }> => {
     try {
       validateDirId(dirId);
-      const ok = await deleteCookie(dirId, domain, name);
+      const ok = await deleteCookie(dirId, domain, name, path, partitionKey, deleteIdentityVerified);
       return { success: ok };
     } catch (e: any) {
       return { success: false, error: e.message };

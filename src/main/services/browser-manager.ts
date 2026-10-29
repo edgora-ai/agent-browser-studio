@@ -8,7 +8,7 @@ import * as fs from "node:fs";
 import * as net from "node:net";
 import { createHash, randomUUID } from "node:crypto";
 import { spawn, execSync, execFileSync } from "node:child_process";
-import { parseBrowserProcessLine, findBrowserByProfileSync, inspectBrowserLaunchesSync, browserLaunchProcessFromArgv, normalizeBrowserProcessPath, type BrowserLaunchProcess } from "./process-discovery.js";
+import { parseBrowserProcessLine, findBrowserByProfileSync, inspectBrowserLaunchesSync, browserLaunchProcessFromArgv, normalizeBrowserProcessPath, withProfileProcessSnapshotsSync, type BrowserLaunchProcess } from "./process-discovery.js";
 import { BrowserWindow, screen as electronScreen } from "electron";
 import { getConfig, saveConfig, getAppDataDir, getProfilesDir, resolveProfileProxy, resolveProfileProxySecret, getProxyDetection, sanitizeAppUrl, getProxyHealthEntry, assertProfileWritable } from "./config-manager.js";
 import { cdpCookieService, readQueuedCookieImports } from "./cdp-cookie-service.js";
@@ -25,6 +25,7 @@ import {
 import { checkEnvironmentRiskRuntime, shouldBlockEnvironmentRisk, summarizeEnvFindings, type EnvRiskFinding } from "./environment-risk.js";
 import { runFingerprintDriftGuard, runEnvironmentRiskGuard, LaunchBlockedError, assertHostPlatformCompatible, assertChromiumWebRtcLaunchPolicy, resolveChromiumWebRtcLaunchPolicy, type LaunchDriftCheck } from "./browser/launch-guards.js";
 import { chromiumWebRtcRoutingArgs } from "./browser/webrtc-policy.js";
+import { assertBrowserLaunchAllowed } from "./browser/launch-admission.js";
 import { firefoxWebRtcCheckpointHash, firefoxWebRtcCheckpointMatches, resolveFirefoxWebRtcRoutingPolicy, type FirefoxWebRtcRoutingPolicy } from "./browser/firefox-webrtc-policy.js";
 import { applyChromiumWebRtcPreferences, validateChromiumWebRtcPreferences } from "./browser/webrtc-preferences.js";
 export type { LaunchDriftCheck } from "./browser/launch-guards.js";
@@ -979,72 +980,76 @@ export function deleteBrowserProfile(dirId: string, opts?: { force?: boolean }):
 export function listBrowserProfiles(runtime: ProfileRuntimeSnapshot = getProfileRuntimeSnapshot()): BrowserProfile[] {
   const cfg = getConfig() as any;
   const profiles = cfg.browserProfiles || {};
-  const result: BrowserProfile[] = [];
-  for (const [dirId, meta] of Object.entries(profiles)) {
-    const m = meta as any;
-    const st = statusBrowser(dirId);
-    const profileDir = path.join(getProfilesDir(), dirId);
-    const lastModified = fs.existsSync(profileDir) ? Math.floor(fs.statSync(profileDir).mtimeMs) : 0;
-    const syncState = readProfileSyncState(dirId, m);
-    const resolvedProxy = resolveProfileProxy(dirId);
-    const engine = sanitizeBrowserEngine(m.engine);
-    result.push({
-      dirId,
-      name: m.name || dirId.slice(0, 8),
-      version: engine === "firefox"
-        ? (normalizeManagedFirefoxVersion(m.browserVersion) || runtime.firefoxVersion || "?")
-        : (normalizeManagedChromiumVersion(m.browserVersion) || runtime.chromiumVersion || "?"),
-      // Engine-aware pin display (R4): a Firefox "154.0" pin must not go
-      // through the Chromium 4-segment validator (it throws and breaks the
-      // entire profile list).
-      browserVersion: engine === "firefox"
-        ? normalizeManagedFirefoxVersion(m.browserVersion)
-        : normalizeManagedChromiumVersion(m.browserVersion),
-      engine,
-      fingerprintMode: normalizeFingerprintMode(m.fingerprintMode),
-      allowThirdPartyCookies: normalizeBoolean(m.allowThirdPartyCookies, "third-party cookie compatibility"),
-      drm: normalizeBoolean(m.drm, "drm"),
-      fingerprintSeed: m.fingerprintSeed || 12345,
-      platform: m.platform || "windows",
-      timezone: m.timezone || null,
-      locale: m.locale || null,
-      webrtcMode: normalizeWebRtcMode(m.webrtcMode, m.webrtcIp),
-      webrtcIp: m.webrtcIp || null,
-      geolocationMode: normalizeGeolocationMode(m.geolocationMode),
-      geolocationLatitude: normalizeOptionalNumber(m.geolocationLatitude, -90, 90, "geolocation latitude"),
-      geolocationLongitude: normalizeOptionalNumber(m.geolocationLongitude, -180, 180, "geolocation longitude"),
-      geolocationAccuracy: normalizeOptionalNumber(m.geolocationAccuracy, 0, 100000, "geolocation accuracy"),
-      gpuVendor: m.gpuVendor || null,
-      gpuRenderer: m.gpuRenderer || null,
-      hardwareConcurrency: Number.isInteger(m.hardwareConcurrency) ? m.hardwareConcurrency : null,
-      deviceMemory: Number.isInteger(m.deviceMemory) ? m.deviceMemory : null,
-      screenWidth: Number.isInteger(m.screenWidth) ? m.screenWidth : null,
-      screenHeight: Number.isInteger(m.screenHeight) ? m.screenHeight : null,
-      storageQuota: Number.isInteger(m.storageQuota) ? m.storageQuota : null,
-      taskbarHeight: Number.isInteger(m.taskbarHeight) ? m.taskbarHeight : null,
-      fontsDir: m.fontsDir || null,
-      renderScaleMode: m.renderScaleMode === "strict" ? "strict" : "native",
-      // B2 (#107): the edit form reads windowTitlePrefix to decide the
-      // checkbox state — omitting it made the checkbox always-on and every
-      // save clobbered the stored prefix via setMeta.
-      windowTitlePrefix: m.windowTitlePrefix === null ? null : (m.windowTitlePrefix || undefined),
-      appUrl: m.appUrl || null,
-      proxyMode: resolvedProxy.mode,
-      proxyName: resolvedProxy.name,
-      note: m.note || null,
-      tags: normalizeTags(m.tags),
-      preset: m.preset || null,
-      ...syncState,
-      lastModified,
-      lock: m.lock || null,
-      running: st.running,
-      ...(st.unknown ? { unknown: true } : {}),
-      ...(runningProcesses.get(dirId)?.stopping ? { stopping: true } : {}),
-      pid: st.pid,
-      cdpPort: st.cdpPort,
-    });
-  }
-  return result;
+  // The existing lexical snapshot supplies the same strict observation to every
+  // statusBrowser call, including discovery failures; nothing is cached across lists.
+  return withProfileProcessSnapshotsSync(Object.keys(profiles).map((dirId) => path.resolve(getProfilesDir(), dirId)), () => {
+    const result: BrowserProfile[] = [];
+    for (const [dirId, meta] of Object.entries(profiles)) {
+      const m = meta as any;
+      const st = statusBrowser(dirId);
+      const profileDir = path.join(getProfilesDir(), dirId);
+      const lastModified = fs.existsSync(profileDir) ? Math.floor(fs.statSync(profileDir).mtimeMs) : 0;
+      const syncState = readProfileSyncState(dirId, m);
+      const resolvedProxy = resolveProfileProxy(dirId);
+      const engine = sanitizeBrowserEngine(m.engine);
+      result.push({
+        dirId,
+        name: m.name || dirId.slice(0, 8),
+        version: engine === "firefox"
+          ? (normalizeManagedFirefoxVersion(m.browserVersion) || runtime.firefoxVersion || "?")
+          : (normalizeManagedChromiumVersion(m.browserVersion) || runtime.chromiumVersion || "?"),
+        // Engine-aware pin display (R4): a Firefox "154.0" pin must not go
+        // through the Chromium 4-segment validator (it throws and breaks the
+        // entire profile list).
+        browserVersion: engine === "firefox"
+          ? normalizeManagedFirefoxVersion(m.browserVersion)
+          : normalizeManagedChromiumVersion(m.browserVersion),
+        engine,
+        fingerprintMode: normalizeFingerprintMode(m.fingerprintMode),
+        allowThirdPartyCookies: normalizeBoolean(m.allowThirdPartyCookies, "third-party cookie compatibility"),
+        drm: normalizeBoolean(m.drm, "drm"),
+        fingerprintSeed: m.fingerprintSeed || 12345,
+        platform: m.platform || "windows",
+        timezone: m.timezone || null,
+        locale: m.locale || null,
+        webrtcMode: normalizeWebRtcMode(m.webrtcMode, m.webrtcIp),
+        webrtcIp: m.webrtcIp || null,
+        geolocationMode: normalizeGeolocationMode(m.geolocationMode),
+        geolocationLatitude: normalizeOptionalNumber(m.geolocationLatitude, -90, 90, "geolocation latitude"),
+        geolocationLongitude: normalizeOptionalNumber(m.geolocationLongitude, -180, 180, "geolocation longitude"),
+        geolocationAccuracy: normalizeOptionalNumber(m.geolocationAccuracy, 0, 100000, "geolocation accuracy"),
+        gpuVendor: m.gpuVendor || null,
+        gpuRenderer: m.gpuRenderer || null,
+        hardwareConcurrency: Number.isInteger(m.hardwareConcurrency) ? m.hardwareConcurrency : null,
+        deviceMemory: Number.isInteger(m.deviceMemory) ? m.deviceMemory : null,
+        screenWidth: Number.isInteger(m.screenWidth) ? m.screenWidth : null,
+        screenHeight: Number.isInteger(m.screenHeight) ? m.screenHeight : null,
+        storageQuota: Number.isInteger(m.storageQuota) ? m.storageQuota : null,
+        taskbarHeight: Number.isInteger(m.taskbarHeight) ? m.taskbarHeight : null,
+        fontsDir: m.fontsDir || null,
+        renderScaleMode: m.renderScaleMode === "strict" ? "strict" : "native",
+        // B2 (#107): the edit form reads windowTitlePrefix to decide the
+        // checkbox state — omitting it made the checkbox always-on and every
+        // save clobbered the stored prefix via setMeta.
+        windowTitlePrefix: m.windowTitlePrefix === null ? null : (m.windowTitlePrefix || undefined),
+        appUrl: m.appUrl || null,
+        proxyMode: resolvedProxy.mode,
+        proxyName: resolvedProxy.name,
+        note: m.note || null,
+        tags: normalizeTags(m.tags),
+        preset: m.preset || null,
+        ...syncState,
+        lastModified,
+        lock: m.lock || null,
+        running: st.running,
+        ...(st.unknown ? { unknown: true } : {}),
+        ...(runningProcesses.get(dirId)?.stopping ? { stopping: true } : {}),
+        pid: st.pid,
+        cdpPort: st.cdpPort,
+      });
+    }
+    return result;
+  });
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -1218,6 +1223,7 @@ export async function launchBrowser(
   dirId: string,
   opts?: { headless?: boolean; forceDeadProxy?: boolean },
 ): Promise<{ pid: number; cdpPort: number; driftCheck: LaunchDriftCheck; envCheck: LaunchEnvCheck; cookieCheck?: LaunchCookieCheck }> {
+  assertBrowserLaunchAllowed();
   validateDirId(dirId);
   if (!isManagedProfileId(dirId)) {
     throw new Error(`Profile ${dirId.slice(0, 8)} is not a managed Chromium profile`);
@@ -1263,6 +1269,7 @@ export async function launchBrowser(
     ? chromiumLaunchRequestHash(meta, cfg, { headless: opts?.headless, binaryOverride: envBin })
     : null;
   const assertCurrentRequest = () => {
+    assertBrowserLaunchAllowed();
     if (gpuContextBinary && readChromiumGpuContext(gpuContextBinary).kernelArchitecture !== gpuContext?.kernelArchitecture) {
       throw restartRequired("Chromium GPU policy eligibility changed during preparation");
     }
@@ -1311,6 +1318,7 @@ export async function launchBrowser(
     const firefoxRequestHash = (() => { try { return firefoxLaunchRequestHash(meta, cfg, requestOptions()); }
       catch (error) { if (releaseLaunchLock) releaseLaunchLock(); throw error; } })();
     const assertFirefoxRequest = () => {
+      assertBrowserLaunchAllowed();
       // Gecko treats presence (even "0" or an empty string) as disabling the
       // content sandbox; prefs alone cannot restore its secure default.
       if (process.env.MOZ_DISABLE_CONTENT_SANDBOX !== undefined) {
@@ -1785,10 +1793,22 @@ export async function launchBrowser(
   // These are the actual final spawn arguments; no producer runs after this.
   assertChromiumWebRtcLaunchPolicy(args, webRtcPolicy);
   const logFile = getLaunchLogPath(dirId);
+  assertBrowserLaunchAllowed();
   const logFd = fs.openSync(logFile, "a");
-  fs.writeSync(logFd, `\n[${new Date().toISOString()}] Launching ${bin}\n${maskSensitiveLaunchArgs(args).join(" ")}\n`);
-  const launchEnv = (launchPlan as any).env as NodeJS.ProcessEnv | undefined;
-  const child = spawn(bin, args, { detached: true, stdio: ["ignore", logFd, logFd], env: launchEnv || process.env });
+  let logClosed = false;
+  const closeLaunchLog = () => {
+    if (logClosed) return;
+    logClosed = true;
+    try { fs.closeSync(logFd); } catch (error) { console.error("[agent-browser] failed to close launch log:", error); }
+  };
+  let child: ReturnType<typeof spawn>;
+  try {
+    fs.writeSync(logFd, `\n[${new Date().toISOString()}] Launching ${bin}\n${maskSensitiveLaunchArgs(args).join(" ")}\n`);
+    const launchEnv = (launchPlan as any).env as NodeJS.ProcessEnv | undefined;
+    assertBrowserLaunchAllowed();
+    // No await between this gate, spawn and publishing the owned entry.
+    child = spawn(bin, args, { detached: true, stdio: ["ignore", logFd, logFd], env: launchEnv || process.env });
+  } catch (error) { closeLaunchLog(); throw error; }
   child.unref();
   const pid = child.pid;
   // Retain only this launch's resource if its runtime entry is later replaced.
@@ -1806,137 +1826,15 @@ export async function launchBrowser(
   };
 
   child.on("error", (err: Error) => {
-    const failedEntry = takeOwnedRuntimeEntry();
-    void (failedEntry?.proxyBridge || launchProxyBridge)?.close().catch(() => undefined);
+    // ChildProcess also emits error when a signal is refused. That is not
+    // proof of exit and must not make a live shutdown owner disappear.
+    const failedEntry = child.pid === undefined || child.exitCode !== null || child.signalCode !== null
+      ? takeOwnedRuntimeEntry() : undefined;
+    void failedEntry?.proxyBridge?.close().catch(() => undefined);
     console.error(`[agent-browser] spawn error for ${dirId.slice(0, 8)}:`, err.message);
   });
 
-  if (!pid) throw new Error(`Managed Chromium failed to start (no PID returned) for ${dirId.slice(0, 8)}`);
-
-  const launchedEntry: RunningEntry = {
-    pid,
-    process: child,
-    port: cdpPort,
-    lastActivityAt: Date.now(),
-    engine: "chromium",
-    browserVersion: nativeChromiumVersion,
-    launchProvenance,
-    launchProxy: captureLaunchProxySnapshot(resolvedProxy),
-    ...(pendingProxyBridge ? { proxyBridge: pendingProxyBridge } : {}),
-  };
-  runningProcesses.set(dirId, launchedEntry);
-  pendingProxyBridge = null;
-  if (releaseLaunchLock) {
-    releaseLaunchLock();
-    releaseLaunchLock = null;
-  }
-
-  try {
-    try {
-      await waitForCdpReady(cdpPort, 15000);
-    } catch (e: any) {
-      const msg = e && e.message ? String(e.message) : String(e);
-      if (/EADDRINUSE|ECONNREFUSED/i.test(msg)) {
-        const retryPort = await findFreePortWithRetry(0);
-        const hint = retryPort && retryPort !== cdpPort ? " (next free port " + retryPort + " was available — retry the launch)" : "";
-        throw new Error(msg + hint);
-      }
-      throw e;
-    }
-  } catch (e) {
-    const failedEntry = takeOwnedRuntimeEntry();
-    await (failedEntry?.proxyBridge || launchProxyBridge)?.close().catch(() => undefined);
-    try { process.kill(pid, "SIGTERM"); } catch (killError) { console.error(`[agent-browser] failed to terminate unready process ${pid}:`, killError); }
-    try { fs.closeSync(logFd); } catch (closeError) { console.error(`[agent-browser] failed to close launch log:`, closeError); }
-    throw e;
-  }
-
-  // A running browser and a restored Cookie identity are separate facts. Use
-  // this launch's owned endpoint, then read the queue back even after failure.
-  let expectedCookies: number | undefined, pendingCookies: number | undefined;
-  let appliedCookies = 0, cookieError: string | undefined;
-  try {
-    expectedCookies = readQueuedCookieImports(dirId, { strict: true }).length;
-    if (expectedCookies > 0) {
-      const applied = await cdpCookieService.applyQueuedImports(dirId, {
-        port: cdpPort,
-        isCurrent: () => {
-          const entry = runningProcesses.get(dirId);
-          return entry?.process === child && entry.pid === pid && entry.port === cdpPort && !entry.stopping &&
-            child.pid === pid && child.exitCode === null && child.signalCode === null && child.killed !== true;
-        },
-      });
-      if (!Number.isSafeInteger(applied) || applied < 0 || applied > expectedCookies) throw new Error("Invalid Cookie import count");
-      appliedCookies = applied;
-    }
-  } catch { cookieError = "COOKIE_IMPORT_UNAVAILABLE"; }
-  try { pendingCookies = readQueuedCookieImports(dirId, { strict: true }).length; }
-  catch { cookieError = "COOKIE_IMPORT_UNAVAILABLE"; }
-  if (!cookieError && (expectedCookies !== appliedCookies || pendingCookies !== 0)) cookieError = "COOKIE_IMPORT_INCOMPLETE";
-  const cookieCheck: LaunchCookieCheck = {
-    checked: true, applied: appliedCookies,
-    ...(pendingCookies !== undefined ? { pending: pendingCookies } : {}),
-    ...(cookieError ? { error: cookieError } : {}),
-  };
-  if (cookieError) console.warn(`[agent-browser] queued Cookie import for ${dirId.slice(0, 8)}: ${cookieError}`);
-  else if (appliedCookies > 0) console.log(`[agent-browser] Applied ${appliedCookies} queued cookies for ${dirId.slice(0, 8)}`);
-
-  let driftCheck: LaunchDriftCheck = { checked: false };
-  try {
-    driftCheck = await runFingerprintDriftGuard(
-      {
-        captureFingerprint: (port: number) => captureFingerprint(port),
-        audit: (detail: string) => recordAudit({ category: "profile", action: "fingerprint-drift", target: dirId, actor: "auto", detail }),
-        auditBlock: (detail: string) => recordAudit({ category: "profile", action: "fingerprint-drift-block", target: dirId, actor: "auto", detail }),
-        auditError: (detail: string) => recordAudit({ category: "profile", action: "fingerprint-drift-error", target: dirId, actor: "auto", detail }),
-        recordComparison: fingerprintComparisonRecorder(dirId, meta, nativeChromiumVersion, () => {
-          const entry = runningProcesses.get(dirId);
-          return entry?.process === child && entry.pid === pid && entry.port === cdpPort && !entry.stopping;
-        }, false, cfg),
-      },
-      { cdpPort, meta: { ...meta, timezone: effectiveTimezone }, cfg, passThrough, expectedBrowserVersion: nativeChromiumVersion },
-    );
-  } catch (e: any) {
-    if (e instanceof LaunchBlockedError) {
-      const failedEntry = takeOwnedRuntimeEntry();
-      await (failedEntry?.proxyBridge || launchProxyBridge)?.close().catch(() => undefined);
-      try { process.kill(pid, "SIGTERM"); } catch (killError) { console.error("[agent-browser] failed to terminate drifted process " + pid + ":", killError); }
-      try { fs.closeSync(logFd); } catch (closeError) { console.error("[agent-browser] failed to close launch log:", closeError); }
-      await waitForProcessExit(pid);
-      // Preserve the code and the pre-stop measurement for offline review.
-      // Replacing this with Error(message) leaves the UI with a dead browser
-      // and no way to inspect the drift that caused its termination.
-      throw e;
-    }
-    throw e;
-  }
-
-  let envCheck: LaunchEnvCheck = { checked: false };
-  try {
-    const r = runEnvironmentRiskGuard(
-      {
-        auditHigh: (detail: string) => recordAudit({ category: "profile", action: "env-risk-high", target: dirId, actor: "auto", detail }),
-        auditError: (detail: string) => recordAudit({ category: "profile", action: "env-risk-error", target: dirId, actor: "auto", detail }),
-      },
-      { meta, resolvedProxy, cfg, passThrough },
-    );
-    envCheck = r as any;
-  } catch (e: any) {
-    if (e instanceof LaunchBlockedError) {
-      const detail = e.message;
-      recordAudit({ category: "profile", action: "env-risk-block", target: dirId, actor: "auto", detail });
-      const failedEntry = takeOwnedRuntimeEntry();
-      await (failedEntry?.proxyBridge || launchProxyBridge)?.close().catch(() => undefined);
-      try { process.kill(pid, "SIGTERM"); } catch (killError) { console.error("[agent-browser] failed to terminate env-blocked process " + pid + ":", killError); }
-      try { fs.closeSync(logFd); } catch (closeError) { console.error("[agent-browser] failed to close launch log:", closeError); }
-      await waitForProcessExit(pid);
-      const envBlockError: any = new Error(e.message);
-      envBlockError.envBlocked = true;
-      throw envBlockError;
-    }
-    throw e;
-  }
-
+  let launchPublished = false;
   child.on("exit", () => {
     // Verified warm reuse replaces the entry, but retains the same owned child.
     // PID/port alone must never identify a replacement process as that child.
@@ -1948,8 +1846,8 @@ export async function launchBrowser(
       void entry.proxyBridge?.close().catch((error) => console.error("[browser-stop] proxy bridge cleanup failed:", error));
       runningProcesses.delete(dirId);
     }
-    try { fs.closeSync(logFd); } catch (closeError) { console.error(`[agent-browser] failed to close launch log:`, closeError); }
-    if (entry && !currentIsOwned) return;
+    closeLaunchLog();
+    if (!launchPublished || (entry && !currentIsOwned)) return;
     for (const win of BrowserWindow.getAllWindows()) {
       if (!win.isDestroyed()) {
         const payload = { dirId, pid, timestamp: Date.now() };
@@ -1960,9 +1858,120 @@ export async function launchBrowser(
     emitEvent("profile:exited", { dirId, pid });
   });
 
-  emitEvent("profile:launched", { dirId, pid, cdpPort });
-  recordAudit({ category: "profile", action: "launch", target: dirId, actor: "user", detail: `pid=${pid} cdpPort=${cdpPort} fingerprint=${fingerprintMode} browser=${nativeChromiumVersion || "unknown"}` });
-  return { pid, cdpPort, driftCheck, envCheck, cookieCheck };
+  try {
+    if (!pid) throw new Error(`Managed Chromium failed to start (no PID returned) for ${dirId.slice(0, 8)}`);
+    assertBrowserLaunchAllowed();
+
+    const launchedEntry: RunningEntry = {
+      pid,
+      process: child,
+      port: cdpPort,
+      lastActivityAt: Date.now(),
+      engine: "chromium",
+      browserVersion: nativeChromiumVersion,
+      launchProvenance,
+      launchProxy: captureLaunchProxySnapshot(resolvedProxy),
+      ...(pendingProxyBridge ? { proxyBridge: pendingProxyBridge } : {}),
+    };
+    runningProcesses.set(dirId, launchedEntry);
+    pendingProxyBridge = null;
+    if (releaseLaunchLock) {
+      releaseLaunchLock();
+      releaseLaunchLock = null;
+    }
+
+    try {
+      await waitForCdpReady(cdpPort, 15000);
+    } catch (e: any) {
+      const msg = e && e.message ? String(e.message) : String(e);
+      if (/EADDRINUSE|ECONNREFUSED/i.test(msg)) {
+        const retryPort = await findFreePortWithRetry(0);
+        const hint = retryPort && retryPort !== cdpPort ? " (next free port " + retryPort + " was available — retry the launch)" : "";
+        throw new Error(msg + hint);
+      }
+      throw e;
+    }
+    assertOwnedBrowserLaunch(dirId, child, cdpPort);
+
+    // A running browser and a restored Cookie identity are separate facts. Use
+    // this launch's owned endpoint, then read the queue back even after failure.
+    let expectedCookies: number | undefined, pendingCookies: number | undefined;
+    let appliedCookies = 0, cookieError: string | undefined;
+    try {
+      expectedCookies = readQueuedCookieImports(dirId, { strict: true }).length;
+      if (expectedCookies > 0) {
+        const applied = await cdpCookieService.applyQueuedImports(dirId, {
+          port: cdpPort,
+          isCurrent: () => {
+            const entry = runningProcesses.get(dirId);
+            return entry?.process === child && entry.pid === pid && entry.port === cdpPort && !entry.stopping &&
+              child.pid === pid && child.exitCode === null && child.signalCode === null && child.killed !== true;
+          },
+        });
+        if (!Number.isSafeInteger(applied) || applied < 0 || applied > expectedCookies) throw new Error("Invalid Cookie import count");
+        appliedCookies = applied;
+      }
+    } catch { cookieError = "COOKIE_IMPORT_UNAVAILABLE"; }
+    try { pendingCookies = readQueuedCookieImports(dirId, { strict: true }).length; }
+    catch { cookieError = "COOKIE_IMPORT_UNAVAILABLE"; }
+    if (!cookieError && (expectedCookies !== appliedCookies || pendingCookies !== 0)) cookieError = "COOKIE_IMPORT_INCOMPLETE";
+    const cookieCheck: LaunchCookieCheck = {
+      checked: true, applied: appliedCookies,
+      ...(pendingCookies !== undefined ? { pending: pendingCookies } : {}),
+      ...(cookieError ? { error: cookieError } : {}),
+    };
+    if (cookieError) console.warn(`[agent-browser] queued Cookie import for ${dirId.slice(0, 8)}: ${cookieError}`);
+    else if (appliedCookies > 0) console.log(`[agent-browser] Applied ${appliedCookies} queued cookies for ${dirId.slice(0, 8)}`);
+
+    assertOwnedBrowserLaunch(dirId, child, cdpPort);
+    const driftCheck = await runFingerprintDriftGuard(
+        {
+          captureFingerprint: (port: number) => captureFingerprint(port),
+          audit: (detail: string) => recordAudit({ category: "profile", action: "fingerprint-drift", target: dirId, actor: "auto", detail }),
+          auditBlock: (detail: string) => recordAudit({ category: "profile", action: "fingerprint-drift-block", target: dirId, actor: "auto", detail }),
+          auditError: (detail: string) => recordAudit({ category: "profile", action: "fingerprint-drift-error", target: dirId, actor: "auto", detail }),
+          recordComparison: fingerprintComparisonRecorder(dirId, meta, nativeChromiumVersion, () => {
+            const entry = runningProcesses.get(dirId);
+            return entry?.process === child && entry.pid === pid && entry.port === cdpPort && !entry.stopping;
+          }, false, cfg),
+        },
+        { cdpPort, meta: { ...meta, timezone: effectiveTimezone }, cfg, passThrough, expectedBrowserVersion: nativeChromiumVersion },
+      );
+    assertOwnedBrowserLaunch(dirId, child, cdpPort);
+
+    let envCheck: LaunchEnvCheck = { checked: false };
+    try {
+      const r = runEnvironmentRiskGuard(
+        {
+          auditHigh: (detail: string) => recordAudit({ category: "profile", action: "env-risk-high", target: dirId, actor: "auto", detail }),
+          auditError: (detail: string) => recordAudit({ category: "profile", action: "env-risk-error", target: dirId, actor: "auto", detail }),
+        },
+        { meta, resolvedProxy, cfg, passThrough },
+      );
+      envCheck = r as any;
+    } catch (e: any) {
+      if (e instanceof LaunchBlockedError) {
+        const detail = e.message;
+        recordAudit({ category: "profile", action: "env-risk-block", target: dirId, actor: "auto", detail });
+        const envBlockError: any = new Error(e.message);
+        envBlockError.envBlocked = true;
+        throw envBlockError;
+      }
+      throw e;
+    }
+
+
+
+    recordAudit({ category: "profile", action: "launch", target: dirId, actor: "user", detail: `pid=${pid} cdpPort=${cdpPort} fingerprint=${fingerprintMode} browser=${nativeChromiumVersion || "unknown"}` });
+    assertOwnedBrowserLaunch(dirId, child, cdpPort);
+    launchPublished = true;
+    emitEvent("profile:launched", { dirId, pid, cdpPort });
+    return { pid, cdpPort, driftCheck, envCheck, cookieCheck };
+  } catch (error) {
+    try { await cleanupFailedBrowserLaunch(dirId, child, cdpPort, { proxyBridge: launchProxyBridge || undefined }); }
+    finally { closeLaunchLog(); }
+    throw error;
+  }
   } finally {
     pendingNativeProxyAuth?.cleanup();
     await pendingProxyBridge?.close().catch(() => undefined);
@@ -1970,8 +1979,57 @@ export async function launchBrowser(
   }
 }
 
-/** Wait for a spawned child to exit, escalating to SIGKILL so a "blocked"
- *  launch never leaves a live process behind. */
+/** Verification must never publish success into a replaced/stopping runtime. */
+function assertOwnedBrowserLaunch(dirId: string, child: ReturnType<typeof spawn>, port: number): RunningEntry {
+  assertBrowserLaunchAllowed();
+  const entry = runningProcesses.get(dirId);
+  if (!entry || entry.process !== child || entry.pid !== child.pid || entry.port !== port || entry.stopping ||
+      child.exitCode !== null || child.signalCode !== null || child.killed) {
+    throw restartRequired("the owned browser session changed during launch");
+  }
+  return entry;
+}
+
+/** Clean only this launch's child and resources; never detach a replacement or
+ * steal termination from the shutdown driver which already owns this entry. */
+async function cleanupFailedBrowserLaunch(
+  dirId: string,
+  child: ReturnType<typeof spawn>,
+  port: number,
+  resources: { proxyBridge?: RunningEntry["proxyBridge"]; bidiConn?: RunningEntry["bidiConn"] } = {},
+): Promise<void> {
+  const entry = runningProcesses.get(dirId);
+  const owned = entry?.process === child && entry.pid === child.pid && entry.port === port ? entry : undefined;
+  const stopping = owned?.stopping === true;
+  const connection = resources.bidiConn || owned?.bidiConn;
+  if (connection && (!stopping || owned?.bidiConn !== connection)) {
+    if (owned?.bidiConn === connection) owned.bidiConn = undefined;
+    if (getRegisteredFirefoxSession(port) === connection) dropFirefoxSession(port);
+    try { connection.close(); } catch { /* only this launch's connection */ }
+  }
+  if (stopping) return;
+  if (owned) owned.stopping = true;
+  const bridge = resources.proxyBridge || owned?.proxyBridge;
+  if (owned && owned.proxyBridge === bridge) owned.proxyBridge = undefined;
+  const terminate = async () => {
+    // A ChildProcess handle, not a process-table/PID rediscovery, owns signals.
+    const alive = () => child.pid !== undefined && child.exitCode === null && child.signalCode === null;
+    if (!alive()) return;
+    try { child.kill("SIGTERM"); } catch { /* retain ownership until confirmed exit */ }
+    const deadline = Date.now() + 4000;
+    while (alive() && Date.now() < deadline) await sleep(Math.min(100, deadline - Date.now()));
+    if (alive()) { try { child.kill("SIGKILL"); } catch { /* still owned/stopping, not falsely stopped */ } }
+  };
+  await Promise.all([
+    terminate(),
+    bridge?.close().catch(() => undefined),
+  ]);
+  if (owned && runningProcesses.get(dirId) === owned && (child.exitCode !== null || child.signalCode !== null)) {
+    if (owned.killTimer) clearTimeout(owned.killTimer);
+    runningProcesses.delete(dirId);
+  }
+}
+
 function ownedChromiumLaunchEvidence(entry: RunningEntry | undefined): BrowserLaunchProcess | null {
   const child = entry?.process;
   if (entry?.engine !== "chromium" || !entry.launchProvenance || !child || child.pid !== entry.pid ||
@@ -2160,6 +2218,7 @@ async function launchFirefoxProfile(
   releaseLaunchLock: (() => void) | null,
   opts: { forceDeadProxy?: boolean; requestHash: string; assertCurrentRequest: () => void },
 ): Promise<{ pid: number; cdpPort: number; driftCheck: LaunchDriftCheck; envCheck: LaunchEnvCheck; cookieCheck: LaunchCookieCheck }> {
+  assertBrowserLaunchAllowed();
   const bin = await findFirefoxBinaryAsync();
   opts.assertCurrentRequest();
   if (!bin) {
@@ -2173,12 +2232,14 @@ async function launchFirefoxProfile(
   if (!binaryIdentity) throw new Error("Cannot verify the selected Firefox executable identity");
   let preparedProxy: ResolvedProfileProxy | null = null;
   const assertPrepared = async () => {
+    assertBrowserLaunchAllowed();
     opts.assertCurrentRequest();
     const selected = await findFirefoxBinaryAsync();
     if (!selected || normalizeBrowserProcessPath(selected) !== normalizeBrowserProcessPath(bin) ||
         await getFirefoxNativeSelectionIdentityAsync(bin) !== binaryIdentity) {
       throw restartRequired("Firefox binary selection changed during preparation");
     }
+    assertBrowserLaunchAllowed();
     opts.assertCurrentRequest();
     if (preparedProxy) assertFirefoxProxyCurrent(dirId, meta, preparedProxy);
   };
@@ -2316,58 +2377,71 @@ async function launchFirefoxProfile(
   // leak `+08:00`-style host offsets. Firefox honors the `TZ` env var natively,
   // so the managed timezone rides on the child environment (engine-level).
   const spawnEnv = managedIdentity && effectiveMeta.timezone ? { ...process.env, TZ: effectiveMeta.timezone } : undefined;
-  let spawned: Awaited<ReturnType<typeof spawnFirefoxWithDebugInfo>>;
+  let launchChild: ReturnType<typeof spawn> | undefined;
+  let launchPort = remotePort;
+  let launchConnection: RunningEntry["bidiConn"];
+  let logClosed = false;
+  const closeLaunchLog = () => {
+    if (logClosed) return;
+    logClosed = true;
+    if (logFd !== null) { try { fs.closeSync(logFd); } catch (error) { console.error("[agent-browser] Firefox launch log close failed:", error); } }
+  };
   try {
     opts.assertCurrentRequest();
     assertFirefoxProxyCurrent(dirId, meta, resolvedProxy);
-    spawned = await spawnFirefoxWithDebugInfo(bin, args, { timeoutMs: 60000, env: spawnEnv });
-  } catch (error) {
-    if (logFd !== null) { try { fs.closeSync(logFd); } catch (closeError) { console.error("[agent-browser] Firefox launch log close failed:", closeError); } }
-    throw error;
-  }
-  const { child, info } = spawned;
-  const pid = child.pid;
-  if (typeof pid !== "number" || !Number.isInteger(pid)) {
-    try { child.kill(); } catch { /* ignore */ }
-    if (logFd !== null) { try { fs.closeSync(logFd); } catch { /* ignore */ } }
-    if (releaseLaunchLock) releaseLaunchLock();
-    throw new Error("Failed to spawn Firefox: no pid");
-  }
+    assertBrowserLaunchAllowed();
+    const { child, info } = await spawnFirefoxWithDebugInfo(bin, args, {
+      timeoutMs: 60000, env: spawnEnv,
+      onSpawn: (spawnedChild) => {
+        // This callback runs in the spawn turn, not after the async BiDi wait.
+        // Shutdown therefore snapshots every child that has actually started.
+        launchChild = spawnedChild;
+        assertBrowserLaunchAllowed();
+        const spawnedPid = spawnedChild.pid;
+        if (!Number.isInteger(spawnedPid) || !spawnedPid) throw new Error("Failed to spawn Firefox: no pid");
+        runningProcesses.set(dirId, { pid: spawnedPid, process: spawnedChild, port: remotePort,
+          lastActivityAt: Date.now(), engine: "firefox", browserVersion: firefoxVersion,
+          launchProxy: captureLaunchProxySnapshot(resolvedProxy) });
+        spawnedChild.on("exit", () => {
+          const entry = runningProcesses.get(dirId);
+          if (entry?.process === spawnedChild && entry.pid === spawnedPid && entry.port === launchPort) {
+            if (entry.killTimer) clearTimeout(entry.killTimer);
+            if (entry.bidiConn) {
+              if (getRegisteredFirefoxSession(entry.port) === entry.bidiConn) dropFirefoxSession(entry.port);
+              try { entry.bidiConn.close(); } catch { /* only this child's session */ }
+            }
+            runningProcesses.delete(dirId);
+          }
+          closeLaunchLog();
+        });
+      },
+    });
+    if (child !== launchChild) throw new Error("Firefox spawn did not publish the owned child");
+    const pid = child.pid!;
+    // Firefox speaks BiDi; update the already-owned entry, never recreate one
+    // after shutdown/replacement while the endpoint announcement was pending.
+    const entry = assertOwnedBrowserLaunch(dirId, child, launchPort);
+    const actualPort = info.actualPort ?? info.marionettePort ?? remotePort;
+    entry.port = actualPort;
+    launchPort = actualPort;
 
-  // Firefox speaks WebDriver BiDi (not Chromium CDP). The BiDi port is the
-  // profile's debug port; agent CDP tooling remains Chromium-only for now
-  // (documented follow-up), while the product's own tools went BiDi (Slice 79).
-  const actualPort = info.actualPort ?? info.marionettePort ?? remotePort;
-  runningProcesses.set(dirId, { pid, process: child, port: actualPort, lastActivityAt: Date.now(), engine: "firefox", browserVersion: firefoxVersion,
-    launchProxy: captureLaunchProxySnapshot(resolvedProxy) });
-  child.on("exit", () => {
-    const entry = runningProcesses.get(dirId);
-    if (entry && entry.pid === pid) {
-      if (entry.killTimer) clearTimeout(entry.killTimer);
-      if (entry.bidiConn) {
-        dropFirefoxSession(entry.port);
-        try { entry.bidiConn.close(); } catch { /* ignore */ }
-      }
-      runningProcesses.delete(dirId);
-    }
-  });
+    let bidiInjected = false;
+    let bidiSessionId: string | null = null;
+    let bidiError: string | null = null;
+    let driftCheck: LaunchDriftCheck = { checked: false };
+    let envCheck: LaunchEnvCheck = { checked: false };
+    let cookieCheck: LaunchCookieCheck = { checked: false };
 
-  let bidiInjected = false;
-  let bidiSessionId: string | null = null;
-  let bidiError: string | null = null;
-  let driftCheck: LaunchDriftCheck = { checked: false };
-  let envCheck: LaunchEnvCheck = { checked: false };
-  let cookieCheck: LaunchCookieCheck = { checked: false };
-
-  try {
     await assertPrepared();
+    assertOwnedBrowserLaunch(dirId, child, actualPort);
     // Long-lived BiDi session: the fingerprint preload script lives in the
     // session, so the connection stays open while the profile runs.
     if (info.bidiWebSocketUrl) {
       try {
         const conn = await connectBidi(info.bidiWebSocketUrl, { timeoutMs: 15000 });
-        runningProcesses.get(dirId)!.bidiConn = conn;
-        registerFirefoxSession(info.actualPort ?? info.marionettePort ?? remotePort, conn);
+        launchConnection = conn;
+        assertOwnedBrowserLaunch(dirId, child, actualPort).bidiConn = conn;
+        registerFirefoxSession(actualPort, conn);
         if (managedIdentity && !nativeMode) {
           const scriptId = await bidiAddPreloadScript(conn, managedIdentity.preloadScript, 15000);
           bidiInjected = scriptId !== null;
@@ -2378,7 +2452,8 @@ async function launchFirefoxProfile(
       }
     }
 
-    const liveBidi = runningProcesses.get(dirId)?.bidiConn;
+    assertOwnedBrowserLaunch(dirId, child, actualPort);
+    const liveBidi = launchConnection;
     if (!liveBidi || liveBidi.closed) {
       throw new Error(
         `Firefox ${managedIdentity ? "managed identity" : "launch"} requires a live BiDi session${bidiError ? `: ${bidiError}` : "."}`,
@@ -2422,6 +2497,7 @@ async function launchFirefoxProfile(
     if (cookieError) console.warn(`[agent-browser] Firefox queued Cookie import for ${dirId.slice(0, 8)}: ${cookieError}`);
     else if (appliedCookies > 0) console.log(`[agent-browser] Applied ${appliedCookies} queued cookies for ${dirId.slice(0, 8)}`);
 
+    assertOwnedBrowserLaunch(dirId, child, actualPort);
     // Post-launch fingerprint drift check — same gate as managed Chromium:
     // a stored baseline that no longer matches the live fingerprint on
     // high-risk fields blocks the launch (blockOnFingerprintDrift).
@@ -2439,6 +2515,7 @@ async function launchFirefoxProfile(
       { cdpPort: actualPort, meta: { ...meta, timezone: effectiveMeta.timezone }, cfg, passThrough: !managedIdentity, expectedBrowserVersion: firefoxVersion },
     );
 
+    assertOwnedBrowserLaunch(dirId, child, actualPort);
     // Managed-injection self-check — the drift gate cannot tell whether the
     // preload took effect (baseline and live both read the "true" world when
     // nothing is injected; real Firefox also exposes navigator.webdriver=true
@@ -2526,6 +2603,7 @@ async function launchFirefoxProfile(
       }
     }
     await assertPrepared();
+    assertOwnedBrowserLaunch(dirId, child, actualPort);
     const connection = getRegisteredFirefoxSession(actualPort);
     if (!connection || connection !== runningProcesses.get(dirId)?.bidiConn || connection.closed) {
       throw restartRequired("Firefox BiDi session ended during launch verification");
@@ -2540,30 +2618,28 @@ async function launchFirefoxProfile(
       argvHash: firefoxLaunchDigest(JSON.stringify(child.spawnargs)), userJsHash,
       webrtcCheckpoint: firefoxWebRtcCheckpointHash(webRtcPolicy), connection,
     });
-  } catch (e: any) {
-    // Drift-blocked or fatal post-launch gate failure: terminate and clean up.
-    const failedEntry = runningProcesses.get(dirId);
-    if (failedEntry?.bidiConn) {
-      dropFirefoxSession(failedEntry.port);
-      try { failedEntry.bidiConn.close(); } catch { /* ignore */ }
-    }
-    runningProcesses.delete(dirId);
-    try { child.kill(); } catch { /* ignore */ }
-    if (logFd !== null) { try { fs.closeSync(logFd); } catch { /* ignore */ } }
-    await waitForProcessExit(pid);
-    throw e;
-  }
 
-  if (logFd !== null) { try { fs.closeSync(logFd); } catch { /* ignore */ } }
-  recordAudit({
-    category: "profile",
-    action: "launch",
-    target: dirId,
-    actor: "user",
-    detail: `firefox ${firefoxVersion || "?"} mode=${nativeMode ? "native" : "fallback"} port=${actualPort} bidi=${info.bidiWebSocketUrl ? "yes" : "no"} injected=${bidiInjected ? "yes" : "no"}${bidiError ? " bidiError=" + bidiError : ""} drift=${driftCheck.checked ? (driftCheck.risky ? "risky" : "ok") : "unchecked"} cookies=${cookieCheck.checked ? (cookieCheck.error ? "failed: " + cookieCheck.error : "applied=" + (cookieCheck.applied ?? 0)) : "unchecked"}`,
-  });
-  if (releaseLaunchLock) releaseLaunchLock();
-  return { pid, cdpPort: actualPort, driftCheck, envCheck, cookieCheck };
+    closeLaunchLog();
+    recordAudit({
+      category: "profile",
+      action: "launch",
+      target: dirId,
+      actor: "user",
+      detail: `firefox ${firefoxVersion || "?"} mode=${nativeMode ? "native" : "fallback"} port=${actualPort} bidi=${info.bidiWebSocketUrl ? "yes" : "no"} injected=${bidiInjected ? "yes" : "no"}${bidiError ? " bidiError=" + bidiError : ""} drift=${driftCheck.checked ? (driftCheck.risky ? "risky" : "ok") : "unchecked"} cookies=${cookieCheck.checked ? (cookieCheck.error ? "failed: " + cookieCheck.error : "applied=" + (cookieCheck.applied ?? 0)) : "unchecked"}`,
+    });
+    if (releaseLaunchLock) releaseLaunchLock();
+    assertOwnedBrowserLaunch(dirId, child, actualPort);
+    emitEvent("profile:launched", { dirId, pid, cdpPort: actualPort });
+    return { pid, cdpPort: actualPort, driftCheck, envCheck, cookieCheck };
+  } catch (error) {
+    try {
+      if (launchChild) {
+        ownedFirefoxLaunches.delete(launchChild);
+        await cleanupFailedBrowserLaunch(dirId, launchChild, launchPort, { bidiConn: launchConnection });
+      }
+    } finally { closeLaunchLog(); }
+    throw error;
+  }
 }
 
 import {
@@ -2978,17 +3054,54 @@ export function getLaunchLogPath(dirId: string): string {
 
 async function waitForCdpReady(port: number, timeoutMs: number): Promise<void> {
   const deadline = Date.now() + timeoutMs;
-  let lastError: unknown = null;
-  while (Date.now() < deadline) {
+  const controller = new AbortController();
+  const deadlineError = new Error("CDP readiness deadline exceeded");
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const expired = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => {
+      controller.abort(deadlineError);
+      reject(deadlineError);
+    }, Math.max(0, timeoutMs));
+    timer.unref?.();
+  });
+  const probe = async (suffix: string): Promise<{ ok: boolean; status: number }> => {
+    const response = await fetch(`http://127.0.0.1:${port}${suffix}`, { signal: controller.signal });
     try {
-      const versionResp = await fetch(`http://127.0.0.1:${port}/json/version`);
-      const listResp = await fetch(`http://127.0.0.1:${port}/json`);
-      if (versionResp.ok && listResp.ok) return;
-      lastError = new Error(`CDP returned HTTP ${versionResp.status}/${listResp.status}`);
-    } catch (e) {
-      lastError = e;
+      if (controller.signal.aborted || Date.now() >= deadline) throw deadlineError;
+      return { ok: response.ok, status: response.status };
+    } finally {
+      // We only need response headers. Own even a response arriving after the
+      // deadline; race observes every late fetch/cancel rejection without an
+      // unbounded body drain or a detached rejecting cleanup promise.
+      if (response.body) await Promise.race([response.body.cancel(), expired]);
     }
-    await new Promise((resolve) => setTimeout(resolve, 250));
+  };
+  let lastError: unknown = null;
+  try {
+    while (Date.now() < deadline) {
+      try {
+        // One controller/deadline covers both endpoints and every retry, not
+        // a fresh timeout per fetch. The race also bounds a broken fetch mock
+        // or implementation which fails to settle in response to abort.
+        const version = await Promise.race([probe("/json/version"), expired]);
+        if (controller.signal.aborted || Date.now() >= deadline) throw deadlineError;
+        const list = await Promise.race([probe("/json"), expired]);
+        if (controller.signal.aborted || Date.now() >= deadline) throw deadlineError;
+        if (version.ok && list.ok) return;
+        lastError = new Error(`CDP returned HTTP ${version.status}/${list.status}`);
+      } catch (error) {
+        lastError = error;
+      }
+      const remaining = deadline - Date.now();
+      if (controller.signal.aborted || remaining <= 0) break;
+      await new Promise<void>((resolve) => {
+        const retry = setTimeout(resolve, Math.min(250, remaining));
+        retry.unref?.();
+      });
+    }
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+    controller.abort();
   }
   const detail = lastError instanceof Error ? `: ${lastError.message}` : "";
   throw new Error(`Managed Chromium CDP did not become ready on port ${port}${detail}`);

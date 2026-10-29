@@ -52,7 +52,7 @@ vi.mock("../../src/main/services/browser-manager.js", () => ({
 
 vi.mock("../../src/main/services/job-store.js", () => ({
   enqueueJob: mocks.enqueueJob,
-  markRunning: vi.fn(),
+  markRunning: vi.fn(() => true),
   markDone: vi.fn(),
   markFailed: vi.fn(),
   markSkipped: vi.fn(),

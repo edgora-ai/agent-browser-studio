@@ -22,6 +22,10 @@
   var automationLoadSeq = 0;
   var jobsLoadSeq = 0;
   var openJobSeq = 0;
+  var automationEditorSeq = 0;
+  var automationSaveOwner = null;
+  var automationOpenOwner = null;
+  var automationOpenDialog = null;
 
   function describeTrigger(tr) {
     if (!tr) return '?';
@@ -608,6 +612,11 @@
   };
 
   function openEditor(rule) {
+    // A new editor owns its controls, not any earlier submitted backend write.
+    ++automationEditorSeq;
+    automationSaveOwner = null;
+    var saveBtn = document.querySelector('#dlg-automation button[type="submit"]');
+    if (saveBtn) saveBtn.removeAttribute('disabled');
     document.getElementById('auto-dlg-title').textContent = rule ? t('auto.editor.edit-title','编辑任务') : t('auto.editor.new-title','新建任务');
     document.getElementById('auto-id').value = rule ? rule.id : '';
     document.getElementById('auto-name').value = rule ? rule.name : '';
@@ -660,18 +669,47 @@
     document.getElementById('dlg-automation').showModal();
   }
 
-  agentBrowser.automationNew = function() {
-    var open = function() { openEditor(null); };
+  function requestAutomationEditor(rule) {
+    var dialog = document.getElementById('dlg-automation');
+    // Claim the editor before the catalog read, not when it eventually returns.
+    // This also prevents an earlier save from closing the UI during a new open.
+    var owner = { seq: ++automationEditorSeq, dialog: dialog, wasOpen: !!(dialog && dialog.open) };
+    automationOpenOwner = owner;
+    if (dialog && automationOpenDialog !== dialog) {
+      automationOpenDialog = dialog;
+      dialog.addEventListener('close', function() {
+        // close is queued by the browser. An old close event must not cancel a
+        // new request that began closed, or an editor that is already reopened.
+        var pending = automationOpenOwner;
+        if (!dialog.open && pending && pending.dialog === dialog && pending.wasOpen) automationOpenOwner = null;
+      });
+    }
+    var saveBtn = document.querySelector('#dlg-automation button[type="submit"]');
+    if (saveBtn) saveBtn.setAttribute('disabled', 'disabled');
+    function current() {
+      return automationOpenOwner === owner && owner.seq === automationEditorSeq && (!owner.wasOpen || dialog.open);
+    }
+    function open() {
+      if (!current()) return;
+      automationOpenOwner = null;
+      openEditor(rule);
+    }
     if (taskTemplates.length || !api.agent.taskTemplates) { open(); return; }
-    api.agent.taskTemplates().then(function(list) { taskTemplates = list || []; open(); }).catch(open);
-  };
-  agentBrowser.automationEdit = function(rule) {
-    var open = function() { openEditor(rule); };
-    if (taskTemplates.length || !api.agent.taskTemplates) { open(); return; }
-    api.agent.taskTemplates().then(function(list) { taskTemplates = list || []; open(); }).catch(open);
-  };
+    var result;
+    try { result = api.agent.taskTemplates(); } catch (e) { open(); return; }
+    return Promise.resolve(result).then(function(list) {
+      if (!current()) return;
+      taskTemplates = Array.isArray(list) ? list : [];
+      open();
+    }, open);
+  }
+  agentBrowser.automationNew = function() { return requestAutomationEditor(null); };
+  agentBrowser.automationEdit = function(rule) { return requestAutomationEditor(rule); };
 
   agentBrowser.saveAutomation = function() {
+    var dialog = document.getElementById('dlg-automation');
+    // Enter/programmatic submit must respect the same lock as the button.
+    if (!dialog || !dialog.open || automationOpenOwner || automationSaveOwner) return;
     var id = document.getElementById('auto-id').value;
     var name = document.getElementById('auto-name').value.trim() || 'Untitled';
     var triggerType = document.getElementById('auto-trigger-type').value;
@@ -723,20 +761,33 @@
     // flight, and honor the backend success flag on toggle/delete.
     var saveBtn = document.querySelector('#dlg-automation button[type="submit"]');
     if (saveBtn) saveBtn.setAttribute("disabled", "disabled");
-    var p = id ? api.automation.update(Object.assign({ id: id }, payload)) : api.automation.create(payload);
-    p.then(function(r) {
-      if (saveBtn) saveBtn.removeAttribute("disabled");
+    var owner = { seq: automationEditorSeq };
+    automationSaveOwner = owner;
+    function current() {
+      return automationSaveOwner === owner && owner.seq === automationEditorSeq && dialog.open;
+    }
+    function release() {
+      if (automationSaveOwner !== owner) return;
+      automationSaveOwner = null;
+      if (saveBtn && owner.seq === automationEditorSeq) saveBtn.removeAttribute("disabled");
+    }
+    function failed(e) {
+      if (current()) toast((e && e.message) || String(e), 'error');
+    }
+    var p;
+    try {
+      p = id ? api.automation.update(Object.assign({ id: id }, payload)) : api.automation.create(payload);
+    } catch (e) { try { failed(e); } finally { release(); } return; }
+    return Promise.resolve(p).then(function(r) {
+      if (!current()) return;
       if (r && r.success === false) {
         toast(t('auto.save-failed','失败: ') + (r.error || ''), 'error');
         return;
       }
-      document.getElementById('dlg-automation').close();
+      dialog.close();
       toast(id ? t('auto.saved','已更新') : t('auto.created','已创建'), 'success');
       agentBrowser.loadAutomationTab();
-    }).catch(function(e) {
-      if (saveBtn) saveBtn.removeAttribute("disabled");
-      toast((e && e.message) || String(e), 'error');
-    });
+    }).catch(failed).finally(release);
   };
 
   agentBrowser.automationToggle = function(rule) {
@@ -898,31 +949,116 @@
   //    save on change, no save button, both default OFF) ──
 
   function notifyEl(id) { return document.getElementById(id); }
+  var notifySettingsSeq = 0;
+  var notifyOwner = null;
+  var notifyConfirmed = null;
+  var notifyStatusTimer = null;
+
+  function notifyPrefs(p) {
+    if (!p || typeof p.system !== 'boolean' || typeof p.sound !== 'boolean') throw new Error(t('toast.failed', '操作失败'));
+    return { system: p.system, sound: p.sound };
+  }
+  function paintNotify(p) {
+    if (notifyEl('auto-notify-system')) notifyEl('auto-notify-system').checked = !!(p && p.system);
+    if (notifyEl('auto-notify-sound')) notifyEl('auto-notify-sound').checked = !!(p && p.sound);
+  }
+  function lockNotify() {
+    ['auto-notify-system', 'auto-notify-sound'].forEach(function(id) {
+      if (notifyEl(id)) notifyEl(id).disabled = !!notifyOwner || !notifyConfirmed;
+    });
+  }
+  function currentNotify(owner) { return notifyOwner === owner && owner.seq === notifySettingsSeq; }
+  function clearNotifyFeedback() {
+    if (notifyStatusTimer !== null) clearTimeout(notifyStatusTimer);
+    notifyStatusTimer = null;
+    if (notifyEl('auto-notify-status')) notifyEl('auto-notify-status').textContent = '';
+  }
+  function notifyError(e) {
+    var message = (e && e.message) || t('toast.failed', '操作失败');
+    var statusEl = notifyEl('auto-notify-status');
+    if (statusEl) statusEl.innerHTML = '<span style="color:var(--danger-text);">' + esc(message) + '</span>';
+    else toast(message, 'error');
+  }
+  function invokeNotify(fn) {
+    try { return Promise.resolve(fn()); } catch (e) { return Promise.reject(e); }
+  }
+  function beginNotify(kind, values) {
+    var owner = { seq: ++notifySettingsSeq, kind: kind, values: values };
+    notifyOwner = owner;
+    clearNotifyFeedback();
+    lockNotify();
+    return owner;
+  }
+  function releaseNotify(owner) {
+    if (!currentNotify(owner)) return;
+    notifyOwner = null;
+    lockNotify();
+  }
 
   agentBrowser.loadAutomationNotifySettings = function() {
     if (!api.settings || !api.settings.automationNotify) return;
-    api.settings.automationNotify().then(function(p) {
-      if (!p) return;
-      if (notifyEl('auto-notify-system')) notifyEl('auto-notify-system').checked = p.system === true;
-      if (notifyEl('auto-notify-sound')) notifyEl('auto-notify-sound').checked = p.sound === true;
-    }).catch(function() { /* a settings read must not break the tab */ });
+    // A refresh must not read the pre-commit value or unlock a pending write.
+    if (notifyOwner && notifyOwner.kind === 'save') return;
+    var owner = beginNotify('load', notifyConfirmed);
+    return invokeNotify(function() { return api.settings.automationNotify(); }).then(function(p) {
+      if (!currentNotify(owner)) return;
+      notifyConfirmed = notifyPrefs(p);
+      paintNotify(notifyConfirmed);
+    }).catch(function(e) {
+      if (!currentNotify(owner)) return;
+      paintNotify(notifyConfirmed);
+      notifyError(e);
+    }).finally(function() { releaseNotify(owner); });
   };
 
   function saveNotifySettings() {
-    if (!api.settings || !api.settings.setAutomationNotify) return;
-    var statusEl = notifyEl('auto-notify-status');
-    api.settings.setAutomationNotify({
+    // Respect the in-memory owner even if disabled is bypassed programmatically.
+    if (notifyOwner) { paintNotify(notifyOwner.values); lockNotify(); return; }
+    if (!notifyConfirmed || !api.settings || !api.settings.setAutomationNotify) {
+      paintNotify(notifyConfirmed);
+      lockNotify();
+      notifyError();
+      return;
+    }
+    var values = {
       system: !!(notifyEl('auto-notify-system') && notifyEl('auto-notify-system').checked),
       sound: !!(notifyEl('auto-notify-sound') && notifyEl('auto-notify-sound').checked),
-    }).then(function(r) {
+    };
+    var owner = beginNotify('save', values);
+    function failed(e) {
+      if (!currentNotify(owner)) return;
+      owner.values = notifyConfirmed;
+      paintNotify(notifyConfirmed);
+      notifyError(e);
+      // A transport reject is not evidence that persistence failed. Re-read,
+      // never replay the write, and retain the failure feedback even if read OK.
+      return invokeNotify(function() { return api.settings.automationNotify(); }).then(function(p) {
+        if (!currentNotify(owner)) return;
+        notifyConfirmed = notifyPrefs(p);
+        owner.values = notifyConfirmed;
+        paintNotify(notifyConfirmed);
+      }).catch(function() {
+        if (!currentNotify(owner)) return;
+        // No verified snapshot remains. Require a successful later read before
+        // enabling another full-prefs write; the last displayed values stay put.
+        notifyConfirmed = null;
+      });
+    }
+    return invokeNotify(function() { return api.settings.setAutomationNotify(values); }).then(function(r) {
+      if (!currentNotify(owner)) return;
+      if (!r || r.success !== true) return failed(new Error((r && r.error) || t('toast.failed', '操作失败')));
+      notifyConfirmed = notifyPrefs(r.automationNotify || values);
+      owner.values = notifyConfirmed;
+      paintNotify(notifyConfirmed);
+      var statusEl = notifyEl('auto-notify-status');
       if (!statusEl) return;
-      if (r && r.success === false) {
-        statusEl.innerHTML = '<span style="color:var(--danger-text);">' + esc(r.error || t('toast.failed','操作失败')) + '</span>';
-      } else {
-        statusEl.innerHTML = '<span style="color:var(--success-text);">' + esc(t('auto.notify.saved','已保存')) + '</span>';
-        setTimeout(function() { statusEl.textContent = ''; }, 2500);
-      }
-    }).catch(function() { /* ignore */ });
+      statusEl.innerHTML = '<span style="color:var(--success-text);">' + esc(t('auto.notify.saved', '已保存')) + '</span>';
+      notifyStatusTimer = setTimeout(function() {
+        if (owner.seq !== notifySettingsSeq || notifyOwner || notifyEl('auto-notify-status') !== statusEl) return;
+        statusEl.textContent = '';
+        notifyStatusTimer = null;
+      }, 2500);
+    }).catch(failed).finally(function() { releaseNotify(owner); });
   }
 
   function wireNotifySettings() {

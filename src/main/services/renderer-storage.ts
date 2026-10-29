@@ -59,7 +59,22 @@ function migratePageUrl(): string {
   return path.join(__dirname, "..", "..", "renderer", "storage-migrate.html");
 }
 
-async function readStorageValues(targetSession: Session): Promise<Record<string, string | null>> {
+interface MigrationScope {
+  active: boolean;
+  windows: Set<BrowserWindow>;
+}
+
+function assertMigrationActive(scope: MigrationScope): void {
+  if (!scope.active) throw new Error("Legacy UI storage migration is no longer active");
+}
+
+function destroyMigrationWindow(scope: MigrationScope, win: BrowserWindow): void {
+  scope.windows.delete(win);
+  try { if (!win.isDestroyed()) win.destroy(); } catch { /* best effort, owned window only */ }
+}
+
+function createMigrationWindow(scope: MigrationScope, targetSession: Session): BrowserWindow {
+  assertMigrationActive(scope);
   const win = new BrowserWindow({
     show: false,
     webPreferences: {
@@ -68,39 +83,43 @@ async function readStorageValues(targetSession: Session): Promise<Record<string,
       session: targetSession,
     },
   });
+  scope.windows.add(win);
+  return win;
+}
+
+async function readStorageValues(targetSession: Session, scope: MigrationScope): Promise<Record<string, string | null>> {
+  const win = createMigrationWindow(scope, targetSession);
   try {
     await win.loadFile(migratePageUrl());
+    assertMigrationActive(scope);
     const keys = JSON.stringify(UI_STORAGE_KEYS);
     const script =
       "(() => { const out = {}; for (const k of " + keys +
       ") { try { out[k] = localStorage.getItem(k); } catch (e) { out[k] = null; } } return out; })()";
     const values = await win.webContents.executeJavaScript(script);
+    assertMigrationActive(scope);
     return values as Record<string, string | null>;
   } finally {
-    if (!win.isDestroyed()) win.destroy();
+    destroyMigrationWindow(scope, win);
   }
 }
 
-async function writeStorageValues(targetSession: Session, values: Record<string, string | null>): Promise<void> {
+async function writeStorageValues(targetSession: Session, values: Record<string, string | null>, scope: MigrationScope): Promise<void> {
+  assertMigrationActive(scope);
   const entries = Object.entries(values).filter(([, v]) => v !== null && v !== undefined);
   if (entries.length === 0) return;
-  const win = new BrowserWindow({
-    show: false,
-    webPreferences: {
-      sandbox: true,
-      contextIsolation: true,
-      session: targetSession,
-    },
-  });
+  const win = createMigrationWindow(scope, targetSession);
   try {
     await win.loadFile(migratePageUrl());
+    assertMigrationActive(scope);
     const serialized = JSON.stringify(entries);
     const script =
       "(() => { const entries = " + serialized +
       "; for (const [k, v] of entries) { try { localStorage.setItem(k, v); } catch (e) {} } return true; })()";
     await win.webContents.executeJavaScript(script);
+    assertMigrationActive(scope);
   } finally {
-    if (!win.isDestroyed()) win.destroy();
+    destroyMigrationWindow(scope, win);
   }
 }
 
@@ -119,20 +138,34 @@ export async function migrateLegacyRendererStorage(timeoutMs = 10_000): Promise<
     return;
   }
 
-  let completed = false;
+  const scope: MigrationScope = { active: true, windows: new Set() };
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const closeScope = () => {
+    scope.active = false;
+    for (const win of scope.windows) destroyMigrationWindow(scope, win);
+  };
   try {
-    const timer = setTimeout(() => {
-      if (!completed) console.warn("[storage] legacy UI storage migration timed out");
-    }, timeoutMs);
-    try {
-      const legacyValues = await readStorageValues(session.defaultSession);
-      await writeStorageValues(session.fromPartition(UI_STORAGE_PARTITION), legacyValues);
-      completed = true;
-    } finally {
-      clearTimeout(timer);
-    }
+    const deadline = new Promise<void>((resolve) => {
+      timer = setTimeout(() => {
+        console.warn("[storage] legacy UI storage migration timed out");
+        closeScope();
+        resolve();
+      }, timeoutMs);
+    });
+    const migrate = async () => {
+      const legacyValues = await readStorageValues(session.defaultSession, scope);
+      assertMigrationActive(scope);
+      await writeStorageValues(session.fromPartition(UI_STORAGE_PARTITION), legacyValues, scope);
+    };
+    // A race alone would leave a losing read free to create a writer later.
+    // The scope fences new phases and owns cleanup of our hidden windows.
+    // Destroy cannot roll back a storage write already dispatched to Electron.
+    await Promise.race([migrate(), deadline]);
   } catch (error) {
     console.error("[storage] legacy UI storage migration failed:", error);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+    closeScope();
   }
 
   // Marker is written even on timeout/failure so a permanently-broken legacy

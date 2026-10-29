@@ -36,7 +36,7 @@ const api = {
     // Cookie management
     cookies: (dirId, filter) => ipcRenderer.invoke("profile:cookies", { dirId, filter }),
     setCookie: (dirId, cookie) => ipcRenderer.invoke("profile:set-cookie", { dirId, ...cookie }),
-    deleteCookie: (dirId, domain, name) => ipcRenderer.invoke("profile:delete-cookie", { dirId, domain, name }),
+    deleteCookie: (dirId, domain, name, path, partitionKey, deleteIdentityVerified) => ipcRenderer.invoke("profile:delete-cookie", { dirId, domain, name, path, partitionKey, deleteIdentityVerified }),
   },
   proxy: {
     list: () => ipcRenderer.invoke("proxy:list"),

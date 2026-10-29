@@ -77,7 +77,7 @@ const { registerUpdateHandlers } = await import("./ipc/updates.js");
 const { registerObservabilityHandlers } = await import("./ipc/observability.js");
 const { registerLicenseHandlers } = await import("./ipc/license.js");
 const { configureObservability, logInfo, logWarn, logError } = await import("./services/observability.js");
-const { startScheduler, reloadSchedule, refreshScheduleTimers } = await import("./services/automation.js");
+const { startScheduler, stopScheduler, reloadSchedule, refreshScheduleTimers } = await import("./services/automation.js");
 const { reconcileAutomationState, handleSystemResume, setRefreshScheduleTimers } = await import("./services/automation-reconcile.js");
 const { configureNotifier } = await import("./services/automation-notify.js");
 const { getConfig } = await import("./services/config-manager.js");
@@ -86,6 +86,7 @@ const { isHeadlessMode } = await import("./services/server-mode.js");
 const { startMcpServer, stopMcpServer } = await import("./services/mcp-server.js");
 const { startRestApiServer, stopRestApiServer } = await import("./services/rest-api-server.js");
 const { shutdownAllBrowserProfiles, setIdlePolicyTimeoutMs, sweepIdleProfiles, getIdlePolicyTimeoutMs, purgeExpiredTrash } = await import("./services/browser-manager.js");
+const { closeBrowserLaunchAdmission } = await import("./services/browser/launch-admission.js");
 const { migrateSecrets, getAppDataDir } = await import("./services/config-manager.js");
 const { noteAppStarted, markAppHealthy, noteAppCrashed } = await import("./services/update-manager.js");
 const { createTray, destroyTray, refreshTrayMenu } = await import("./services/tray-manager.js");
@@ -263,6 +264,7 @@ function registerAllHandlers(): void {
 
 // ── App lifecycle ──
 app.whenReady().then(async () => {
+  if (isQuitting) return;
   if (legacyMigrationError) {
     dialog.showErrorBox(
       `${PRODUCT_NAME} migration failed`,
@@ -283,6 +285,7 @@ app.whenReady().then(async () => {
     const osStorage = secretStoragePlan.backend === "os"
       ? (await import("electron")).safeStorage
       : undefined;
+    if (isQuitting) return;
     const storage = initializeSecretStorage(secretStoragePlan, { osStorage });
     console.log(`[secrets] backend=${storage.backend} reason=${storage.reason}`);
     const migrated = migrateSecrets();
@@ -402,6 +405,9 @@ app.whenReady().then(async () => {
   // state) from the default session into the UI partition. Runs before the
   // window is created so the first paint reads already-migrated values.
   await migrateLegacyRendererStorage();
+  // A quit request may have closed admission while the migration awaited.
+  // Do not reopen the scheduler or servers after shutdown has begun.
+  if (isQuitting) return;
   const headless = isHeadlessMode();
   if (!headless) {
     createWindow();
@@ -503,6 +509,14 @@ app.on("before-quit", async (event: any) => {
   event.preventDefault();
   if (isQuitting) return;
   isQuitting = true;
+  // Close admission synchronously, before chat shutdown can yield and before
+  // browser shutdown snapshots owned children. Stopping is not a task drain.
+  closeBrowserLaunchAdmission();
+  try {
+    stopScheduler();
+  } catch (error) {
+    console.error("[shutdown] failed to stop automation scheduler:", error);
+  }
   console.log(`${PRODUCT_NAME} shutting down — cleaning up child processes`);
   const withTimeout = async <T>(p: Promise<T>, ms: number, label: string): Promise<T | void> => {
     let timer: ReturnType<typeof setTimeout> | undefined;

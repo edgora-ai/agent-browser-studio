@@ -486,30 +486,82 @@
   };
 
   // ── Bulk import (url, username, password, tags per line) ──
+  var _importRequest = 0;
+  var _importOpenedRequest = null;
+  var _importOwner = null;
+
+  function setImportPending(pending) {
+    var btn = document.querySelector('#dlg-account-import [data-cmd="agentRunAccountImport"]');
+    if (btn) btn.disabled = pending;
+  }
+
+  (function wireAccountImportDialog() {
+    var dlg = document.getElementById('dlg-account-import');
+    function clearImport() {
+      // A queued close must not revoke a newer opener still awaiting its role.
+      if (_importOpenedRequest !== _importRequest) return;
+      ++_importRequest;
+      _importOpenedRequest = null;
+      _importOwner = null;
+      setImportPending(false);
+    }
+    if (dlg) {
+      // Only UI ownership is revoked; dispatched backend writes still run.
+      dlg.addEventListener('cancel', clearImport);
+      dlg.addEventListener('close', function() { if (!dlg.open) clearImport(); });
+    }
+    setImportPending(false);
+  })();
+
   agentBrowser.agentImportAccounts = function() {
+    var dlg = document.getElementById('dlg-account-import');
+    if (dlg.open) return Promise.resolve();
+    var request = ++_importRequest;
+    _importOwner = null;
+    setImportPending(false);
     return withAccountRole(function() {
+      if (request !== _importRequest) return;
       document.getElementById('acct-import-text').value = '';
       document.getElementById('acct-import-status').innerHTML = '';
       var cb = document.getElementById('acct-import-create-profiles');
       if (cb) { cb.checked = false; document.getElementById('acct-import-create-options').style.display = 'none'; }
       var platformSelect = document.getElementById('acct-import-platform');
       if (platformSelect) platformSelect.value = '';
-      document.getElementById('dlg-account-import').showModal();
+      if (!dlg.open) {
+        dlg.showModal();
+        _importOpenedRequest = request;
+      }
     });
   };
 
   agentBrowser.agentRunAccountImport = function() {
+    var request = _importRequest;
+    var dlg = document.getElementById('dlg-account-import');
     return withAccountRole(function() {
+      if (request !== _importRequest || !dlg.open || _importOwner) return;
       var text = document.getElementById('acct-import-text').value || '';
       var statusEl = document.getElementById('acct-import-status');
       var createProfiles = document.getElementById('acct-import-create-profiles') ? document.getElementById('acct-import-create-profiles').checked : false;
       var platformSelect = document.getElementById('acct-import-platform');
       var platform = platformSelect ? platformSelect.value || undefined : undefined;
+      var owner = { request: request };
+      _importOwner = owner;
+      setImportPending(true);
+      function current() { return _importOwner === owner && owner.request === _importRequest && dlg.open; }
+      function release() {
+        if (_importOwner !== owner) return;
+        _importOwner = null;
+        if (owner.request === _importRequest) setImportPending(false);
+      }
       statusEl.innerHTML = '<span style="color:var(--text-muted);">' + esc(t('acct.importing', 'Importing...')) + '</span>';
-      var p = createProfiles
-        ? R.agent.accounts.bulkCreate(text, { platform: platform })
-        : R.agent.accounts.bulkAdd(text);
-      return p.then(function(r) {
+      var p;
+      try {
+        p = createProfiles
+          ? R.agent.accounts.bulkCreate(text, { platform: platform })
+          : R.agent.accounts.bulkAdd(text);
+      } catch (e) { p = Promise.reject(e); }
+      return Promise.resolve(p).then(function(r) {
+        if (!current()) return;
         var msg = 'Added ' + r.added + ' account' + (r.added === 1 ? '' : 's');
         if (createProfiles && r.created) msg += ', created ' + r.created + ' profile' + (r.created === 1 ? '' : 's');
         if (r.skipped) msg += ', skipped ' + r.skipped;
@@ -521,12 +573,12 @@
           agentBrowser.agentLoadAccounts();
           if (typeof agentBrowser.loadAccountsTab === "function") agentBrowser.loadAccountsTab();
           if (createProfiles && agentBrowser.loadProfiles) agentBrowser.loadProfiles(true);
-          var imDlg = document.getElementById('dlg-account-import');
-          if (imDlg && imDlg.open) imDlg.close();
+          dlg.close();
         }
       }).catch(function(e) {
+        if (!current()) return;
         statusEl.innerHTML = '<span style="color: var(--danger-text);">' + esc(e.message) + '</span>';
-      });
+      }).finally(release);
     });
   };
 

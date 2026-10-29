@@ -132,6 +132,7 @@
   var profilesLoadSeq = 0;
   var newProfileProxySeq = 0;
   var newProfileFormSeq = 0;
+  var profileCreateOwner = null;
   var consistencyPreviewSeq = 0;
   var newProfilePlatformEdited = false;
 
@@ -572,6 +573,10 @@
 
   resetNewProfileForm: function (browser) {
         var formSeq = ++newProfileFormSeq;
+        // Reopening transfers only UI ownership; an earlier create still runs.
+        profileCreateOwner = null;
+        var createBtn = document.querySelector('#dlg-profile button[type="submit"]');
+        if (createBtn) createBtn.removeAttribute("disabled");
         ++consistencyPreviewSeq;
         if (agentBrowser._consistencyPreviewTimer) clearTimeout(agentBrowser._consistencyPreviewTimer);
         newProfilePlatformEdited = false;
@@ -784,6 +789,8 @@
       },
 
   createProfile: function () {
+        var dialog = document.getElementById("dlg-profile");
+        if (!dialog || !dialog.open || profileCreateOwner) return;
         var name = document.getElementById("new-profile-name").value.trim();
         var proxySelection = parseProxySelection(document.getElementById("new-profile-proxy").value, "default");
         var businessPresetId = document.getElementById("new-profile-preset").value || undefined;
@@ -840,12 +847,37 @@
           // sending null, matching the Chromium Auto shape: a null here reads
           // as an explicit field on the wire and hides intent.
         }
-        wcall("browser.create", function () { return api.browser.create(options); }).then(function(r) {
+        var owner = { seq: newProfileFormSeq };
+        profileCreateOwner = owner;
+        var createBtn = document.querySelector('#dlg-profile button[type="submit"]');
+        if (createBtn) createBtn.setAttribute("disabled", "disabled");
+        function current() {
+          return profileCreateOwner === owner && owner.seq === newProfileFormSeq && dialog.open;
+        }
+        function release() {
+          if (profileCreateOwner !== owner) return;
+          profileCreateOwner = null;
+          if (createBtn && owner.seq === newProfileFormSeq) createBtn.removeAttribute("disabled");
+        }
+        function failed(e) { if (current()) toast(profileErrorMessage(e), "error"); }
+        var pending;
+        try {
+          // Creating is not cancellable: a slow reply must not permit a retry
+          // while the original backend operation can still commit.
+          pending = wcall("browser.create", function () { return api.browser.create(options); }, {
+            kind: "write", timeoutMs: 0, slowNoticeMs: 15000,
+            onSlow: function () {
+              if (current()) toast(t("fingerprint.action.pending", "The operation is still pending; closing this view does not mean cancellation or rollback."), "warning");
+            },
+          });
+        } catch (e) { try { failed(e); } finally { release(); } return; }
+        return Promise.resolve(pending).then(function(r) {
+          if (!current()) return;
           // Sale-90/92: trial expiry / profile cap opens the paywall dialog
           // instead of closing the form with a misleading success toast.
           if (r && typeof agentBrowser.interceptLicenseGate === "function" && agentBrowser.interceptLicenseGate(r)) return;
           if (!r || r.success === false || !r.dirId) { toast(profileErrorMessage((r && r.error) || t("toast.profile.create-failed", "Profile creation failed")), "error"); return; }
-          document.getElementById("dlg-profile").close();
+          dialog.close();
           toast(t("toast.profile.created", "Browser profile created!"), "success");
           // UI R3: after create, land on the new card (scroll + highlight)
           // instead of leaving the user to hunt for it in a long list.
@@ -854,12 +886,13 @@
           agentBrowser.switchTab("profiles");
           if (newId) {
             setTimeout(function () {
+              if (owner.seq !== newProfileFormSeq || dialog.open || state.currentTab !== "profiles") return;
               try {
                 if (agentBrowser.batch && typeof agentBrowser.batch.locateCard === "function") agentBrowser.batch.locateCard(newId);
               } catch (e) { /* best effort */ }
             }, 400);
           }
-        }).catch(function(e) { toast(profileErrorMessage(e), "error"); });
+        }).catch(failed).finally(release);
       },
 
   refresh: function () { agentBrowser.loadTab(state.currentTab); },

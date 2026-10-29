@@ -6,6 +6,41 @@ Format follows [Keep a Changelog](https://keepachangelog.com/); versions match
 
 ## [Unreleased]
 
+## [1.0.2] - 2026-10-29
+
+### Fixed
+
+- Browser launch admission closes during application shutdown; asynchronous
+  startup continuations recheck ownership, and process cleanup does not remove
+  replacement sessions when exit cannot be confirmed.
+- Queued automation cancellation and retry slots use conditional job claims;
+  cancelled terminal states are not overwritten by late successful actions.
+- Profile and automation dialogs isolate save ownership across close/reopen;
+  account imports and template openers reject stale responses and reentry.
+- Launch-gate, browser-binary and automation-notification changes save drafts
+  instead of leaking failed writes into live configuration. Notification save
+  failures restore the UI and provide feedback.
+- Bulk account planning validates capacity before creating profiles and uses
+  bounded, collision-safe names, including truncated names ending in suffixes.
+- Cookie deletion carries explicit path and identity provenance and refuses
+  ambiguous, partitioned or offline-unverified identities rather than deleting
+  a different live cookie.
+- Renderer storage migration owns its temporary windows and total deadline.
+
+### Changed
+
+- Batch profile status reads share a strict process-discovery snapshot;
+  endpoint probes share bounded deadlines and clean up late responses.
+- Slow profile creation remains pending until the backend settles, with a
+  delay notice instead of a misleading transport-timeout failure.
+
+### Known limitations
+
+- Shutdown admission/cancellation is not a complete drain protocol. Already
+  dispatched native storage writes and cross-resource imports are not rolled
+  back. Real GUI, browser login persistence and remote deployment require
+  separate environment acceptance.
+
 ## [1.0.1] - 2026-09-26
 
 ### Changed

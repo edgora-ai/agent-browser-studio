@@ -179,7 +179,7 @@ export function registerBrowserHandlers(): void {
       const chosen = picked.filePaths[0];
       const exe = resolveChromiumExecutable(chosen);
       if (!exe) return { success: false, error: "No Chromium executable found inside that selection" };
-      const cfg = getConfig();
+      const cfg = structuredClone(getConfig());
       cfg.chromiumBin = exe;
       saveConfig(cfg);
       recordAudit({
@@ -550,6 +550,9 @@ export function registerBrowserHandlers(): void {
       logInfo(`batch.${kind}.start`, { jobId, traceId: jobId, total: dirIds.length, concurrency });
       const result = await runBatch<string>({
         items: dirIds, label: kind, concurrency, signal, traceId: jobId,
+        // Launch has no cancellation handle: retain its slot until the real
+        // operation settles, not merely until a superficial queue timer fires.
+        ...(kind === "launch" ? { timeoutMs: 0 } : {}),
         onProgress: (done, total) => emitProgress(event, { jobId, kind, done, total }),
         worker: async (dirId) => {
           if (kind === "launch") {
