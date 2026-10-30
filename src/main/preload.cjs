@@ -348,7 +348,7 @@ const api = {
     // M3 adds the three below — automation:run-finished (terminal alert),
     // automation:open-run (system-notification click) and
     // automation:schedule-changed (state refresh).
-    const validChannels = ["browser:exited", "profile:updated", "config:changed", "sync:state-changed", "agent:tool-call", "agent:stream-start", "agent:stream-chunk", "agent:stream-tool-call", "agent:stream-done", "agent:stream-error", "agent:run-start", "agent:run-step", "agent:run-finish", "agent:approval-request", "batch:progress", "automation:run-finished", "automation:open-run", "automation:schedule-changed"];
+    const validChannels = ["browser:exited", "profile:updated", "config:changed", "sync:state-changed", "sync:progress", "agent:tool-call", "agent:stream-start", "agent:stream-chunk", "agent:stream-tool-call", "agent:stream-done", "agent:stream-error", "agent:run-start", "agent:run-step", "agent:run-finish", "agent:approval-request", "batch:progress", "automation:run-finished", "automation:open-run", "automation:schedule-changed"];
     if (validChannels.includes(channel) && typeof callback === "function") {
       let channels = listenerMap.get(callback);
       if (!channels) {

@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import * as zlib from "node:zlib";
+import { randomBytes } from "node:crypto";
 
 const h = vi.hoisted(() => ({ root: "", objects: new Map<string, Buffer>(), snapshot: vi.fn(), importCookies: vi.fn(), running: false, onRead: null as null | (() => void), requests: [] as string[] }));
 vi.mock("electron", async () => {
@@ -57,6 +58,107 @@ afterEach(() => vi.unstubAllGlobals());
 afterAll(() => { expect(path.dirname(h.root)).toBe(os.tmpdir()); fs.rmSync(h.root, { recursive: true, force: true }); });
 
 describe("shared synchronization operation ownership", () => {
+  it("cancels an oversized config response before disposing its request deadline", async () => {
+    const cancel = vi.fn();
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(new ReadableStream({ cancel }), {
+      status: 200, headers: { "content-length": "1000000000" },
+    })));
+    const result = await syncService.previewDiff();
+    expect(result.ok).toBe(false);
+    expect(result.message).toContain("too large");
+    expect(cancel).toHaveBeenCalledOnce();
+  });
+
+  it("cancels unread successful PUT response bodies before releasing the operation", async () => {
+    const originalFetch = globalThis.fetch, cancellations: ReturnType<typeof vi.fn>[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (url: string | URL, init?: RequestInit) => {
+      const response = await originalFetch(url, init);
+      if (init?.method !== "PUT") return response;
+      const cancel = vi.fn(); cancellations.push(cancel);
+      return new Response(new ReadableStream({ cancel }), { status: 200 });
+    }));
+    const result = await syncService.push();
+    expect(result.success).toBe(true);
+    expect(cancellations.length).toBeGreaterThan(0);
+    for (const cancel of cancellations) expect(cancel).toHaveBeenCalledOnce();
+    expect((syncService.getStatus() as any).operation.active).toBeNull();
+  });
+
+  it.each([404, 200])("cancels an unread sidecar GET response (%i) before returning", async status => {
+    const originalFetch = globalThis.fetch, cancellations: ReturnType<typeof vi.fn>[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (url: string | URL, init?: RequestInit) => {
+      if ((init?.method || "GET") !== "GET" || !String(url).includes(`/preferences-${ID}.json`)) return originalFetch(url, init);
+      const cancel = vi.fn(); cancellations.push(cancel);
+      return new Response(new ReadableStream({ cancel }), { status, headers: { "content-length": "1000000000" } });
+    }));
+    const result = await syncService.push();
+    expect(result.remoteCommit).toBe("committed");
+    expect(result.items?.some(item => item.code === "COMPAT_SIDECAR_UPLOAD_FAILED")).toBe(true);
+    expect(cancellations.length).toBeGreaterThan(0);
+    for (const cancel of cancellations) expect(cancel).toHaveBeenCalledOnce();
+    expect((syncService.getStatus() as any).operation.active).toBeNull();
+  });
+
+  it("reports real push/pull stages and bytes separately from lifecycle generations", async () => {
+    const progress: any[] = [], lifecycle: any[] = [];
+    const offProgress = onEvent("sync:progress", event => progress.push(event));
+    const offLifecycle = onEvent("sync:state-changed", event => lifecycle.push(event));
+    try {
+      const push = await syncService.push();
+      expect(push.success).toBe(true);
+      const pushEvents = progress.filter(event => event.operationId === push.operationId);
+      expect(pushEvents.map(event => event.stage)).toEqual(expect.arrayContaining(["preparing", "publishing", "verifying", "finalizing"]));
+      expect(pushEvents.some(event => event.progress.transfer?.direction === "upload" && event.progress.transfer.bytes > 0)).toBe(true);
+      expect(pushEvents.some(event => event.stage === "verifying" && event.progress.transfer?.direction === "download" && event.progress.transfer.state === "complete")).toBe(true);
+      expect(pushEvents.some(event => event.progress.scope === "sidecar" && event.progress.completedItems === event.progress.totalItems)).toBe(true);
+      expect(new Set(pushEvents.map(event => event.generation)).size).toBe(1);
+      expect(lifecycle).toHaveLength(2);
+      const pull = await syncService.pull(undefined, { strategy: "remote" });
+      expect(pull.success).toBe(true);
+      const pullEvents = progress.filter(event => event.operationId === pull.operationId);
+      expect(pullEvents.map(event => event.stage)).toEqual(expect.arrayContaining(["downloading", "preparing", "applying", "finalizing"]));
+      expect(pullEvents.some(event => event.progress.transfer?.direction === "download" && event.progress.transfer.bytes === h.objects.get(MAIN)!.length)).toBe(true);
+      expect(lifecycle).toHaveLength(4);
+      expect(JSON.stringify(progress)).not.toContain("synthetic-secret");
+      expect(JSON.stringify(progress)).not.toContain(ENDPOINT);
+    } finally { offProgress(); offLifecycle(); }
+  });
+
+  it("streams a large owned publication with byte-exact readback and only client-input progress", async () => {
+    const preference = randomBytes(400 * 1024).toString("hex");
+    fs.writeFileSync(path.join(getProfilesDir(), ID, "Default", "Preferences"), JSON.stringify({ syntheticLargePreference: preference }));
+    const transfers: any[] = [], streamed: number[] = [];
+    const off = onEvent("sync:progress", event => transfers.push(event));
+    const originalFetch = globalThis.fetch;
+    vi.stubGlobal("fetch", vi.fn(async (url: string | URL, init?: RequestInit) => {
+      if (init?.method !== "PUT" || !(init.body instanceof ReadableStream)) return originalFetch(url, init);
+      const reader = init.body.getReader(), chunks: Uint8Array[] = [];
+      for (;;) {
+        const next = await reader.read();
+        if (next.done) break;
+        chunks.push(next.value);
+        const status = (syncService.getStatus() as any).operation.active;
+        // Compatibility sidecars also stream for idle-deadline activity, but
+        // concurrent objects deliberately expose aggregate item counts only.
+        if (status.progress.transfer?.direction === "upload") streamed.push(status.progress.transfer.bytes);
+      }
+      const body = Buffer.concat(chunks);
+      expect(Number((init.headers as Record<string, string>)["content-length"])).toBe(body.length);
+      return originalFetch(url, { ...init, body });
+    }));
+    try {
+      const result = await syncService.push();
+      expect(result.success).toBe(true);
+      const body = h.objects.get(MAIN)!;
+      expect(body.length).toBeGreaterThan(256 * 1024);
+      expect(streamed.some(bytes => bytes > 0 && bytes < body.length)).toBe(true);
+      expect(transfers.some(event => event.progress.transfer?.state === "waiting-response" && event.progress.transfer.bytes === body.length)).toBe(true);
+      const published = JSON.parse(body.toString());
+      const restoredPreferences = JSON.parse(zlib.gunzipSync(Buffer.from(published.preferences[ID], "base64")).toString());
+      expect(restoredPreferences.syntheticLargePreference).toBe(preference);
+    } finally { off(); }
+  });
+
   it("completes the first service retry after reclaiming a proven-dead profile lease", async () => {
     const file = path.join(h.root, "locks", `${ID}.restore.lock`);
     fs.mkdirSync(path.dirname(file), { recursive: true });

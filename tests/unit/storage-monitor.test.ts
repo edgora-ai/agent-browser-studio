@@ -276,3 +276,90 @@ describe("configured-storage filesystem capacity", () => {
     expect(fs.readFileSync(getProfilesDir(), "utf8")).toBe("not a directory");
   });
 });
+
+describe("profile storage enumeration", () => {
+  const nonProfileDirectories = [
+    ".sync-pull-stage-qrks4v",
+    ".abs-profile-import-owned",
+    ".owned_profile.full-profile-stage-owned",
+    "owned_profile.full-profile-backup-owned-operation",
+    "owned_profile.full-profile-rollback-owned-operation",
+    ".unrelated-directory",
+    "invalid.profile",
+    "invalid profile",
+    "__proto__",
+    "prototype",
+    "constructor",
+    "a".repeat(81),
+  ];
+
+  function writeOwnedFile(dirId: string, relativePath: string, contents: string): string {
+    const target = path.join(getProfilesDir(), dirId, relativePath);
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(target, contents);
+    return target;
+  }
+
+  it("excludes sync staging, recovery backups and invalid names without failing real profile statistics", async () => {
+    const profile = writeOwnedFile("owned_profile", "Default/History", "owned history");
+    const orphan = writeOwnedFile("owned_orphan", "Default/Cookies", "owned cookies");
+    const sentinels = nonProfileDirectories.map(name => writeOwnedFile(name, "Cache/keep", "protected staging or backup"));
+    // A valid-looking regular file is not a profile directory either.
+    fs.writeFileSync(path.join(getProfilesDir(), "owned_file"), "not a profile");
+
+    const info = await storageMonitor.getInfo();
+    expect(info.profiles.map(profile => profile.dirId).sort()).toEqual(["owned_orphan", "owned_profile"]);
+    expect(info.totalProfileBytes).toBe(Buffer.byteLength("owned historyowned cookies"));
+    expect(info.profiles.find(profile => profile.dirId === "owned_profile")?.sizeBytes).toBe(Buffer.byteLength("owned history"));
+    expectSelectedQuery();
+    for (const target of sentinels) expect(fs.readFileSync(target, "utf8")).toBe("protected staging or backup");
+    expect(fs.readFileSync(profile, "utf8")).toBe("owned history");
+    expect(fs.readFileSync(orphan, "utf8")).toBe("owned cookies");
+  });
+
+  it("still returns disk capacity when only internal or unrelated directories exist", async () => {
+    statfs.mockResolvedValue(metadata());
+    for (const name of nonProfileDirectories) writeOwnedFile(name, "Cache/keep", "protected");
+    expect(await storageMonitor.getInfo()).toEqual({
+      profiles: [], totalProfileBytes: 0, availableDiskBytes: 25 * 4096, diskUsagePercent: 75,
+    });
+    expectSelectedQuery();
+  });
+
+  it("clears only real profile caches while preserving staging, backups and persistent browser data", async () => {
+    const cache = writeOwnedFile("owned_profile", "Cache/clear", "cache bytes");
+    const gpuCache = writeOwnedFile("owned_orphan", "GPUCache/clear", "GPU cache bytes");
+    const persistent = ["Default/History", "Default/Cookies", "Default/Local Storage/leveldb/keep", "Default/Extensions/keep"]
+      .map(relative => writeOwnedFile("owned_profile", relative, "persistent browser data"));
+    const sentinels = nonProfileDirectories.map(name => writeOwnedFile(name, "Cache/keep", "protected staging or backup"));
+
+    await expect(storageMonitor.clearCache()).resolves.toEqual({ freed: Buffer.byteLength("cache bytesGPU cache bytes") });
+    expect(fs.existsSync(cache)).toBe(false);
+    expect(fs.existsSync(gpuCache)).toBe(false);
+    for (const target of sentinels) expect(fs.readFileSync(target, "utf8")).toBe("protected staging or backup");
+    for (const target of persistent) expect(fs.readFileSync(target, "utf8")).toBe("persistent browser data");
+  });
+
+  it("does not enumerate a directory symlink as a profile or clear its caches", async () => {
+    const target = path.join(h.root, "owned-link-target");
+    const sentinel = path.join(target, "Cache", "keep");
+    fs.mkdirSync(path.dirname(sentinel), { recursive: true });
+    fs.writeFileSync(sentinel, "owned linked data");
+    fs.symlinkSync(target, path.join(getProfilesDir(), "owned_link"), process.platform === "win32" ? "junction" : "dir");
+
+    expect((await storageMonitor.getInfo()).profiles).toEqual([]);
+    await expect(storageMonitor.clearCache()).resolves.toEqual({ freed: 0 });
+    expect(fs.readFileSync(sentinel, "utf8")).toBe("owned linked data");
+  });
+
+  it.each([".sync-pull-stage-qrks4v", "owned_profile.full-profile-backup-owned-operation", "../outside", "__proto__", "", "a".repeat(81)])(
+    "keeps direct cache requests strict for invalid ID %j without falling back to clear-all",
+    async dirId => {
+      const cache = writeOwnedFile("owned_profile", "Cache/keep", "must not clear");
+      const stage = writeOwnedFile(".sync-pull-stage-qrks4v", "Cache/keep", "must not clear staging");
+      await expect(storageMonitor.clearCache(dirId)).rejects.toThrow("Invalid profile ID");
+      expect(fs.readFileSync(cache, "utf8")).toBe("must not clear");
+      expect(fs.readFileSync(stage, "utf8")).toBe("must not clear staging");
+    },
+  );
+});

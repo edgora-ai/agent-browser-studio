@@ -301,6 +301,33 @@ describe("sync state event bus → BrowserWindow → original preload allowlist"
     expect(destroyed.window.webContents.send).not.toHaveBeenCalled(); expect(deadContents.window.webContents.send).not.toHaveBeenCalled();
     unsubscribe();
   });
+  it("relays actual byte/stage progress through both live preloads without lifecycle invalidation or late delivery", () => {
+    const f = fixture(), second = f.renderer(), destroyed = f.renderer({ destroyed: true });
+    const received = vi.fn(), other = vi.fn(), lifecycle = vi.fn();
+    f.api.on("sync:progress", received); second.api.on("sync:progress", other);
+    f.api.on("sync:state-changed", lifecycle);
+    const lease = f.state.beginSyncOperation("push");
+    lease.stage("publishing", { scope: "fullProfile", itemId: "ab_synthetic", completedItems: 0, totalItems: 2 });
+    const transfer = lease.transfer("upload", 512);
+    transfer.update(256); transfer.waiting();
+    expect(received).toHaveBeenCalled(); expect(other).toHaveBeenCalledTimes(received.mock.calls.length);
+    const snapshot = received.mock.calls.at(-1)![0];
+    expect(snapshot).toMatchObject({ operationId: lease.operation.operationId, kind: "push", stage: "publishing",
+      progress: { scope: "fullProfile", itemId: "ab_synthetic", transfer: { direction: "upload", bytes: 256, totalBytes: 512, state: "waiting-response" } } });
+    expect(snapshot.generation).toBe(lifecycle.mock.calls[0][0].generation);
+    expect(lifecycle).toHaveBeenCalledTimes(1);
+    snapshot.progress.transfer.bytes = 999;
+    expect(f.state.getSyncOperationState().active.progress.transfer.bytes).toBe(256);
+    expect(other.mock.calls.at(-1)![0].progress.transfer.bytes).toBe(256);
+    expect(destroyed.window.webContents.send).not.toHaveBeenCalled();
+    lease.finish(RESULTS[0].result);
+    const count = received.mock.calls.length;
+    transfer.update(512); transfer.finish();
+    expect(received).toHaveBeenCalledTimes(count);
+    expect(lifecycle).toHaveBeenCalledTimes(2);
+    f.api.removeListener("sync:progress", received);
+    expect(f.first.incoming.listenerCount("sync:progress")).toBe(0);
+  });
   it("the new channel is allowlisted, unlisted channels stay blocked, and removeListener detaches the wrapper", () => {
     const f = fixture(), received = vi.fn(), rejected = vi.fn();
     f.api.on("sync:state-changed", received); f.api.on("sync:unlisted-body", rejected);

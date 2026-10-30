@@ -9,13 +9,14 @@ let unsubscribeSyncEvents: (() => void) | undefined;
 
 export function registerSyncHandlers(): void {
   unsubscribeSyncEvents?.();
-  unsubscribeSyncEvents = onEvent("sync:state-changed", (payload) => {
+  const subscriptions = ["sync:state-changed", "sync:progress"].map((channel) => onEvent(channel, (payload) => {
     for (const window of BrowserWindow.getAllWindows()) {
       if (window.isDestroyed() || window.webContents.isDestroyed()) continue;
-      try { window.webContents.send("sync:state-changed", payload); }
+      try { window.webContents.send(channel, payload); }
       catch (error) { console.warn("[sync] Could not notify a closing renderer:", error); }
     }
-  });
+  }));
+  unsubscribeSyncEvents = () => subscriptions.forEach((unsubscribe) => unsubscribe());
 
   ipcMain.handle("sync:push", async (_event, opts?: { force?: boolean; comparisonToken?: SyncComparisonToken; history?: boolean }): Promise<SyncResult> => {
     if (opts?.history !== undefined && typeof opts.history !== "boolean") return { success: false, code: "INVALID_HISTORY_SCOPE", message: "History scope must be a boolean" };

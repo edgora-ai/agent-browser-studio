@@ -26,8 +26,7 @@ export const storageMonitor = {
 
     if (fs.existsSync(profilesDir)) {
       const entries = await fsPromises.readdir(profilesDir, { withFileTypes: true });
-      const tasks = entries.map(async entry => {
-        if (!entry.isDirectory()) return;
+      const tasks = entries.filter(isProfileDirectory).map(async entry => {
         const dirId = entry.name;
         const profilePath = path.join(profilesDir, dirId);
         const meta = getProfileMeta(dirId);
@@ -66,17 +65,15 @@ export const storageMonitor = {
   async clearCache(dirId?: string): Promise<{ freed: number }> {
     let totalFreed = 0;
 
-    if (dirId) {
+    if (dirId !== undefined) {
       totalFreed = await clearProfileCacheAsync(dirId);
     } else {
       const baseDir = getProfilesDir();
       if (fs.existsSync(baseDir)) {
         const entries = await fsPromises.readdir(baseDir, { withFileTypes: true });
-        const tasks = entries.map(async entry => {
-          if (entry.isDirectory()) {
-            const freed = await clearProfileCacheAsync(entry.name);
-            totalFreed += freed;
-          }
+        const tasks = entries.filter(isProfileDirectory).map(async entry => {
+          const freed = await clearProfileCacheAsync(entry.name);
+          totalFreed += freed;
         });
         await Promise.all(tasks);
       }
@@ -94,6 +91,19 @@ export const storageMonitor = {
 };
 
 // ── Internal ──
+
+// Sync/import staging and retained recovery backups share the profiles root.
+// They are not profiles: skip them before metadata reads or cache traversal,
+// without weakening explicit-ID validation or touching their recovery data.
+function isProfileDirectory(entry: fs.Dirent): boolean {
+  if (!entry.isDirectory()) return false;
+  try {
+    validateDirId(entry.name);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 async function clearProfileCacheAsync(dirId: string): Promise<number> {
   const profilePath = resolveProfileDir(dirId);

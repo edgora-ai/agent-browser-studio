@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { createCipheriv, createDecipheriv, createHash, randomBytes, scryptSync } from "node:crypto";
+import { createCipheriv, createDecipheriv, createHash, randomBytes, scrypt } from "node:crypto";
 import type { BrowserEngine, ProxyConfig } from "../../types.js";
 import {
   captureFullProfile, prepareFullProfile, resealPreparedFullProfile,
@@ -63,42 +63,57 @@ function credentialOptions(prepared: PreparedFullProfile, source: CredentialIden
 function aad(options: Pick<TransferOptions, "dirId" | "engine" | "snapshotId">): Buffer {
   return Buffer.from(JSON.stringify(["abs-full-profile-metadata-v1", options.dirId, options.engine, options.snapshotId]));
 }
-function metadataKey(passphrase: string, salt: Buffer): Buffer {
+async function metadataKey(options: TransferOptions, salt: Buffer): Promise<Buffer> {
+  const passphrase = options.passphrase;
   if (typeof passphrase !== "string" || Buffer.byteLength(passphrase) < 12 || Buffer.byteLength(passphrase) > 1024) {
     throw failure("FULL_PROFILE_PASSPHRASE_REQUIRED", "Set the same migration passphrase on both machines (12–1024 UTF-8 bytes)");
   }
-  return scryptSync(passphrase, salt, 32, { N: 32768, r: 8, p: 1, maxmem: 64 * 1024 * 1024 });
-}
-function sealMetadata(value: TransferMetadata, options: TransferOptions): Buffer {
-  const clear = Buffer.from(JSON.stringify(value));
-  if (clear.length > MAX_METADATA) throw failure("FULL_PROFILE_METADATA_LIMIT", "Complete profile metadata is too large");
-  const salt = randomBytes(16), nonce = randomBytes(12), key = metadataKey(options.passphrase, salt);
+  const input = Buffer.from(passphrase, "utf8"); let key: Buffer | undefined;
   try {
+    check(options);
+    key = await new Promise<Buffer>((resolve, reject) => {
+      scrypt(input, salt, 32, { N: 32768, r: 8, p: 1, maxmem: 64 * 1024 * 1024 }, (error, derived) => {
+        if (error) reject(error); else resolve(derived);
+      });
+    });
+    check(options); return key;
+  } catch (cause) { key?.fill(0); throw cause; }
+  finally { input.fill(0); }
+}
+async function sealMetadata(value: TransferMetadata, options: TransferOptions): Promise<Buffer> {
+  const clear = Buffer.from(JSON.stringify(value)); let key: Buffer | undefined;
+  try {
+    if (clear.length > MAX_METADATA) throw failure("FULL_PROFILE_METADATA_LIMIT", "Complete profile metadata is too large");
+    const salt = randomBytes(16), nonce = randomBytes(12);
+    key = await metadataKey(options, salt); check(options);
     const cipher = createCipheriv("aes-256-gcm", key, nonce); cipher.setAAD(aad(options));
     return Buffer.concat([META_MAGIC, salt, nonce, cipher.update(clear), cipher.final(), cipher.getAuthTag()]);
-  } finally { key.fill(0); clear.fill(0); }
+  } finally { key?.fill(0); clear.fill(0); }
 }
-function openMetadata(bytes: Buffer, options: TransferOptions): TransferMetadata {
+async function openMetadata(bytes: Buffer, options: TransferOptions): Promise<TransferMetadata> {
   if (bytes.length < 52 || bytes.length > MAX_METADATA + 52 || !bytes.subarray(0, 8).equals(META_MAGIC)) {
     throw failure("FULL_PROFILE_METADATA_INVALID", "Complete profile metadata is missing or invalid");
   }
-  const key = metadataKey(options.passphrase, bytes.subarray(8, 24));
+  const key = await metadataKey(options, bytes.subarray(8, 24));
   let first: Buffer | undefined, clear: Buffer | undefined;
   try {
-    const decipher = createDecipheriv("aes-256-gcm", key, bytes.subarray(24, 36));
-    decipher.setAAD(aad(options)); decipher.setAuthTag(bytes.subarray(-16));
-    first = decipher.update(bytes.subarray(36, -16)); clear = Buffer.concat([first, decipher.final()]);
-    const value = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(clear));
-    if (!value || value.version !== 1 || typeof value.profileHash !== "string" || !/^[a-f0-9]{64}$/.test(value.profileHash) ||
-        !value.source || !value.credentials || value.credentials.version !== 1) throw new Error("invalid");
-    if (value.proxy !== undefined && (!value.proxy || typeof value.proxy.name !== "string" || value.proxy.name.length > 256 ||
-        !/^[a-f0-9]{64}$/.test(value.proxy.publicHash) || typeof value.proxy.username !== "string" || typeof value.proxy.password !== "string" ||
-        Buffer.byteLength(value.proxy.username) > 65536 || Buffer.byteLength(value.proxy.password) > 65536)) throw new Error("invalid");
-    return value as TransferMetadata;
-  } catch { throw failure("FULL_PROFILE_METADATA_INVALID", "Complete profile metadata authentication or validation failed"); }
-  finally { key.fill(0); first?.fill(0); clear?.fill(0); }
+    check(options);
+    try {
+      const decipher = createDecipheriv("aes-256-gcm", key, bytes.subarray(24, 36));
+      decipher.setAAD(aad(options)); decipher.setAuthTag(bytes.subarray(-16));
+      first = decipher.update(bytes.subarray(36, -16)); clear = Buffer.concat([first, decipher.final()]);
+      const value = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(clear));
+      if (!value || value.version !== 1 || typeof value.profileHash !== "string" || !/^[a-f0-9]{64}$/.test(value.profileHash) ||
+          !value.source || !value.credentials || value.credentials.version !== 1) throw new Error("invalid");
+      if (value.proxy !== undefined && (!value.proxy || typeof value.proxy.name !== "string" || value.proxy.name.length > 256 ||
+          !/^[a-f0-9]{64}$/.test(value.proxy.publicHash) || typeof value.proxy.username !== "string" || typeof value.proxy.password !== "string" ||
+          Buffer.byteLength(value.proxy.username) > 65536 || Buffer.byteLength(value.proxy.password) > 65536)) throw new Error("invalid");
+      return value as TransferMetadata;
+    } catch { throw failure("FULL_PROFILE_METADATA_INVALID", "Complete profile metadata authentication or validation failed"); }
+  } finally { key.fill(0); first?.fill(0); clear?.fill(0); }
 }
-function readMetadata(prepared: PreparedFullProfile, options: TransferOptions): TransferMetadata {
+async function readMetadata(prepared: PreparedFullProfile, options: TransferOptions): Promise<TransferMetadata> {
+  check(options);
   if (!prepared.extraDirectory || prepared.manifest.extraEntries.length !== 1 || prepared.manifest.extraEntries[0].path !== META_PATH) {
     throw failure("FULL_PROFILE_METADATA_INVALID", "Complete profile has no authenticated environment metadata");
   }
@@ -133,12 +148,13 @@ export async function captureFullProfileTransfer(options: TransferOptions & {
     const report = await inspectProfileCredentials({ ...credentialOptions(frozen, source, options), sourceAdapter });
     check(options);
     if (report.status === "source-codec-required") throw failure("FULL_PROFILE_CREDENTIALS_UNSUPPORTED", "The source browser encryption backend cannot be migrated by this build");
-    const metadata = sealMetadata({ version: 1, ...options.environment, source, credentials: report }, options);
+    const metadata = await sealMetadata({ version: 1, ...options.environment, source, credentials: report }, options);
     try {
       const captured = await captureFullProfile({ ...options, profileDir: frozen.directory,
         extraEntries: [{ path: META_PATH, data: metadata }] });
       const verified = await prepareFullProfile({ ...options, ...captured });
-      const readback = readMetadata(verified, options);
+      const readback = await readMetadata(verified, options);
+      check(options);
       if (readback.profileHash !== options.environment.profileHash || JSON.stringify(readback.source) !== JSON.stringify(source)) {
         throw failure("FULL_PROFILE_READBACK_MISMATCH", "Complete profile readback mismatch");
       }
@@ -203,7 +219,8 @@ export async function prepareFullProfileTransfer(options: TransferOptions & {
   body: Buffer; descriptor: FullProfileArtifact; receiverPlatform: string; profileHash: string;
 }): Promise<{ prepared: PreparedFullProfile; credentials: ProfileCredentialReport; environment: FullProfileEnvironment }> {
   let prepared = await prepareFullProfile(options);
-  const metadata = readMetadata(prepared, options);
+  const metadata = await readMetadata(prepared, options);
+  check(options);
   if (metadata.profileHash !== options.profileHash) throw failure("FULL_PROFILE_CONFIG_MISMATCH", "Profile configuration does not match its encrypted data snapshot");
   const source = identityForManagedProfile(options.engine, platform(prepared.sourceManifest.sourcePlatform), options.dirId);
   if (JSON.stringify(metadata.source) !== JSON.stringify(source)) throw failure("FULL_PROFILE_CREDENTIAL_IDENTITY_MISMATCH", "Credential provenance does not match its authenticated snapshot");
