@@ -13,6 +13,7 @@ import com.ahoo.abs.android.data.BootstrapStore;
 import com.ahoo.abs.android.data.CredentialUpdate;
 import com.ahoo.abs.android.data.ProfileRepository;
 import com.ahoo.abs.android.data.StorageException;
+import com.ahoo.abs.android.process.BrowserProcessOwner;
 import com.ahoo.abs.core.LaunchSpec;
 import com.ahoo.abs.core.ProfileSpec;
 import com.ahoo.abs.core.ProxySpec;
@@ -24,7 +25,7 @@ import org.json.JSONObject;
 /** No default profile DB, existing browser data, external site or device identifier is read. */
 public final class OwnedInstrumentation extends Instrumentation {
     private enum Stage {
-        TARGET_CHECKS, PRAGMA_CREATE, PRAGMA_EXEC_SECURE_DELETE, PRAGMA_EXEC_BUSY_TIMEOUT,
+        TARGET_CHECKS, ENGINE_CONTROL, PRAGMA_CREATE, PRAGMA_EXEC_SECURE_DELETE, PRAGMA_EXEC_BUSY_TIMEOUT,
         PRAGMA_QUERY_SECURE_DELETE, PRAGMA_QUERY_BUSY_TIMEOUT, REPOSITORY_OPEN, PROFILE_SAVE,
         PROFILE_DIRECT_READBACK, REPOSITORY_REOPEN, BOOTSTRAP_OPEN, BOOTSTRAP_PUBLISH,
         BOOTSTRAP_HASH_READBACK, BOOTSTRAP_CLAIM,
@@ -51,6 +52,17 @@ public final class OwnedInstrumentation extends Instrumentation {
             String name = "verification_" + scope + ".sqlite";
             File file = new File(context.getNoBackupFilesDir(), name);
             require(!file.exists(), "REFUSE_EXISTING_TEST_DATABASE");
+            stage = Stage.ENGINE_CONTROL;
+            require(context.getApplicationContext() instanceof BrowserProcessOwner, "ENGINE_CONTROL_OWNER_MISSING");
+            BrowserProcessOwner owner = (BrowserProcessOwner) context.getApplicationContext();
+            require(owner.existingControlRuntime() == null, "CONTROL_LOOKUP_CREATED_RUNTIME");
+            android.content.Intent browserIntent = owner.createBrowserActivityIntent();
+            require(browserIntent.getComponent() != null
+                    && context.getPackageName().equals(browserIntent.getComponent().getPackageName())
+                    && browserIntent.getData() == null && browserIntent.getSelector() == null
+                    && browserIntent.getClipData() == null && browserIntent.getExtras() == null,
+                    "ENGINE_ENTRY_POINT_NOT_EXPLICIT_INTERNAL_EMPTY_INTENT");
+            require(owner.existingControlRuntime() == null, "ENTRY_POINT_CREATED_RUNTIME");
             verifyReturningPragmas(context, result);
             ProfileSpec saved;
             stage = Stage.REPOSITORY_OPEN;

@@ -26,6 +26,7 @@ public final class CoreContractTest {
             proxies();
             profiles();
             launches();
+            nativeTimezoneLaunches();
             navigation();
             admissions();
             ping0Observations();
@@ -35,6 +36,97 @@ public final class CoreContractTest {
         }
         System.out.println("TOTAL " + (passed + failed) + " PASS " + passed + " FAIL " + failed);
         if (failed != 0) throw new AssertionError(failed + " contract test(s) failed");
+    }
+
+    private static void nativeTimezoneLaunches() {
+        test("native timezone schema matches the independent 0057 canonical vector", () -> {
+            ProfileSpec p = spec("11111111-1111-4111-8111-111111111111", REV, "Test", profile().proxy,
+                    "US", "America/New_York", langs(), ProfileSpec.DeviceMode.NATIVE, "", "");
+            NativeTimezoneLaunchConfig config = NativeTimezoneLaunchConfig.fromLaunch(
+                    new LaunchSpec(p, SESSION, NONCE, NOW, NOW + 1000), "22222222-2222-4222-8222-222222222222", NOW);
+            String decoded = new String(java.util.Base64.getUrlDecoder().decode(config.encoded()), java.nio.charset.StandardCharsets.US_ASCII);
+            eq("{\"launchId\":\"22222222-2222-4222-8222-222222222222\",\"mode\":\"timezone-only\",\"profileId\":\"11111111-1111-4111-8111-111111111111\",\"schemaVersion\":1,\"timezone\":\"America/New_York\"}", decoded);
+            eq("8d8a09170eb55c6179deba43d451dbbeef872fb74af07890bda279828c86dba5", config.inputSha256());
+            eq(173, decoded.length());
+            check(config.encoded().matches("[A-Za-z0-9_-]+"), "noncanonical base64url");
+            check(!config.encoded().contains("="), "base64 padding");
+        });
+        test("native config command line is a fresh immutable projection", () -> {
+            NativeTimezoneLaunchConfig config = NativeTimezoneLaunchConfig.fromLaunch(launch(SESSION, NONCE, NOW, NOW + 1000), OTHER, NOW);
+            String[] arguments = config.commandLine();
+            eq(3, arguments.length); eq("agent-browser-product", arguments[0]);
+            eq("--agent-browser-fingerprint-config=" + config.encoded(), arguments[1]);
+            eq("--agent-browser-timezone-required", arguments[2]);
+            arguments[1] = "--js-flags=forbidden";
+            eq("--agent-browser-fingerprint-config=" + config.encoded(), config.commandLine()[1]);
+        });
+        test("native launch IDs bind process incarnations, not reusable profile IDs", () -> {
+            LaunchSpec launch = launch(SESSION, NONCE, NOW, NOW + 1000);
+            NativeTimezoneLaunchConfig first = NativeTimezoneLaunchConfig.fromLaunch(launch, OTHER, NOW);
+            NativeTimezoneLaunchConfig second = NativeTimezoneLaunchConfig.fromLaunch(launch, REV, NOW);
+            check(!first.encoded().equals(second.encoded()), "incarnation missing from input");
+            check(!first.inputSha256().equals(second.inputSha256()), "incarnation missing from digest");
+            check(!first.inputSha256().equals(launch.configHash()), "native digest falsely became the full launch envelope hash");
+        });
+        test("native payload contains only schema fields, not profile or proxy metadata", () -> {
+            ProfileSpec p = spec(ID, REV, "PRIVATE_SYNTHETIC_NAME", new ProxySpec(ProxySpec.Scheme.HTTP,
+                    "private-synthetic-proxy.invalid", 4567, true), "NZ", "Pacific/Auckland", langs(),
+                    ProfileSpec.DeviceMode.NATIVE, "PRIVATE_SYNTHETIC_MODEL", OTHER);
+            NativeTimezoneLaunchConfig config = NativeTimezoneLaunchConfig.fromLaunch(
+                    new LaunchSpec(p, SESSION, NONCE, NOW, NOW + 1000), OTHER, NOW);
+            String decoded = new String(java.util.Base64.getUrlDecoder().decode(config.encoded()), java.nio.charset.StandardCharsets.US_ASCII);
+            eq("{\"launchId\":\"" + OTHER + "\",\"mode\":\"timezone-only\",\"profileId\":\"" + ID
+                    + "\",\"schemaVersion\":1,\"timezone\":\"Pacific/Auckland\"}", decoded);
+            check(!decoded.contains(SESSION) && !decoded.contains(NONCE) && !decoded.contains(REV), "launch control metadata leaked");
+            check(!decoded.contains("PRIVATE") && !decoded.contains("proxy") && !decoded.contains("\"port\""), "profile metadata leaked");
+        });
+        for (String zone : new String[]{"UTC", "Asia/Shanghai", "Etc/GMT+8", "America/Argentina/Buenos_Aires"}) {
+            test("native timezone preserves the exact requested zone " + zone, () -> {
+                ProfileSpec p = variant("", zone, langs(), "");
+                NativeTimezoneLaunchConfig config = NativeTimezoneLaunchConfig.fromLaunch(
+                        new LaunchSpec(p, SESSION, NONCE, NOW, NOW + 1000), OTHER, NOW);
+                String decoded = new String(java.util.Base64.getUrlDecoder().decode(config.encoded()), java.nio.charset.StandardCharsets.US_ASCII);
+                check(decoded.endsWith(",\"timezone\":\"" + zone + "\"}"), "timezone silently changed");
+            });
+        }
+        for (String zone : new String[]{"+08:00", "UTC+08:00", "GMT-03:30"}) {
+            test("native unsupported offset shape is rejected without UTC fallback " + zone, () -> {
+                ProfileSpec p = variant("", zone, langs(), "");
+                bad("UNSUPPORTED_NATIVE_TIME_ZONE", () -> NativeTimezoneLaunchConfig.fromLaunch(
+                        new LaunchSpec(p, SESSION, NONCE, NOW, NOW + 1000), OTHER, NOW));
+            });
+        }
+        for (String incarnation : new String[]{null, "", "../escape", OTHER.toUpperCase(java.util.Locale.ROOT),
+                "52345678-1234-1234-8234-123456789abc", "52345678-1234-4234-7234-123456789abc", OTHER + "\n"}) {
+            test("native rejects noncanonical process incarnation", () -> bad("INVALID_NATIVE_LAUNCH_ID", () ->
+                    NativeTimezoneLaunchConfig.fromLaunch(launch(SESSION, NONCE, NOW, NOW + 1000), incarnation, NOW)));
+        }
+        test("native profile UUIDv1 is not silently remapped to a new directory", () -> {
+            ProfileSpec p = spec("12345678-1234-1234-8234-123456789abc", REV, "Test", profile().proxy,
+                    "", "UTC", langs(), ProfileSpec.DeviceMode.NATIVE, "", "");
+            bad("INVALID_NATIVE_PROFILE_ID", () -> NativeTimezoneLaunchConfig.fromLaunch(
+                    new LaunchSpec(p, SESSION, NONCE, NOW, NOW + 1000), OTHER, NOW));
+        });
+        test("native declared-device emulation remains unsupported", () -> {
+            ProfileSpec p = spec(ID, REV, "Test", profile().proxy, "", "UTC", langs(),
+                    ProfileSpec.DeviceMode.DECLARED_ANDROID, "Synthetic", "");
+            bad("NATIVE_DEVICE_MODE_REQUIRED", () -> NativeTimezoneLaunchConfig.fromLaunch(
+                    new LaunchSpec(p, SESSION, NONCE, NOW, NOW + 1000), OTHER, NOW));
+        });
+        test("native rejects a missing launch", () -> bad("INVALID_LAUNCH", () -> NativeTimezoneLaunchConfig.fromLaunch(null, OTHER, NOW)));
+        test("native rejects expired launch at the exact deadline", () -> bad("LAUNCH_EXPIRED", () ->
+                NativeTimezoneLaunchConfig.fromLaunch(launch(SESSION, NONCE, NOW, NOW + 1000), OTHER, NOW + 1000)));
+        test("native rejects an implausible future launch", () -> bad("LAUNCH_FROM_FUTURE", () ->
+                NativeTimezoneLaunchConfig.fromLaunch(launch(SESSION, NONCE, NOW + 5001, NOW + 6000), OTHER, NOW)));
+        test("native rejects negative observation time", () -> bad("INVALID_TIME", () ->
+                NativeTimezoneLaunchConfig.fromLaunch(launch(SESSION, NONCE, NOW, NOW + 1000), OTHER, -1)));
+        test("native payload construction cannot consume a launch or grant browsing", () -> {
+            LaunchSpec launch = launch(SESSION, NONCE, NOW, NOW + 1000);
+            NativeTimezoneLaunchConfig first = NativeTimezoneLaunchConfig.fromLaunch(launch, OTHER, NOW);
+            eq(first.encoded(), NativeTimezoneLaunchConfig.fromLaunch(launch, OTHER, NOW).encoded());
+            eq(AdmissionGate.Status.UNVERIFIED, AdmissionGate.evaluate(launch.profile,
+                    new AdmissionGate.Evidence(false, false, false, false, false)).status);
+        });
     }
 
     private static void proxies() {

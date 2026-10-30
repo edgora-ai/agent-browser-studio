@@ -41,6 +41,28 @@ class BuildHarnessTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Symlink"):
             build.ordinary(link)
 
+    def test_read_only_cache_accepts_parent_containing_populated_modules(self):
+        (self.root / "modules-2" / "files-2.1").mkdir(parents=True)
+        self.assertEqual(build.dependency_cache_root(self.root), self.root)
+
+    def test_read_only_cache_rejects_modules_directory_passed_one_level_too_deep(self):
+        modules = self.root / "modules-2"
+        (modules / "files-2.1").mkdir(parents=True)
+        with self.assertRaisesRegex(ValueError, "parent containing"):
+            build.dependency_cache_root(modules)
+
+    def test_read_only_cache_rejects_missing_artifact_directory(self):
+        (self.root / "modules-2").mkdir()
+        with self.assertRaisesRegex(ValueError, "pre-populated"):
+            build.dependency_cache_root(self.root)
+
+    def test_read_only_cache_rejects_symlink_without_following(self):
+        target = self.root / "own-public-cache"
+        (target / "files-2.1").mkdir(parents=True)
+        (self.root / "modules-2").symlink_to(target, target_is_directory=True)
+        with self.assertRaisesRegex(ValueError, "Symlink"):
+            build.dependency_cache_root(self.root)
+
     def test_usage_counts_link_only_not_its_target_contents(self):
         target = self.root / "own-input.txt"
         target.write_bytes(b"x" * 123)

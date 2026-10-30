@@ -7,14 +7,17 @@
 - 分支：`feat/android-resume-20261027`。
 - 开发基线：桌面 `main` 提交 `2f3b0b3fba206d0a86c209789c191f4d5a4e1811`。
 - 当前 `mobile/android` 是可运行的 **System WebView 内部原型**，还没有接入自编译 Chromium。
-- 当前 Android 编译输入：92 文件，SHA-256 `0b9337db3adc3f340501d21b539f35fda79aa235bc04fa053a31f96c5a2df1cf`；范围由 `mobile/android/tools/build.py:source_inventory` 定义，不包含 Markdown。以服务器实际计算为准，不因文档中的旧摘要跳过核验。
-- 原生 Chromium 目标：`152.0.7977.72`，声明上游 commit `026bb13a93d60e7adfefa2bbf58d6f57c2d335cc`。已有完整顺序补丁登记到 `0056`；新增编号从 `0057` 起，不覆盖旧补丁。
-- **尚未实现本任务的原生修复，没有新的评分 PASS，也没有可分发的自有 Android 内核 APK/AAR。**
+- 上轮实际 System WebView APK 的 Android 编译输入：92 文件，SHA-256 `0b9337db3adc3f340501d21b539f35fda79aa235bc04fa053a31f96c5a2df1cf`。这是历史构建身份；新增原生验收 fixture 后必须重新计算完整当前输入，不能沿用这个摘要给新产物背书。范围由 `mobile/android/tools/build.py:source_inventory` 定义，不包含 Markdown，也不是自编译 Chromium 的完整输入清单。
+- 原生 Chromium 目标：`152.0.7977.72`，声明上游 commit `026bb13a93d60e7adfefa2bbf58d6f57c2d335cc`。本轮在不修改 `0002`–`0056` 的前提下新增 `0057-android-frozen-native-timezone.patch`；后续编号从 `0058` 起。
+- **0057 的最小时区验证壳源码与测试已写入，独立审查及修正先于编译/安装。没有新的评分 PASS，没有实际构建出的自有 Android 内核 APK/AAR，也没有把产品 App 的 System WebView 替换成原生内核。**
+- 原生代码/协议与准确目标见 [ANDROID_TIMEZONE.md](../../patches/chromium/ANDROID_TIMEZONE.md)；只读 realm 验收源见 [native-kernel-tests](../../mobile/android/native-kernel-tests/README.md)。源码约束通过不等于 native 测试通过。
+- `0906488e5f35d61b7b3c0972f65d4730bbe97783` 是此前已推送的 App/任务检查点，不包含本轮新增 0057。服务器必须取得后续实际交接的源码身份后才能执行新原生任务，不能拿旧检查点编译后声称修复已部署。
 
 详细记录：
 
 - [已完成的 App 生命周期/存储里程碑](android-resume-lifecycle-storage-2026-10-27.md)
 - [原生内核能力与构建物料核对](android-native-kernel-readiness-2026-10-27.md)
+- [0057 源码、独立 review 与实际 host/source 回归](android-native-timezone-source-review-2026-10-27.md)
 - [Android 工程与受限构建说明](../../mobile/android/README.md)
 - [Chromium 补丁与协议](../../patches/chromium/README.md)
 
@@ -67,7 +70,7 @@ git --version
 
 已有 `0025-native-timezone-identity.patch` 在 Blink `TimeZoneController` 中采用 ICU/V8 的 native 时区 hook，可作为最小验证切口。
 
-现有全量 fingerprint 配置和部分 UA-CH 是 desktop 语义。**不能只增加 Android 平台到 `enabled()`，就同时启用 Windows/macOS 的 UA、CPU、GPU 或 desktop form-factor 值。**第一阶段保持真实 Android UA、CPU、内存、GPU、屏幕路径，只增加显式的 Android 冻结时区验证模式及严格有效性条件。
+现有全量 fingerprint 配置和部分 UA-CH 是 desktop 语义。**不能只增加 Android 平台到 `enabled()`，就同时启用 Windows/macOS 的 UA、CPU、GPU 或 desktop form-factor 值。**0057 不修改原桌面 parser，也不启用其覆盖；硬件、GPU、屏幕和 Navigator 保留未配置路径，只增加显式的 Android 冻结时区模式。上游 content-shell 的测试壳 UA/UA-CH 不是已验收的生产 Android Chrome 身份，本轮不宣称它的品牌或完整跨表面身份一致性已解决。
 
 ### 3.2 冻结配置与 Android embedder
 

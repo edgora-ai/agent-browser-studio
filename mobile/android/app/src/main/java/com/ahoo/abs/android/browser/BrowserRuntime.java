@@ -25,6 +25,7 @@ import androidx.webkit.WebViewFeature;
 import com.ahoo.abs.android.BrowserApplication;
 import com.ahoo.abs.android.R;
 import com.ahoo.abs.android.data.BootstrapStore;
+import com.ahoo.abs.android.process.BrowserProcessRuntime;
 import com.ahoo.abs.core.AdmissionGate;
 import com.ahoo.abs.core.Ping0ObservationPolicy;
 import com.ahoo.abs.core.LaunchSpec;
@@ -43,9 +44,8 @@ import org.json.JSONObject;
 import org.json.JSONTokener;
 
 /** One immutable profile and one WebView for this process incarnation. */
-public final class BrowserRuntime {
+public final class BrowserRuntime implements BrowserProcessRuntime {
     public interface Listener { void onStatus(String status); }
-    public interface DrainCallback { void onDrained(String cookieFlush); }
     private enum Proof { UNVERIFIED, VERIFIED, UNSUPPORTED }
     private static final class Observation {
         final Ping0ObservationPolicy.Grant grant;
@@ -473,6 +473,7 @@ public final class BrowserRuntime {
         }
     }
 
+    @Override
     public void beginDrain(DrainCallback callback) {
         requireMain();
         if (draining) throw new IllegalStateException("DRAIN_ALREADY_STARTED");

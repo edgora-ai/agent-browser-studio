@@ -2,10 +2,13 @@ package com.ahoo.abs.android;
 
 import android.app.Application;
 import android.content.Context;
+import android.content.Intent;
 import android.content.res.Configuration;
 import android.os.LocaleList;
 import android.webkit.WebView;
 import com.ahoo.abs.android.data.BootstrapStore;
+import com.ahoo.abs.android.process.BrowserProcessOwner;
+import com.ahoo.abs.android.process.BrowserProcessRuntime;
 import com.ahoo.abs.android.process.ProcessLifecycle;
 import com.ahoo.abs.core.LaunchSpec;
 import java.io.IOException;
@@ -16,7 +19,7 @@ import java.util.TimeZone;
 import java.util.UUID;
 
 /** No WebKit/provider work is permitted in a constructor or static initializer. */
-public final class BrowserApplication extends Application {
+public final class BrowserApplication extends Application implements BrowserProcessOwner {
     private ProcessLifecycle.Hold browserLifetime;
     private LaunchSpec launch;
     private String incarnation;
@@ -81,6 +84,16 @@ public final class BrowserApplication extends Application {
 
     public synchronized com.ahoo.abs.android.browser.BrowserRuntime existingBrowserRuntime() {
         return browserRuntime;
+    }
+
+    @Override
+    public synchronized BrowserProcessRuntime existingControlRuntime() {
+        return browserRuntime;
+    }
+
+    @Override
+    public Intent createBrowserActivityIntent() {
+        return new Intent(this, com.ahoo.abs.android.browser.BrowserActivity.class);
     }
 
     public void activateController() {

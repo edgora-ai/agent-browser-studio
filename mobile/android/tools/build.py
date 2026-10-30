@@ -33,6 +33,16 @@ def ordinary(path, directory=False):
     return path
 
 
+def dependency_cache_root(path):
+    cache = ordinary(path, True)
+    try:
+        ordinary(cache / "modules-2", True)
+        ordinary(cache / "modules-2" / "files-2.1", True)
+    except FileNotFoundError as missing:
+        raise ValueError("Read-only cache must be the parent containing pre-populated modules-2/files-2.1") from missing
+    return cache
+
+
 def usage(root):
     total = 0
     pending = [root]
@@ -124,7 +134,7 @@ def main():
     parser.add_argument("--gradle", required=True)
     parser.add_argument("--sdk", required=True)
     parser.add_argument("--java-home", required=True)
-    parser.add_argument("--read-only-cache", required=True)
+    parser.add_argument("--read-only-cache", required=True, help="Parent directory containing pre-populated modules-2")
     parser.add_argument("--host-volume", required=True)
     parser.add_argument("--storage-check", required=True, help="Registered local storage checker script")
     parser.add_argument("--online", action="store_true", help="Allow missing public Maven dependencies")
@@ -156,7 +166,7 @@ def main():
     gradle = ordinary(args.gradle)
     sdk = ordinary(args.sdk, True)
     java = ordinary(args.java_home, True)
-    cache = ordinary(args.read_only_cache, True)
+    cache = dependency_cache_root(args.read_only_cache)
     for name in ["gradle-home", "project-cache", "build", "tmp", "android-user-home", "logs"]:
         ordinary(root / name, True)
     guard(root, marker, host)

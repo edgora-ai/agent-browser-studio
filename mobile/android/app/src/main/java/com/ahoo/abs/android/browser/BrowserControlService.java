@@ -11,7 +11,8 @@ import android.os.Messenger;
 import android.os.Process;
 import android.os.RemoteException;
 import android.util.Log;
-import com.ahoo.abs.android.BrowserApplication;
+import com.ahoo.abs.android.process.BrowserProcessOwner;
+import com.ahoo.abs.android.process.BrowserProcessRuntime;
 import com.ahoo.abs.core.LaunchSpec;
 
 /** Same-UID, non-exported control. Browser identity cannot be replaced through IPC. */
@@ -38,7 +39,7 @@ public final class BrowserControlService extends Service {
             Log.w("AbsBrowserControl", "CONTROL_CALLER_REJECTED");
             return true;
         }
-        BrowserApplication application = (BrowserApplication) getApplication();
+        BrowserProcessOwner application = (BrowserProcessOwner) getApplication();
         LaunchSpec launch;
         try {
             launch = application.requireLaunch();
@@ -80,7 +81,7 @@ public final class BrowserControlService extends Service {
                 if (drainRequested) break;
                 drainRequested = true;
                 application.markDraining();
-                BrowserRuntime runtime = BrowserRuntime.existing(application);
+                BrowserProcessRuntime runtime = application.existingControlRuntime();
                 if (runtime == null) {
                     drained(drainDestination, launch, application, "NOT_ATTEMPTED");
                 } else {
@@ -102,7 +103,7 @@ public final class BrowserControlService extends Service {
         return true;
     }
 
-    private void drained(Messenger destination, LaunchSpec launch, BrowserApplication application, String outcome) {
+    private void drained(Messenger destination, LaunchSpec launch, BrowserProcessOwner application, String outcome) {
         drainReturned = true;
         cookieOutcome = outcome;
         Bundle receipt = session(launch, application);
@@ -111,7 +112,7 @@ public final class BrowserControlService extends Service {
         reply(destination, ControlProtocol.DRAIN_REPLY, receipt);
     }
 
-    private static Bundle session(LaunchSpec launch, BrowserApplication application) {
+    private static Bundle session(LaunchSpec launch, BrowserProcessOwner application) {
         Bundle value = new Bundle();
         value.putString(ControlProtocol.SESSION, launch.sessionId);
         value.putString(ControlProtocol.INCARNATION, application.incarnation());

@@ -1,0 +1,76 @@
+# Copyright 2026 The Agent Browser Studio Authors
+# Use of this source code is governed by a BSD-style license.
+
+import("//build/config/android/config.gni")
+import("//build/config/android/rules.gni")
+
+# Invoked only by the separately reviewed product overlay in
+# content/shell/android. product_sources.gni is generated from exact selected
+# product/core files, not a source-tree glob at build time.
+template("agent_browser_product_apk") {
+  assert(is_android)
+  import("//content/shell/android/agent_browser_product/product_sources.gni")
+  _product = "//content/shell/android/agent_browser_product"
+  _prefix = target_name
+  _manifest = "$target_gen_dir/${_prefix}_manifest/AndroidManifest.xml"
+
+  jinja_template("${_prefix}__manifest") {
+    testonly = true
+    input = "$_product/AndroidManifest.xml.jinja2"
+    output = _manifest
+  }
+
+  android_resources("${_prefix}__resources") {
+    testonly = true
+    sources = agent_browser_product_resource_sources
+    custom_package = "com.ahoo.abs.android"
+  }
+
+  android_assets("${_prefix}__assets") {
+    testonly = true
+    renaming_sources = agent_browser_product_asset_sources
+    renaming_destinations = agent_browser_product_asset_destinations
+  }
+
+  android_library("${_prefix}__java") {
+    testonly = true
+    resources_package = "com.ahoo.abs.android"
+    sources = agent_browser_product_java_sources
+    deps = [
+      ":${_prefix}__resources",
+      "//base:base_java",
+      "//build/android:build_java",
+      "//content/public/android:content_java",
+      "//content/shell/android:content_shell_apk_java",
+      "//content/shell/android:content_shell_java",
+      "//net/android:net_java",
+      "//ui/android:ui_java",
+      "//url:gurl_java",
+    ]
+  }
+
+  android_apk(target_name) {
+    testonly = true
+    apk_name = "AgentBrowserProduct"
+    android_manifest = _manifest
+    android_manifest_dep = ":${_prefix}__manifest"
+    min_sdk_version = 29
+    shared_libraries = [ "//content/shell/android:libagent_browser_product" ]
+    srcjar_deps =
+        [ "//content/shell/android:libagent_browser_product__jni_registration" ]
+    deps = [
+      ":${_prefix}__assets",
+      ":${_prefix}__java",
+      "//base:base_java_test_support",
+      "//components/crash/android:java",
+      "//components/crash/core/app:chrome_crashpad_handler_named_as_so",
+      "//components/metrics:metrics_java",
+      "//content/public/test/android:android_test_message_pump_support_java",
+      "//content/shell/android:content_shell_assets",
+      "//media/capture/video/android:capture_java",
+      "//services/shape_detection:shape_detection_java",
+      "//ui/gl:gl_headers",
+    ]
+    loadable_modules = [ "$root_out_dir/libchrome_crashpad_handler.so" ]
+  }
+}

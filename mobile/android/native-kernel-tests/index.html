@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>Android native timezone · read-only experiment</title>
+  <link rel="stylesheet" href="./fixture.css">
+</head>
+<body>
+  <main>
+    <header>
+      <p class="eyebrow">ANDROID / CONTENT-SHELL / EXPERIMENTAL FIXTURE</p>
+      <h1>Observe the timezone.<br>Do not manufacture it.</h1>
+      <p class="intro">A synthetic, loopback-only Date / Intl acceptance probe. It does not set a timezone, patch a built-in, attest an APK, or touch account data.</p>
+    </header>
+    <section class="notice" aria-labelledby="state-title">
+      <h2 id="state-title">Native acceptance: NOT_RUN</h2>
+      <p id="run-status" role="status" aria-live="polite">NOT_RUN — waiting for an explicit run action. No Date/Intl sampling, iframe, worker or ServiceWorker registration has started.</p>
+      <p>PASS applies only to an individual observed check. Missing APIs, timeouts, skipped scenarios and lifecycle gaps are never PASS.</p>
+    </section>
+    <section aria-labelledby="configuration-title">
+      <h2 id="configuration-title">01 / Supply the test boundary</h2>
+      <p>Use two dedicated, explicitly approved HTTP loopback origins with ports 1024–65535. The primary origin must match this page. No default ports or public origins are supplied.</p>
+      <form id="fixture-form" autocomplete="off">
+        <fieldset id="run-fields">
+          <legend>Explicit test configuration</legend>
+          <label for="primary-origin">Primary origin (this page and same-origin frame)</label>
+          <input id="primary-origin" name="primaryOrigin" type="text" required spellcheck="false" placeholder="http://127.0.0.1:PORT_A" autocomplete="off">
+          <label for="cross-origin">Second origin (cross-origin frame)</label>
+          <input id="cross-origin" name="crossOrigin" type="text" required spellcheck="false" placeholder="http://127.0.0.1:PORT_B" autocomplete="off">
+          <label for="expected-zone">Externally configured native default timezone</label>
+          <select id="expected-zone" name="expectedZone" required>
+            <option value="">Select a native profile; this does not change it</option>
+            <option value="America/New_York">America/New_York — winter +300 / summer +240 minutes</option>
+            <option value="Asia/Shanghai">Asia/Shanghai — winter −480 / summer −480 minutes</option>
+          </select>
+          <label class="consent" for="fixture-consent">
+            <input id="fixture-consent" type="checkbox" required>
+            <span>I authorize this one synthetic run, including creating workers and registering then unregistering only this run's exclusive fixture ServiceWorker scopes. No other storage will be cleared.</span>
+          </label>
+          <button id="run-fixture" type="submit">Run the read-only experiment</button>
+        </fieldset>
+      </form>
+      <p class="small">One run per page load; inputs and results are not persisted. Configure each native profile outside this fixture and retain separate results. Named Intl controls are not native-profile runs.</p>
+    </section>
+    <section aria-labelledby="observations-title">
+      <h2 id="observations-title">02 / Observations, not assumptions</h2>
+      <p id="coverage-note">After a run, all unperformed lifecycle scenarios remain visibly NOT_RUN.</p>
+      <div class="table-scroll" tabindex="0" aria-label="Scrollable observation table">
+        <table>
+          <thead><tr><th scope="col">Check</th><th scope="col">Status</th><th scope="col">Observation / limitation</th></tr></thead>
+          <tbody id="results-body"><tr><td colspan="3">NOT_RUN — no observations yet.</td></tr></tbody>
+        </table>
+      </div>
+      <div id="fixture-frames" class="frames" aria-label="Synthetic same-origin and cross-origin fixture frames"></div>
+    </section>
+    <section aria-labelledby="raw-title">
+      <h2 id="raw-title">03 / Inspect the evidence</h2>
+      <p>Only synthetic timestamps, explicitly supplied loopback origins, fixture identifiers and observed Date/Intl outputs appear here. Nothing is uploaded or saved by this fixture.</p>
+      <pre id="raw-report" tabindex="0" aria-label="JSON observations">NOT_RUN — no JSON result exists before the explicit test action.</pre>
+    </section>
+    <footer>ServiceWorker unregister and SharedWorker port close do not prove process termination. Browser restart, background/resume and host timezone notifications require separate controlled evidence.</footer>
+  </main>
+  <noscript><p class="notice">NOT_RUN — JavaScript is unavailable. This is not native acceptance.</p></noscript>
+  <script src="./realm-probe.js"></script>
+  <script type="module" src="./app.mjs"></script>
+</body>
+</html>

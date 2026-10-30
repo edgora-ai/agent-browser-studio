@@ -2,7 +2,7 @@
 
 **Development resumed by the user's explicit request on 2026-10-27, including dedicated-emulator verification. Incomplete; not a Ping0-passed release. No production APK publication is implied.**
 
-Server handoff: [`../../docs/review/android-native-kernel-server-task-2026-10-27.md`](../../docs/review/android-native-kernel-server-task-2026-10-27.md). The approved next direction is a controllable native engine; this checked-in prototype still uses System WebView and does not implement that native integration yet.
+Server handoff: [`../../docs/review/android-native-kernel-server-task-2026-10-27.md`](../../docs/review/android-native-kernel-server-task-2026-10-27.md). The approved direction is a controllable native engine. [Chromium patch 0057](../../patches/chromium/ANDROID_TIMEZONE.md) supplies a separate internal native-timezone verification APK and [read-only acceptance fixture](native-kernel-tests/README.md). Its reviewed build has reached actual GN/Ninja compilation, but no new native APK has passed the artifact/install/runtime gates. The Gradle product prototype in `app/` still uses System WebView. The [native product adapter](native-kernel/README.md) now has separate bootstrap/view/build-overlay source and verified selected-input staging; it has not been natively compiled or installed. Neither a verification shell nor a successful prototype build completes the Android product goal. Source review precedes each new build or installation; active native-build inputs stay frozen.
 
 Historical pause checkpoint: [`../../docs/review/android-development-paused-2026-10-21.md`](../../docs/review/android-development-paused-2026-10-21.md). The last pre-resume build0014 result was 52/100, 166/166, five anomalies, partial68; native per-profile timezone and DNS remain unresolved. Detailed historical evidence: [`../../docs/review/android-ping0-load-recovery-2026-10-21.md`](../../docs/review/android-ping0-load-recovery-2026-10-21.md). Existing artifacts and failure evidence are retained; resumed development does not mark the product complete.
 
@@ -18,6 +18,8 @@ Implemented source:
 - Private SQLite configuration, explicit compare-and-swap edits and encrypted proxy credential envelopes using AndroidKeyStore non-exportable AES-GCM handles. No plaintext fallback or automatic cloud/device backup.
 - A dedicated `:browser` process, stable profile directory suffix, one-use launch claim before providers, and fresh same-UID controller activation before any WebView is created. The main process disables WebView.
 - Session/incarnation-bound control, process-lifetime lock, separate Cookie-flush receipt and actual PID/death checks. Finishing an Activity, a timeout, TTL expiry or a drain reply does not unlock the next profile.
+- Engine-independent control/runtime interfaces and an explicit internal Activity-intent factory. Entry selection cannot supply a foreign component, URI, selector, ClipData or preloaded extras; the coordinator adds its validated session/nonce afterward. Looking up control or selecting an entry point does not create a rendering provider.
+- A pure-Java native-timezone launch serializer matching patch 0057's canonical schema. It checks the launch deadline, native mode and UUIDv4 incarnation, preserves the requested timezone and computes the decoded-payload SHA-256. Serialization is not a replay claim, native application receipt or browsing grant.
 - System WebView proxy configuration without DIRECT fallbacks, safe-origin local message bridge and a six-realm identity sampler. It reads real native values; it does not rewrite Date/Intl/Navigator or install a JS fingerprint shim.
 - Explicit HTTP-proxy GeoIP suggestions, with a fresh bounded request, strict response parsing and stale-form rejection. It never substitutes the phone's direct IP or an old cached success. Suggestions are not browser-routing proof.
 - A native Android instrumentation suite for fresh synthetic configuration databases and parser checks. Build0013 actually ran 48 checks successfully in the dedicated emulator; this is not a WebView/Ping0 or AndroidKeyStore acceptance result.
@@ -49,6 +51,8 @@ core/                    Pure Java contracts and executable assertion tests
 app/src/main/java/       Android UI, configuration, startup/control and WebView adapter
 app/src/main/assets/      Identity-probe assets and the original SQLite schema
 app/src/androidTest/     Owned Android instrumentation, not a mocked platform backend
+native-kernel/           Separate native product adapter/overlay source; not compiled by Gradle
+native-kernel-tests/     Independent patch-0057 acceptance fixture; not the product adapter
 probe-tests/             Node/VM realm and protocol tests (not browser tests)
 storage-tests/           Actual host SQLite + static Java contract tests (not Android tests)
 tools/build.py           Bounded isolated build runner and source/proc-group receipts
@@ -60,7 +64,7 @@ The first implementation uses Java 17 and Groovy Gradle to reuse a small toolcha
 
 Pinned build inputs:
 
-- JDK 17; Gradle 8.9; Android Gradle Plugin 8.7.3.
+- Java source/target 17; Gradle 8.9; Android Gradle Plugin 8.7.3. The latest verified local prototype build used the already installed JBR 21.0.8 as its Gradle runtime; no replacement JVM was installed. This is separate from the native Linux build's pinned toolchain.
 - Compile/target SDK 35 and Build-tools 35.0.0; minimum Android API 29.
 - AndroidX WebKit 1.12.1. Runtime provider features are still checked independently.
 
@@ -80,7 +84,7 @@ python3 -B mobile/android/tools/build.py \
 
 The default native test runner is `OwnedInstrumentation`. Set `ABS_ANDROID_VERIFICATION_SUITE=lifecycle` for the independent `LifecycleInstrumentation` suite; only `owned` and `lifecycle` are accepted. Each requires a fresh canonical UUID in its `ownedScope` argument. The lifecycle suite executes the actual coordinator with Android Messenger and scoped SQLite fault fixtures, not a full WebView/UI scenario. See [the 2026-10-27 verification report](../../docs/review/android-resume-lifecycle-storage-2026-10-27.md) for the separate actual UI/storage results.
 
-Offline is the default. Add `--online` only when missing small public Maven dependencies have been admitted. No Chromium, emulator or SDK download is performed by the runner; automatic SDK download is disabled. A read-only shared dependency cache is an input, not a writable Gradle home. `local.properties` is deliberately rejected by this isolated runner so it cannot silently override the admitted SDK path.
+Offline is the default. Add `--online` only when missing small public Maven dependencies have been admitted. No Chromium, emulator or SDK download is performed by the runner; automatic SDK download is disabled. A read-only shared dependency cache is an input, not a writable Gradle home. Pass its **parent containing `modules-2/files-2.1`**, not `modules-2` itself; otherwise Gradle searches for `modules-2/modules-2` and disables the cache. The runner now rejects that layout before Gradle or signing-file creation; layout validation does not prove dependency completeness. `local.properties` is deliberately rejected by this isolated runner so it cannot silently override the admitted SDK path.
 
 All build outputs, per-attempt logs, source inventories, command-specific temporary files, development signing material and process-group receipts stay under the one state root. Failed attempts are retained. Never add a keystore, credentials or runtime database to Git or app resources. The development keystore's conventional Android test password does not make it a release-signing identity.
 

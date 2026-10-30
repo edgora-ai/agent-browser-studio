@@ -16,7 +16,6 @@ import android.os.SystemClock;
 import android.system.ErrnoException;
 import android.system.Os;
 import android.system.OsConstants;
-import com.ahoo.abs.android.browser.BrowserActivity;
 import com.ahoo.abs.android.browser.BrowserControlService;
 import com.ahoo.abs.android.browser.ControlProtocol;
 import com.ahoo.abs.android.data.BootstrapStore;
@@ -278,7 +277,13 @@ public final class LaunchCoordinator {
                     beginDrain();
                 } else if (owner.activateOnHello) {
                     owner.activateOnHello = false;
-                    Intent browser = new Intent(context, BrowserActivity.class);
+                    Intent browser = ((BrowserProcessOwner) context.getApplicationContext()).createBrowserActivityIntent();
+                    if (browser == null || browser.getComponent() == null
+                            || !context.getPackageName().equals(browser.getComponent().getPackageName())
+                            || browser.getData() != null || browser.getSelector() != null
+                            || browser.getClipData() != null || browser.getExtras() != null) {
+                        throw new IllegalStateException("BROWSER_ENTRY_POINT_REJECTED");
+                    }
                     browser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
                     browser.putExtra(ControlProtocol.SESSION, current.sessionId);
                     browser.putExtra(ControlProtocol.NONCE, current.nonce);

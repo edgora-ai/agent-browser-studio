@@ -20,7 +20,7 @@ keys, `lumi.conf` decryption, or code copied from RoxyChrome.
 ```
 
 Released Chromium changes are append-only: add the next numbered patch instead
-of rewriting an earlier patch. The current `0002`–`0055` chain keeps the
+of rewriting an earlier patch. The current `0002`–`0057` chain keeps the
 system-theme, occluded-input, managed-QUIC, payload-resume and secure-DNS changes
 independently reviewable and revertible. `check.sh` validates exact Git checkouts
 or the trusted official-archive plus immutable-delta source chain.
@@ -52,8 +52,12 @@ personas, `bitness: "64"`, low-entropy/off behavior and GPU fall-through remain
 unchanged. This source correction changes no payload schema or legacy UA token.
 Source constraint tests and normal apply/check are not native compilation,
 native CPU/Rosetta runtime tests or Ping0 GPU acceptance; a rebuilt kernel and
-independent real-site verification are still required. The next Chromium change
-must start at `0056`.
+independent real-site verification are still required. Patch `0056` adds the
+DOM-storage commit barrier before browser close. Patch `0057` adds a separate,
+Android-only frozen native-timezone verification kernel without enabling the
+desktop persona; see [ANDROID_TIMEZONE.md](ANDROID_TIMEZONE.md) for its narrow
+protocol, test-only APK target and unexecuted native acceptance gates. The next
+Chromium change must start at `0058`.
 
 ## Build configuration
 
@@ -83,7 +87,11 @@ New builds advertise the public fingerprint, proxy-auth, and QUIC contracts
 through `--agent-browser-capabilities`. Chromium 149 and pre-`0042` builds
 remain usable through the unadvertised legacy aliases.
 
-## Current implementation
+## Current desktop implementation
+
+The Android-only timezone verification mode is described separately in
+[ANDROID_TIMEZONE.md](ANDROID_TIMEZONE.md); it does not enable the desktop
+identity features below and has not passed native build/runtime acceptance.
 
 The renderer reads one immutable process-wide configuration directly from
 Blink/public common code. There is no page-script injection or JavaScript
