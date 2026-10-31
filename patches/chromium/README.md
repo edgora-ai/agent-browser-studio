@@ -20,7 +20,7 @@ keys, `lumi.conf` decryption, or code copied from RoxyChrome.
 ```
 
 Released Chromium changes are append-only: add the next numbered patch instead
-of rewriting an earlier patch. The current `0002`–`0057` chain keeps the
+of rewriting an earlier patch. The current `0002`–`0058` chain keeps the
 system-theme, occluded-input, managed-QUIC, payload-resume and secure-DNS changes
 independently reviewable and revertible. `check.sh` validates exact Git checkouts
 or the trusted official-archive plus immutable-delta source chain.
@@ -56,8 +56,11 @@ independent real-site verification are still required. Patch `0056` adds the
 DOM-storage commit barrier before browser close. Patch `0057` adds a separate,
 Android-only frozen native-timezone verification kernel without enabling the
 desktop persona; see [ANDROID_TIMEZONE.md](ANDROID_TIMEZONE.md) for its narrow
-protocol, test-only APK target and unexecuted native acceptance gates. The next
-Chromium change must start at `0058`.
+protocol, test-only APK target and unexecuted native acceptance gates. Patch
+`0058` adds bounded Canvas pixel access used by the Android build continuation;
+its object-level checks do not establish a complete native APK. The next
+Chromium change must start at `0059`. For the current Android development and
+cross-machine build gaps, see the [2026-10-31 handoff](../../docs/review/android-native-development-handoff-2026-10-31.md).
 
 ## Build configuration
 
