@@ -135,11 +135,7 @@ export function registerProxyHandlers(): void {
   });
 
   // Set proxy for a specific profile
-  ipcMain.handle("proxy:set-profile", async (_event, {
-    dirId,
-    proxyName,
-    mode,
-  }: {
+  ipcMain.handle("proxy:set-profile", async (_event, params: {
     dirId: string;
     proxyName: string | null;
     mode?: ProxyMode;
@@ -149,6 +145,7 @@ export function registerProxyHandlers(): void {
       // stored credentials, so they are a settings mutation (member+).
       const gate = requireSettingsMutation();
       if (!gate.ok) return { success: false, error: gate.error };
+      const { dirId, proxyName, mode } = params;
       setProfileProxy(dirId, proxyName, mode);
       return { success: true };
     } catch (e: any) {

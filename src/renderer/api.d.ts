@@ -583,7 +583,7 @@ export interface AgentBrowserAPI {
     importArchives: (zipPaths?: string[]) => Promise<{ success: boolean; outcome?: "completed" | "partial" | "skipped" | "failed" | "cancelled"; cancelled?: boolean; code?: string; report?: { imported: Array<{ zipPath: string; dirId: string; name: string; files: number; bytes: number; warnings: string[] }>; failed: Array<{ zipPath: string; error: string; code?: string }> }; error?: string }>;
     cookies: (dirId: string, filter?: string) => Promise<any[]>;
     setCookie: (dirId: string, cookie: any) => Promise<{ success: boolean; error?: string }>;
-    deleteCookie: (dirId: string, domain: string, name: string) => Promise<{ success: boolean; error?: string }>;
+    deleteCookie: (dirId: string, domain: string, name: string, path: string, partitionKey?: unknown, deleteIdentityVerified?: unknown) => Promise<{ success: boolean; error?: string }>;
   };
   proxy: {
     list: () => Promise<Array<{ name: string; config: RedactedProxyConfig; isDefault: boolean; detection?: ProxyDetectionCacheEntry }>>;

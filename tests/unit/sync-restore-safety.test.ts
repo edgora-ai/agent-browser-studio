@@ -35,6 +35,13 @@ vi.mock("node:fs", async (importOriginal) => {
       }
       return (actual.rmSync as any)(file, ...args);
     },
+    rmdirSync: (file: any, ...args: any[]) => {
+      if (owned(file)) {
+        const code = fixture.removeFault?.(String(file));
+        if (code) { fixture.removeFaultHits++; fail(code); }
+      }
+      return (actual.rmdirSync as any)(file, ...args);
+    },
   };
 });
 vi.mock("electron", async () => {

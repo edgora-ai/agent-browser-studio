@@ -604,6 +604,8 @@ export function getProfileProxyMode(dirId: string): ProxyMode {
 }
 
 export function setProfileProxy(dirId: string, proxyName: string | null, mode?: ProxyMode): void {
+  validateDirId(dirId);
+  assertProfileWritable(dirId);
   // Mutate the transaction draft, not the committed object. The old path edited
   // the live config first and then saved, so a failed write (ENOSPC/EACCES)
   // left memory on the new proxy while disk kept the old one — and any later
@@ -613,6 +615,7 @@ export function setProfileProxy(dirId: string, proxyName: string | null, mode?: 
 
 export function setProfileProxyOnConfig(cfg: MgmtConfig, dirId: string, proxyName: string | null, mode?: ProxyMode): void {
   validateDirId(dirId);
+  assertProfileWritableOnConfig(cfg, dirId);
   const cp = cfg.browserProfiles || {};
   if (!Object.hasOwn(cp, dirId)) throw new Error(`Profile not found: ${dirId}`);
   const nextMode = normalizeProxyMode(mode, proxyName);
@@ -1361,7 +1364,11 @@ export function normalizePortableProfileMeta(raw: unknown): BrowserProfileMeta {
  */
 export function assertProfileWritable(dirId: string, opts?: { force?: boolean }): void {
   if (opts?.force) return;
-  const cfg = getConfig() as any;
+  assertProfileWritableOnConfig(getConfig(), dirId);
+}
+
+// Draft writers share the same owner/self rule without gaining a force option.
+function assertProfileWritableOnConfig(cfg: MgmtConfig, dirId: string): void {
   const lock = cfg.browserProfiles?.[dirId]?.lock;
   if (!lock || !lock.owner) return;
   const self = cfg.deviceId || "local";

@@ -3372,6 +3372,8 @@ kbd {
 
 /* Sync meters describe the current object's bytes, never overall completion. */
 .sync-progress-detail { margin-top: 4px; color: var(--text-muted); font-size: 12px; line-height: 1.6; font-variant-numeric: tabular-nums; }
+.sync-operation-actions { margin-top: 10px; }
+.sync-cancel-button { min-width: 110px; border-color: var(--warning, #b8860b); }
 .sync-transfer-progress { margin-top: 8px; max-width: 560px; }
 .sync-transfer-progress.is-indeterminate > .progress-fill { width: 35%; animation: syncTransferIndeterminate 1.4s ease-in-out infinite; }
 @keyframes syncTransferIndeterminate {

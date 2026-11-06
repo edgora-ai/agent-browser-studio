@@ -157,20 +157,23 @@ export function enqueueJob(p: { ruleId: string; ruleName: string; source: JobSou
   return { id, ruleId: p.ruleId, ruleName: p.ruleName, source: p.source, status: "queued", attempt: 0, result: null, error: null, runId, createdAt: now, startedAt: null, finishedAt: null, planId, retryAt: null };
 }
 
-export function markRunning(id: string, attempt: number): void {
-  getDb().prepare("UPDATE jobs SET status='running', attempt=?, started_at=?, retry_at=NULL WHERE id=?").run(attempt, Date.now(), id);
+/** Atomically acquire execution permission; cancellation/terminal rows cannot reopen. */
+export function markRunning(id: string, attempt: number): boolean {
+  const r = getDb().prepare(
+    "UPDATE jobs SET status='running', attempt=?, started_at=?, retry_at=NULL WHERE id=? AND status='queued'",
+  ).run(attempt, Date.now(), id);
+  return Number(r.changes) > 0;
 }
 
 /**
- * Re-mark an EXISTING row as running for the next attempt of the same logical
- * execution. Unlike markRunning this preserves started_at — the execution
- * began at the first attempt, and the Jobs list should not report a retry as a
- * fresh run. No status guard: the row is legitimately retry-waiting here.
+ * Resume only a retry-waiting row of the SAME logical execution. Preserve its
+ * first started_at, and return permission rather than reopening a terminal row.
  */
-export function markRunningAttempt(id: string, attempt: number): void {
-  getDb().prepare(
-    "UPDATE jobs SET status='running', attempt=?, started_at=COALESCE(started_at, ?), retry_at=NULL WHERE id=?",
+export function markRunningAttempt(id: string, attempt: number): boolean {
+  const r = getDb().prepare(
+    "UPDATE jobs SET status='running', attempt=?, started_at=COALESCE(started_at, ?), retry_at=NULL WHERE id=? AND status='retry-waiting'",
   ).run(attempt, Date.now(), id);
+  return Number(r.changes) > 0;
 }
 
 /**
@@ -251,7 +254,7 @@ export function markJobRunId(id: string, runId: string): void {
 }
 
 export function markCancelled(id: string): boolean {
-  const r = getDb().prepare("UPDATE jobs SET status='cancelled', finished_at=? WHERE id=? AND status IN ('queued','running')").run(Date.now(), id);
+  const r = getDb().prepare("UPDATE jobs SET status='cancelled', finished_at=?, retry_at=NULL WHERE id=? AND status IN ('queued','running','retry-waiting')").run(Date.now(), id);
   return Number(r.changes) > 0;
 }
 

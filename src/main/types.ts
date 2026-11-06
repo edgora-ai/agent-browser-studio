@@ -439,8 +439,12 @@ export interface CookieInfo {
   httpOnly: boolean;
   /** -1 preserves unspecified SameSite rather than inventing explicit None. */
   sameSite: number;
-  /** Absent means unpartitioned; both fields are part of Cookie identity. */
+  /** Complete partition identity when known. Absence from a lossy source
+   * does not establish that a Cookie is unpartitioned. */
   partitionKey?: CookiePartitionKey;
+  /** false means the listing source did not preserve complete deletion identity
+   * (e.g. stopped-profile SQLite). Carry it unchanged; never coerce to absent. */
+  deleteIdentityVerified?: boolean;
 }
 
 export interface SyncConfig {

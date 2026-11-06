@@ -136,7 +136,7 @@ describe("Asynchronous Profile & Storage Monitor Operations", () => {
   it("keeps stopped profile cookie writes read-only", async () => {
     const { dirId } = createBrowserProfile({ name: "CookieReadOnlyProfile" });
     await expect(setCookie(dirId, { domain: "example.com", name: "sid", value: "abc" })).rejects.toThrow(/Launch this profile/);
-    await expect(deleteCookie(dirId, "example.com", "sid")).rejects.toThrow(/Launch this profile/);
+    await expect(deleteCookie(dirId, "example.com", "sid", "/")).rejects.toThrow(/Launch this profile/);
     await expect(listCookies(dirId)).resolves.toEqual([]);
   });
 

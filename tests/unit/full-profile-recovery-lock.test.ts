@@ -556,6 +556,8 @@ describe(`persistent full-profile recovery lease gate [native directory fsync: $
       const module = { exports: {} as Record<string, any> };
       let browserWorkHits = 0;
       const context = { exports: module.exports, validateDirId: () => undefined, isManagedProfileId: () => true,
+        // Pure open-admission fixture; gate behavior: browser-launch-admission-review.test.ts.
+        assertBrowserLaunchAllowed: () => undefined,
         acquireRestoreLock: locks.acquireRestoreLock, markBrowserWork: () => { browserWorkHits++; } };
       vm.runInNewContext(compiled, context);
       const recoveryId = `${ID}_${lineEndings}_recovery`, busyId = `${ID}_${lineEndings}_busy`;

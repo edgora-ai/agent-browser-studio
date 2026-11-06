@@ -407,7 +407,7 @@ export interface FirefoxDebugInfo {
 export function spawnFirefoxWithDebugInfo(
   bin: string,
   args: string[],
-  opts: { timeoutMs?: number; env?: NodeJS.ProcessEnv } = {},
+  opts: { timeoutMs?: number; env?: NodeJS.ProcessEnv; onSpawn?: (child: ChildProcess) => void } = {},
 ): Promise<{ child: ChildProcess; info: FirefoxDebugInfo }> {
   const timeoutMs = opts.timeoutMs ?? 60000;
   return new Promise((resolve, reject) => {
@@ -457,6 +457,16 @@ export function spawnFirefoxWithDebugInfo(
         reject(new Error(`Firefox exited early (${signal ? "signal " + signal : "code " + String(code)}) before announcing a debugging port`));
       });
     });
+    // Publish ownership synchronously, before waiting for any endpoint output.
+    // All listeners already exist, including the error handler for a failed spawn.
+    try { opts.onSpawn?.(child); }
+    catch (error) {
+      finish(() => {
+        clearTimeout(timer);
+        try { child.kill(); } catch { /* only this newly spawned child */ }
+        reject(error);
+      });
+    }
   });
 }
 

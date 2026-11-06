@@ -34,6 +34,19 @@ async function getWs(): Promise<any> {
   return _wsPromiseCDP;
 }
 
+/** Single-row deletion must never infer a path or discard partition identity.
+ * Partitioned deletion remains deliberately unsupported by this UI operation.
+ * Explicitly unknown provenance must survive launch; undefined retains legacy
+ * online-call compatibility, not authority to discard a received false flag. */
+export function assertCookieDeleteIdentity(domain: string, name: string, cookiePath: string, partitionKey?: unknown, deleteIdentityVerified?: unknown): void {
+  if (typeof domain !== "string" || !domain || typeof name !== "string" || !name ||
+      /[\x00-\x1f\x7f]/.test(domain + name)) throw new Error("COOKIE_DELETE_IDENTITY_INVALID");
+  if (typeof cookiePath !== "string" || !cookiePath.startsWith("/") || cookiePath.length > 4096 ||
+      /[\x00-\x1f\x7f]/.test(cookiePath)) throw new Error("COOKIE_DELETE_PATH_REQUIRED");
+  if (deleteIdentityVerified !== undefined && deleteIdentityVerified !== true) throw new Error("COOKIE_DELETE_IDENTITY_UNAVAILABLE");
+  if (partitionKey !== undefined) throw new Error("COOKIE_DELETE_PARTITION_UNSUPPORTED");
+}
+
 export const cdpCookieService = {
   /** Quick check: is Chrome already running for this profile? (must have CDP enabled) */
   hasRunningChrome(dirId: string): boolean {
@@ -111,11 +124,13 @@ export const cdpCookieService = {
     return cdpSetCookie(port, normalized);
   },
 
-  /** Delete matching cookies via CDP. Only works when Chrome IS running. */
-  async deleteCookie(dirId: string, domain: string, name: string): Promise<boolean> {
+  /** Delete one explicit domain/name/path identity on a running browser. */
+  async deleteCookie(dirId: string, domain: string, name: string, cookiePath: string, partitionKey?: unknown, deleteIdentityVerified?: unknown): Promise<boolean> {
+    validateDirId(dirId);
+    assertCookieDeleteIdentity(domain, name, cookiePath, partitionKey, deleteIdentityVerified);
     const port = findCdpPort(dirId);
     if (!port) return false;
-    return cdpDeleteCookie(port, domain, name);
+    return cdpDeleteCookie(port, domain, name, cookiePath);
   },
 };
 
@@ -435,22 +450,21 @@ async function cdpSetCookies(port: number, cookies: CookieInfo[], signal?: Abort
   }
 }
 
-async function cdpDeleteCookie(port: number, domain: string, name: string): Promise<boolean> {
-  try {
-    const ok = await withCdpClient(port, 10000, async (send) => {
-      const result = await send("Network.getAllCookies");
-      const matches = ((result.cookies || []) as any[]).filter((c) => c.domain === domain && c.name === name);
-      for (const cookie of matches) {
-        await send("Network.deleteCookies", {
-          name,
-          domain: cookie.domain,
-          path: cookie.path || "/",
-        });
-      }
-      return true;
-    });
-    return Boolean(ok);
-  } catch (e: any) { console.error("[cdp] deleteCookie:", e.message); return false; }
+async function cdpDeleteCookie(port: number, domain: string, name: string, cookiePath: string): Promise<boolean> {
+  const result = await withCdpClient(port, 10000, async (send) => {
+    const cookies = parseCdpCookies(await send("Network.getAllCookies"));
+    if (cookies === null) return "COOKIE_DELETE_IDENTITY_UNAVAILABLE" as const;
+    const matches = cookies.filter((c) => c.domain === domain && c.name === name && c.path === cookiePath);
+    // Omitting a partition constraint must not delete a same-path partitioned
+    // sibling. Invalid/opaque partition data already invalidates the snapshot.
+    if (matches.some((c) => c.partitionKey !== undefined) || matches.length > 1) {
+      return "COOKIE_DELETE_PARTITION_AMBIGUOUS" as const;
+    }
+    if (matches.length) await send("Network.deleteCookies", { name, domain, path: cookiePath });
+    return true;
+  });
+  if (typeof result === "string") throw new Error(result);
+  return result === true;
 }
 
 // ── Shared pending-cookie queue ──

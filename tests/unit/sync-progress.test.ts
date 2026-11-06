@@ -221,6 +221,64 @@ describe("backend synchronization progress ownership", () => {
     }
   });
 
+  it("reports local phase counters without transfer speed or implying commit, and throttles chunk notifications", () => {
+    const owner = begin();
+    owner.stage("preparing", { scope: "fullProfile", itemId: "synthetic-profile", completedItems: 0, totalItems: 2 });
+    const transfer = owner.transfer("download", 1024); transfer.finish();
+    const local = owner.local();
+    local.update({ phase: "scanning", bytes: 0, items: 0 });
+    const emitted = progressEvents.length;
+    local.update({ phase: "scanning", bytes: 64, items: 1 });
+    expect(progressEvents).toHaveLength(emitted);
+    expect(state.getSyncOperationState().active?.progress).toMatchObject({ scope: "fullProfile", itemId: "synthetic-profile",
+      local: { phase: "scanning", bytes: 64, items: 1 } });
+    expect(state.getSyncOperationState().active?.progress).not.toHaveProperty("transfer");
+    vi.setSystemTime(START + 101);
+    local.update({ phase: "scanning", bytes: 128, items: 2 });
+    expect(progressEvents).toHaveLength(emitted + 1);
+    local.update({ phase: "reading-archive", bytes: 0, items: 0, totalBytes: 512 });
+    expect(progressEvents).toHaveLength(emitted + 2);
+    local.update({ phase: "reading-archive", bytes: 512, items: 1, totalBytes: 512 });
+    expect(progressEvents).toHaveLength(emitted + 3);
+    expect(state.getSyncOperationState()).toMatchObject({ last: null, active: { stage: "preparing" } });
+    expect(stateEvents).toHaveLength(1);
+    const snapshot = state.getSyncOperationState();
+    snapshot.active!.progress.local!.bytes = 900;
+    progressEvents.at(-1)!.progress.local!.bytes = 901;
+    expect(state.getSyncOperationState().active?.progress.local?.bytes).toBe(512);
+  });
+
+  it.each(["stage", "work", "transfer", "local", "finish", "next-operation"] as const)("rejects stale local callbacks after %s", boundary => {
+    const owner = begin(), local = owner.local();
+    local.update({ phase: "scanning", bytes: 64, items: 1 });
+    if (boundary === "stage") owner.stage("publishing");
+    else if (boundary === "work") owner.progress({ itemId: "next-profile" });
+    else if (boundary === "transfer") owner.transfer("upload", 1024);
+    else if (boundary === "local") owner.local().update({ phase: "verifying-profile", bytes: 0, items: 0 });
+    else { owner.finish(owner.operation.complete("done")); if (boundary === "next-operation") begin("pull"); }
+    const snapshot = state.getSyncOperationState(), emitted = progressEvents.length;
+    local.update({ phase: "scanning", bytes: 100, items: 2 });
+    expect(state.getSyncOperationState()).toEqual(snapshot);
+    expect(progressEvents).toHaveLength(emitted);
+  });
+
+  it("rejects invalid or regressing local counters and discards contradicted totals", () => {
+    const owner = begin(), transfer = owner.transfer("download", 1024), local = owner.local();
+    local.update({ phase: "scanning", bytes: 64, items: 1, totalBytes: 128, totalItems: 2 });
+    const snapshot = state.getSyncOperationState();
+    lateCallbacks(transfer);
+    for (const invalid of [-1, 0.5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1]) {
+      local.update({ phase: "scanning", bytes: invalid, items: 1 });
+      local.update({ phase: "scanning", bytes: 64, items: invalid });
+    }
+    local.update({ phase: "scanning", bytes: 63, items: 1 });
+    local.update({ phase: "scanning", bytes: 64, items: 0 });
+    local.update({ phase: "untrusted-path" as any, bytes: 64, items: 1 });
+    expect(state.getSyncOperationState()).toEqual(snapshot);
+    local.update({ phase: "scanning", bytes: 129, items: 3, totalBytes: 128, totalItems: 2 });
+    expect(state.getSyncOperationState().active?.progress.local).toEqual({ phase: "scanning", bytes: 129, items: 3 });
+  });
+
   it("settings invalidation advances generation without replacing the active owner's lease", () => {
     const owner = begin("pull"), transfer = owner.transfer("download", 1024), operationId = owner.operation.operationId;
     state.invalidateSyncSettings();

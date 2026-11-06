@@ -8,7 +8,8 @@ import {
   applyProfileSettings,
   checkExtensionUpdate,
 } from "../services/launch-args.js";
-import { getConfig, saveConfig, normalizeProfileExtensionMap } from "../services/config-manager.js";
+import { getConfig, saveConfig, normalizeProfileExtensionMap, assertProfileWritable } from "../services/config-manager.js";
+import { transact } from "../services/config/store.js";
 import {
   addOrUpdateChromeStoreExtension,
   installLocalExtension,
@@ -46,25 +47,23 @@ export function registerSettingsHandlers(): void {
     };
   });
 
-  ipcMain.handle("settings:launch-gates:set", async (_event, gates: { blockOnConsistencyConflict?: boolean; blockOnProxyRisk?: boolean; blockOnFingerprintDrift?: boolean; blockOnEnvironmentRisk?: boolean }) => {
-    // R0925-05: launch safety gates are a local SECURITY policy, not a UI
-    // preference — same member+ rule as other settings mutations when a team
-    // workspace is enabled. A viewer denial must not touch the stored values.
-    const gate = requireSettingsMutation();
-    if (!gate.ok) return { success: false, error: gate.error };
-    const cfg = getConfig() as any;
-    if (typeof gates.blockOnConsistencyConflict === "boolean") cfg.blockOnConsistencyConflict = gates.blockOnConsistencyConflict;
-    if (typeof gates.blockOnProxyRisk === "boolean") cfg.blockOnProxyRisk = gates.blockOnProxyRisk;
-    if (typeof gates.blockOnFingerprintDrift === "boolean") cfg.blockOnFingerprintDrift = gates.blockOnFingerprintDrift;
-    if (typeof gates.blockOnEnvironmentRisk === "boolean") cfg.blockOnEnvironmentRisk = gates.blockOnEnvironmentRisk;
-    saveConfig(cfg);
+  handleSettingsMutation("settings:launch-gates:set", async (_event, gates: { blockOnConsistencyConflict?: boolean; blockOnProxyRisk?: boolean; blockOnFingerprintDrift?: boolean; blockOnEnvironmentRisk?: boolean }) => {
+    // Security policy: authorize before decoding, then publish only after the
+    // store's atomic rename. A failed write must not relax live launch checks.
+    getConfig(); // Initialize the existing store before requesting its draft.
+    transact((cfg) => {
+      if (typeof gates.blockOnConsistencyConflict === "boolean") cfg.blockOnConsistencyConflict = gates.blockOnConsistencyConflict;
+      if (typeof gates.blockOnProxyRisk === "boolean") cfg.blockOnProxyRisk = gates.blockOnProxyRisk;
+      if (typeof gates.blockOnFingerprintDrift === "boolean") cfg.blockOnFingerprintDrift = gates.blockOnFingerprintDrift;
+      if (typeof gates.blockOnEnvironmentRisk === "boolean") cfg.blockOnEnvironmentRisk = gates.blockOnEnvironmentRisk;
+    });
     return { success: true };
   });
 
   // ── Terminal notifications (M3) ──
   // Both default OFF: the in-app record is always kept, and the OS banner is
   // something the user opts into. Follows the launch-gates shape above — save
-  // on change, no save button, booleans coerced rather than trusted.
+  // on change, no save button, and only explicitly supplied booleans may change.
   ipcMain.handle("settings:automation-notify", async () => {
     const cfg = getConfig() as any;
     return {
@@ -73,14 +72,25 @@ export function registerSettingsHandlers(): void {
     };
   });
 
-  ipcMain.handle("settings:automation-notify:set", async (_event, prefs: { system?: boolean; sound?: boolean }) => {
-    const cfg = getConfig() as any;
-    cfg.automationNotify = {
-      system: typeof prefs?.system === "boolean" ? prefs.system : cfg.automationNotify?.system === true,
-      sound: typeof prefs?.sound === "boolean" ? prefs.sound : cfg.automationNotify?.sound === true,
-    };
-    saveConfig(cfg);
-    return { success: true, automationNotify: cfg.automationNotify };
+  handleSettingsMutation("settings:automation-notify:set", async (_event, prefs: unknown) => {
+    // The wrapper authorizes before decoding. Reject malformed partial updates
+    // before creating a draft; never mutate getConfig()'s committed live object.
+    if (!prefs || typeof prefs !== "object" || Array.isArray(prefs)) {
+      throw new Error("Automation notification preferences must be an object");
+    }
+    // Preserve the existing partial-update contract: omitted/non-boolean fields
+    // keep their current value. Read each input field once, after authorization.
+    const { system, sound } = prefs as { system?: unknown; sound?: unknown };
+    getConfig(); // Initialize the existing store before requesting its live-base draft.
+    const automationNotify = transact((cfg) => {
+      cfg.automationNotify = {
+        system: typeof system === "boolean" ? system : cfg.automationNotify?.system === true,
+        sound: typeof sound === "boolean" ? sound : cfg.automationNotify?.sound === true,
+      };
+      return { ...cfg.automationNotify };
+    });
+    // transact returns only after rename/publication. The response is detached.
+    return { success: true, automationNotify };
   });
 
   // ── Extension repository + per-profile selection ──
@@ -210,6 +220,7 @@ export function registerSettingsHandlers(): void {
     dirId: string; extensions: Record<string, boolean>;
   }) => {
     validateDirId(params.dirId);
+    assertProfileWritable(params.dirId);
     const cfg = structuredClone(getConfig()) as any;
     const meta = Object.hasOwn(cfg.browserProfiles || {}, params.dirId) ? cfg.browserProfiles[params.dirId] : null;
     if (!meta) return { success: false, error: "Browser profile not found" };
@@ -240,22 +251,26 @@ export function registerSettingsHandlers(): void {
     return readBookmarks(dirId);
   });
 
-  ipcMain.handle("settings:add-bookmark", async (_event, {
+  handleSettingsMutation("settings:add-bookmark", async (_event, {
     dirId,
     url,
     name,
   }: {
     dirId: string; url: string; name: string;
   }): Promise<{ success: boolean }> => {
+    validateDirId(dirId);
+    assertProfileWritable(dirId);
     return { success: addBookmark(dirId, url, name) };
   });
 
-  ipcMain.handle("settings:write-bookmarks", async (_event, {
+  handleSettingsMutation("settings:write-bookmarks", async (_event, {
     dirId,
     bookmarks,
   }: {
     dirId: string; bookmarks: any;
   }): Promise<{ success: boolean }> => {
+    validateDirId(dirId);
+    assertProfileWritable(dirId);
     return { success: writeBookmarks(dirId, bookmarks) };
   });
 
@@ -264,17 +279,19 @@ export function registerSettingsHandlers(): void {
     return readPreferences(dirId);
   });
 
-  ipcMain.handle("settings:update-preferences", async (_event, {
+  handleSettingsMutation("settings:update-preferences", async (_event, {
     dirId,
     prefs,
   }: {
     dirId: string; prefs: any;
   }): Promise<{ success: boolean }> => {
+    validateDirId(dirId);
+    assertProfileWritable(dirId);
     return { success: writePreferences(dirId, prefs) };
   });
 
   // ── Profile Settings ──
-  ipcMain.handle("settings:apply-profile", async (_event, {
+  handleSettingsMutation("settings:apply-profile", async (_event, {
     dirId,
     settings,
   }: {
@@ -288,6 +305,8 @@ export function registerSettingsHandlers(): void {
       pdfDownload?: boolean;
     };
   }): Promise<{ success: boolean }> => {
+    validateDirId(dirId);
+    assertProfileWritable(dirId);
     return { success: applyProfileSettings(dirId, settings) };
   });
 }
@@ -296,6 +315,7 @@ export function registerSettingsHandlers(): void {
 
 function assertProfileExists(dirId: string): void {
   validateDirId(dirId);
+  assertProfileWritable(dirId);
   const cfg = getConfig() as any;
   if (!cfg.browserProfiles?.[dirId]) throw new Error("Browser profile not found");
 }
@@ -310,6 +330,7 @@ function normalizeRepositoryExtensionSelection(extensions: Record<string, boolea
 
 function toggleExtension(dirId: string, extId: string, enabled: boolean): boolean {
   validateDirId(dirId);
+  assertProfileWritable(dirId);
   const cfg = structuredClone(getConfig()) as any;
   const meta = cfg.browserProfiles?.[dirId];
   if (!meta) throw new Error("Browser profile not found");

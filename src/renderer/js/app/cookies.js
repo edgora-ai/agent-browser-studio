@@ -91,7 +91,7 @@
             var btn = event.target.closest("[data-cookie-index]");
             if (!btn || !list.contains(btn)) return;
             var cookie = cookies[Number(btn.dataset.cookieIndex)];
-            if (cookie) agentBrowser.delCookie(dirId, cookie.domain, cookie.name);
+            if (cookie) agentBrowser.delCookie(dirId, cookie.domain, cookie.name, cookie.path, cookie.partitionKey, cookie.deleteIdentityVerified);
           };
         }).catch(function (e) { if (stillCurrent()) list.innerHTML = '<div class="empty-state">Error: ' + esc(e.message) + '</div>'; });
       },
@@ -102,8 +102,8 @@
         agentBrowser.loadCookies(dirId, filter);
       },
 
-  delCookie: function (dirId, domain, name) {
-        api.profile.deleteCookie(dirId, domain, name).then(function (r) {
+  delCookie: function (dirId, domain, name, path, partitionKey, deleteIdentityVerified) {
+        api.profile.deleteCookie(dirId, domain, name, path, partitionKey, deleteIdentityVerified).then(function (r) {
           if (r.success) { toast((window.i18n ? window.i18n.t("toast.cookie.deleted", "Cookie deleted") : "Cookie deleted"), "success"); agentBrowser.cookieSearch(); }
           else toast(r.error || "Failed", "error");
         }).catch(function (e) { toast(e.message, "error"); });

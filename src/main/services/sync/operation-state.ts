@@ -19,6 +19,15 @@ export interface SyncTransferProgress {
   startedAt: number;
   state: "transferring" | "waiting-response" | "complete";
 }
+export interface SyncLocalProgress {
+  /** Local work only: these counters never imply a network or snapshot commit. */
+  phase: "scanning" | "reading-archive" | "verifying-source" | "verifying-profile" | "verifying-extras" |
+    "packing" | "encrypting" | "decrypting" | "extracting";
+  bytes: number;
+  items: number;
+  totalBytes?: number;
+  totalItems?: number;
+}
 export interface ActiveSyncOperation {
   operationId: string;
   kind: SyncOperationKind;
@@ -28,6 +37,7 @@ export interface ActiveSyncOperation {
     sequence: number;
     updatedAt: number;
     transfer?: SyncTransferProgress;
+    local?: SyncLocalProgress;
   };
 }
 export interface SyncTransferReporter {
@@ -39,6 +49,8 @@ export interface SyncProgressReporter {
   stage: (stage: SyncOperationStage, work?: SyncWorkProgress) => void;
   progress: (work: SyncWorkProgress) => void;
   transfer: (direction: "upload" | "download", totalBytes?: number) => SyncTransferReporter;
+  /** Own one local phase stream; a later stage/work/transfer invalidates it. */
+  local: () => { update: (progress: SyncLocalProgress) => void };
 }
 const ALL_SCOPES = ["profiles", "accounts", "proxies", "extensions", "sync", "team"];
 const PROGRESS_INTERVAL_MS = 100;
@@ -102,6 +114,7 @@ export function beginSyncOperation(kind: SyncOperationKind): (SyncProgressReport
     transfer(direction, totalBytes) {
       if (!owns()) return { update() {}, waiting() {}, finish() {} };
       const owner = ++transferOwner;
+      delete active!.progress.local;
       active!.progress.transfer = { direction, bytes: 0, startedAt: Date.now(), state: "transferring",
         ...(Number.isSafeInteger(totalBytes) && totalBytes! >= 0 ? { totalBytes } : {}) };
       publish();
@@ -126,6 +139,27 @@ export function beginSyncOperation(kind: SyncOperationKind): (SyncProgressReport
           if (!transfer) return;
           transfer.state = "complete";
           publish();
+        },
+      };
+    },
+    local() {
+      if (!owns()) return { update() {} };
+      const owner = ++transferOwner;
+      delete active!.progress.transfer;
+      delete active!.progress.local;
+      return {
+        update(info) {
+          if (!owns() || owner !== transferOwner) return;
+          if (!["scanning", "reading-archive", "verifying-source", "verifying-profile", "verifying-extras", "packing", "encrypting", "decrypting", "extracting"].includes(info.phase) ||
+            !Number.isSafeInteger(info.bytes) || info.bytes < 0 || !Number.isSafeInteger(info.items) || info.items < 0) return;
+          const previous = active!.progress.local;
+          const changedPhase = previous?.phase !== info.phase;
+          if (!changedPhase && (info.bytes < previous.bytes || info.items < previous.items)) return;
+          active!.progress.local = { phase: info.phase, bytes: info.bytes, items: info.items,
+            ...(Number.isSafeInteger(info.totalBytes) && info.totalBytes! >= info.bytes ? { totalBytes: info.totalBytes } : {}),
+            ...(Number.isSafeInteger(info.totalItems) && info.totalItems! >= info.items ? { totalItems: info.totalItems } : {}) };
+          const complete = info.totalBytes !== undefined && info.bytes === info.totalBytes && previous?.bytes !== info.bytes;
+          publish(changedPhase || complete);
         },
       };
     },

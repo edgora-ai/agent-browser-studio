@@ -14,6 +14,7 @@ import { getRunningProcessesAsync } from "./process-discovery.js";
 import { acquireRestoreLock } from "./profile-restore-lock.js";
 import { readProfileSyncState } from "./sync/profile-state.js";
 import { runtimeCookieOps } from "./bidi-cookie-service.js";
+import { assertCookieDeleteIdentity } from "./cdp-cookie-service.js";
 import { getProfileEngineByDirId } from "./page-eval.js";
 import { validateDirId, getDirectorySizeAsync } from "./utils.js";
 import type { ProfileInfo, CookieInfo } from "../types.js";
@@ -193,16 +194,17 @@ export async function setCookie(dirId: string, cookie: { domain: string; name: s
   });
 }
 
-export async function deleteCookie(dirId: string, domain: string, name: string): Promise<boolean> {
+export async function deleteCookie(dirId: string, domain: string, name: string, cookiePath: string, partitionKey?: unknown, deleteIdentityVerified?: unknown): Promise<boolean> {
   validateDirId(dirId);
   validateCookieDomain(domain);
   validateCookieName(name);
+  assertCookieDeleteIdentity(domain, name, cookiePath, partitionKey, deleteIdentityVerified);
 
   if (!runtimeCookieOps.hasRunningBrowser(dirId)) {
     throw new Error("Launch this profile before deleting cookies. Stopped profiles are read-only to avoid corrupting the browser cookie store.");
   }
 
-  return runtimeCookieOps.deleteCookie(dirId, domain, name);
+  return runtimeCookieOps.deleteCookie(dirId, domain, name, cookiePath, partitionKey, deleteIdentityVerified);
 }
 
 function listCookiesFromSqlite(dirId: string, filter?: string): CookieInfo[] {
@@ -232,6 +234,9 @@ function listCookiesFromSqlite(dirId: string, filter?: string): CookieInfo[] {
       secure: r.is_secure === 1,
       httpOnly: r.is_httponly === 1,
       sameSite: r.samesite ?? -1,
+      // This legacy SELECT cannot establish partition identity. A stale offline
+      // row must remain read-only even if another entry launches the browser.
+      deleteIdentityVerified: false,
     }));
   } catch (e: any) {
     // Win-static-audit P2-6: stock Windows has no sqlite3.exe on PATH.

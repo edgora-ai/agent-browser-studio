@@ -59,6 +59,7 @@ class Control {
 }
 function section(ids: string[] = []) { return { localOnly: [], remoteOnly: [], changed: ids.map((id) => ({ id, fields: ["name"] })) }; }
 const COMPARISON_TOKEN = { targetId: "fixture-target", localHash: "fixture-local", remoteHash: "fixture-remote" };
+const OWNED_REQUEST_ID = expect.stringMatching(/^[a-zA-Z0-9_-]{16,128}$/);
 function diff(ids = ["fixture_a"]) {
   return { ok: true, comparisonToken: COMPARISON_TOKEN, coverage: { compared: ["portable-profile", "preferences"], notCompared: ["live-cookies", "localStorage-database", "full-profile-files"], unverified: [] }, profiles: section(ids), proxies: section(["proxy_fixture"]), accounts: section(["account_fixture"]), extensions: section(["ext_fixture"]), pushWarnings: [], pullNotes: [] };
 }
@@ -86,6 +87,7 @@ function harness() {
   const ab: any = { api, helpers, confirmAsync: vi.fn(async (_msg: string, _opts?: any) => true),
     invalidateProfilesForSync: vi.fn(), invalidateAccountsForSync: vi.fn(), loadProfiles: vi.fn(), loadAccountsTab: vi.fn(), loadProxies: vi.fn(), loadExtensionsTab: vi.fn() };
   const document = {
+    addEventListener: vi.fn(),
     getElementById: (id: string) => elements[id] || null,
     querySelector: (s: string) => s.includes('"syncPush"') ? push : s.includes('"syncPull"') ? pull : null,
     querySelectorAll: () => elements["sync-diff"].children.filter((c) => c.attrs.class === "sync-entry-strategy"),
@@ -107,33 +109,33 @@ describe("Sync whole-module strategy and asynchronous operations (fake UI)", () 
     expect(h.entries()).toHaveLength(3); // Extensions intentionally have no per-item resolution.
     h.elements["sync-merge-strategy"].value = "remote";
     h.ab.syncPull(); await flush();
-    expect(h.api.sync.pull).toHaveBeenCalledWith({ strategy: "remote", resolutions: {}, comparisonToken: COMPARISON_TOKEN });
+    expect(h.api.sync.pull).toHaveBeenCalledWith({ strategy: "remote", resolutions: {}, comparisonToken: COMPARISON_TOKEN, requestId: OWNED_REQUEST_ID });
   });
   it("explicitly choosing the former default is retained while untouched entries inherit", async () => {
     const h = harness(); await h.ab.loadSyncDiff();
     h.entries()[0].value = "local";
     h.elements["sync-merge-strategy"].value = "newest";
     h.ab.syncPull(); await flush();
-    expect(h.api.sync.pull).toHaveBeenCalledWith({ strategy: "newest", resolutions: { "profiles:fixture_a": "local" }, comparisonToken: COMPARISON_TOKEN });
+    expect(h.api.sync.pull).toHaveBeenCalledWith({ strategy: "newest", resolutions: { "profiles:fixture_a": "local" }, comparisonToken: COMPARISON_TOKEN, requestId: OWNED_REQUEST_ID });
   });
   it("an explicit choice equal to global stays explicit after another global change", async () => {
     const h = harness(); h.elements["sync-merge-strategy"].value = "remote";
     await h.ab.loadSyncDiff(); h.entries()[1].value = "remote";
     h.ab.syncPull(); await flush();
-    expect(h.api.sync.pull).toHaveBeenLastCalledWith({ strategy: "remote", resolutions: { "proxies:proxy_fixture": "remote" }, comparisonToken: COMPARISON_TOKEN });
+    expect(h.api.sync.pull).toHaveBeenLastCalledWith({ strategy: "remote", resolutions: { "proxies:proxy_fixture": "remote" }, comparisonToken: COMPARISON_TOKEN, requestId: OWNED_REQUEST_ID });
     // A mutation clears the previous choices. A second decision must be based
     // on a newly displayed comparison, not silently rebound to fresh content.
     await h.ab.loadSyncDiff(); h.entries()[1].value = "remote";
     h.elements["sync-merge-strategy"].value = "local";
     h.ab.syncPull(); await flush();
-    expect(h.api.sync.pull).toHaveBeenLastCalledWith({ strategy: "local", resolutions: { "proxies:proxy_fixture": "remote" }, comparisonToken: COMPARISON_TOKEN });
+    expect(h.api.sync.pull).toHaveBeenLastCalledWith({ strategy: "local", resolutions: { "proxies:proxy_fixture": "remote" }, comparisonToken: COMPARISON_TOKEN, requestId: OWNED_REQUEST_ID });
   });
   it("reset to inherit clears the override and Compare clears all old decisions", async () => {
     const h = harness(); await h.ab.loadSyncDiff(); h.entries()[0].value = "remote"; h.entries()[0].value = "";
     h.ab.syncPull(); await flush();
-    expect(h.api.sync.pull).toHaveBeenCalledWith({ strategy: "local", resolutions: {}, comparisonToken: COMPARISON_TOKEN });
+    expect(h.api.sync.pull).toHaveBeenCalledWith({ strategy: "local", resolutions: {}, comparisonToken: COMPARISON_TOKEN, requestId: OWNED_REQUEST_ID });
     await h.ab.loadSyncDiff(); h.entries()[0].value = "remote"; await h.ab.loadSyncDiff();
-    h.ab.syncPull(); await flush(); expect(h.api.sync.pull).toHaveBeenLastCalledWith({ strategy: "local", resolutions: {}, comparisonToken: COMPARISON_TOKEN });
+    h.ab.syncPull(); await flush(); expect(h.api.sync.pull).toHaveBeenLastCalledWith({ strategy: "local", resolutions: {}, comparisonToken: COMPARISON_TOKEN, requestId: OWNED_REQUEST_ID });
   });
   for (const result of ["reject", "failure", "null"] as const) {
     it(`aborts Push on ${result} preflight, releases busy state and permits retry`, async () => {
@@ -183,7 +185,8 @@ describe("Sync whole-module strategy and asynchronous operations (fake UI)", () 
   it("acknowledged warning and lock override force once, then report denial", async () => {
     const h = harness(); h.api.sync.previewDiff.mockResolvedValueOnce({ ...diff(), pushWarnings: ["remove fixture"] });
     h.api.sync.push.mockResolvedValueOnce({ success: false, message: "locked by another device" }).mockResolvedValueOnce({ success: false, message: "requires admin role" });
-    h.ab.syncPush(); await flush(); expect(h.api.sync.push.mock.calls).toEqual([[{ comparisonToken: COMPARISON_TOKEN }], [{ force: true, comparisonToken: COMPARISON_TOKEN }]]);
+    h.ab.syncPush(); await flush(); expect(h.api.sync.push.mock.calls).toEqual([[{ comparisonToken: COMPARISON_TOKEN, requestId: OWNED_REQUEST_ID }], [{ force: true, comparisonToken: COMPARISON_TOKEN, requestId: OWNED_REQUEST_ID }]]);
+    expect(h.api.sync.push.mock.calls[1][0].requestId).not.toBe(h.api.sync.push.mock.calls[0][0].requestId);
     expect(h.ab.confirmAsync.mock.calls.every((c: [string, { ackLabel?: string }?]) => c[1]?.ackLabel)).toBe(true);
     expect(h.helpers.toast).toHaveBeenLastCalledWith("requires admin role", "error"); expect(h.ab.loadSyncConfig).not.toHaveBeenCalled();
   });

@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { getAppDataDir, getProfilesDir } from "./config-manager.js";
 import { validateDirId } from "./utils.js";
-import { withProfileProcessSnapshotSync, withoutProfileProcessSnapshotSync } from "./process-discovery.js";
+import { withProfileProcessSnapshotSync, withProfileProcessSnapshotsSync, withoutProfileProcessSnapshotSync } from "./process-discovery.js";
 
 const heldLocks = new Map<string, { fd: number; token: string }>();
 
@@ -345,6 +345,20 @@ export function withProfileTransferProcessSnapshot<T>(dirId: string, action: () 
   return withProfileProcessSnapshotSync(path.resolve(getProfilesDir(), dirId), () => {
     const result = action();
     assertRecoveryLease(dirId, lease);
+    return result;
+  });
+}
+
+/** All source guards in one synchronous admission share a strict observation;
+ * every profile must retain the same owned restore lease throughout. */
+export function withProfileTransferProcessSnapshots<T>(dirIds: readonly string[], action: () => T): T {
+  const ids = [...new Set(dirIds)];
+  for (const dirId of ids) validateDirId(dirId);
+  const leases = ids.map((dirId) => ({ dirId, lease: assertRecoveryLease(dirId) }));
+  const root = getProfilesDir();
+  return withProfileProcessSnapshotsSync(ids.map((dirId) => path.resolve(root, dirId)), () => {
+    const result = action();
+    for (const { dirId, lease } of leases) assertRecoveryLease(dirId, lease);
     return result;
   });
 }

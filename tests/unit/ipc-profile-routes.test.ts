@@ -174,12 +174,12 @@ describe("profile IPC with real profile, trash and archive stores", () => {
     const { dirId } = await create();
     expect(await invoke("profile:cookies", { dirId, filter: "needle" })).toEqual([]);
     expect(await invoke("profile:set-cookie", { dirId, domain: "example.test", name: "session", value: "fixture" })).toMatchObject({ success: false, error: expect.stringContaining("Launch") });
-    expect(await invoke("profile:delete-cookie", { dirId, domain: "example.test", name: "session" })).toMatchObject({ success: false, error: expect.stringContaining("Launch") });
+    expect(await invoke("profile:delete-cookie", { dirId, domain: "example.test", name: "session", path: "/" })).toMatchObject({ success: false, error: expect.stringContaining("Launch") });
     for (const channel of ["profile:delete", "profile:trash", "profile:trash-restore", "profile:trash-purge"]) expect(await invoke(channel, "../escape")).toMatchObject({ success: false });
     expect(await invoke("profile:rename", { dirId: "../escape", name: "bad" })).toMatchObject({ success: false });
     await expect(invoke("profile:get", "../escape")).rejects.toThrow(); await expect(invoke("profile:cookies", { dirId: "../escape" })).rejects.toThrow();
     expect(await invoke("profile:set-cookie", { dirId, domain: "invalid domain", name: "session", value: "fixture" })).toMatchObject({ success: false });
-    expect(await invoke("profile:delete-cookie", { dirId, domain: "example.test", name: "invalid;name" })).toMatchObject({ success: false });
+    expect(await invoke("profile:delete-cookie", { dirId, domain: "example.test", name: "invalid;name", path: "/" })).toMatchObject({ success: false });
     expect(h.forbidden).not.toHaveBeenCalled();
   });
 

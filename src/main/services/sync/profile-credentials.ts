@@ -3,6 +3,8 @@ import * as path from "node:path";
 import { createCipheriv, createDecipheriv, createHash, createHmac, pbkdf2Sync, randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
 import { Worker } from "node:worker_threads";
 import { TextDecoder } from "node:util";
+import { setImmediate as nextTurn } from "node:timers/promises";
+import { performance } from "node:perf_hooks";
 import { readPinnedSqliteFile, validateSqliteLocalStorageGroup } from "./sqlite-local-storage.js";
 
 /** This module never opens a live profile or obtains an OS/keychain secret. The
@@ -68,7 +70,8 @@ export interface ProfileCredentialOptions {
   /** On restore this must come from the authenticated source manifest, not be
    * synthesized from whatever pair happened to arrive at the receiver. */
   expectedFirefoxPair?: FirefoxCredentialPairBinding;
-  guard?: () => void;
+  /** Process observations may be shared only within a synchronous field batch. */
+  guard?: (() => void) & { runSynchronous?: <T>(action: () => T) => T };
   signal?: AbortSignal;
 }
 export interface ConvertProfileCredentialOptions extends ProfileCredentialOptions {
@@ -91,6 +94,10 @@ export class CredentialPortabilityError extends Error {
 function fail(code: string): never { throw new CredentialPortabilityError(code); }
 const MAX_GROUP = 64 * 1024 * 1024, MAX_TOTAL = 128 * 1024 * 1024, MAX_VALUE = 1024 * 1024;
 const MAX_JSON = 8 * 1024 * 1024, MAX_ROWS = 50000, WORKER_TIMEOUT = 8000;
+const BATCH_ITEMS = 128, BATCH_BYTES = 256 * 1024, BATCH_MS = 8;
+// Only this module's frozen adapters are synchronous by construction. Shape,
+// return-value probing, copied methods and caller assertions are not evidence.
+const synchronousAdapters = new WeakSet<CredentialCryptoAdapter>();
 const sha = (bytes: Buffer) => createHash("sha256").update(bytes).digest("hex");
 const encodedIdentity = (identity: CredentialIdentity) => JSON.stringify([identity.engine, identity.platform, identity.identityId, identity.backend, identity.algorithm, identity.keyId]);
 const sameIdentity = (a: CredentialIdentity, b: CredentialIdentity) => encodedIdentity(a) === encodedIdentity(b);
@@ -165,7 +172,7 @@ export function createChromiumKeyCredentialAdapter(options: { identity: Credenti
     },
     dispose() { key.fill(0); disposed = true; },
   };
-  return Object.freeze(adapter);
+  synchronousAdapters.add(adapter); return Object.freeze(adapter);
 }
 /** Public Chromium152 posix_key_provider.cc, keychain_key_provider.mm and
  * encryptor.cc specify v10/AES128CBC/16-space IV. Linux basic derives peanuts /
@@ -181,7 +188,7 @@ export function createBasicChromiumAdapter(identity: CredentialIdentity): Creden
   const adapter: CredentialCryptoAdapter = { identity: Object.freeze({ ...identity }), encryptedPrefixes: inner.encryptedPrefixes,
     decrypt(bytes, context) { assertContext(adapter, context); return inner.decrypt(bytes, { ...context, identity: inner.identity }); },
     encrypt(bytes, context) { assertContext(adapter, context); return inner.encrypt(bytes, { ...context, identity: inner.identity }); }, dispose: () => inner.dispose!() };
-  return Object.freeze(adapter);
+  synchronousAdapters.add(adapter); return Object.freeze(adapter);
 }
 export const createChromiumBasicCredentialAdapter = createBasicChromiumAdapter;
 
@@ -362,7 +369,48 @@ function runSqlite(file: string, kind: string, options: ProfileCredentialOptions
     if (options.signal?.aborted) onAbort();
   });
 }
-function checkAbort(options: ProfileCredentialOptions): void { if (options.signal?.aborted) fail("CANCELLED"); options.guard?.(); }
+function checkAbort(options: ProfileCredentialOptions): void {
+  if (options.signal?.aborted) fail("CANCELLED"); options.guard?.(); if (options.signal?.aborted) fail("CANCELLED");
+}
+function synchronousSlice(options: ProfileCredentialOptions, action: () => void): void {
+  if (options.signal?.aborted) fail("CANCELLED"); // Do not start even discovery after a cancelled yield.
+  const guard = options.guard;
+  if (guard?.runSynchronous === undefined) { action(); return; }
+  if (typeof guard.runSynchronous !== "function") fail("GUARD_INVALID");
+  const value: unknown = guard.runSynchronous(action);
+  if (value !== null && value !== undefined && typeof (value as { then?: unknown }).then === "function") {
+    void Promise.resolve(value).catch(() => undefined); fail("GUARD_INVALID");
+  }
+}
+type BatchVisitor<T> = { synchronous: (value: T, index: number) => number } | { asynchronous: (value: T, index: number) => Promise<number> };
+async function visitBatches<T>(values: readonly T[], options: ProfileCredentialOptions, size: (value: T) => number, visitor: BatchVisitor<T>): Promise<void> {
+  let index = 0;
+  while (index < values.length) {
+    let items = 0, bytes = 0, started = 0;
+    // One admitted item is indivisible (per-field size limits still apply). Stop
+    // on the first item/byte/soft-time budget, including returned crypto bytes.
+    const more = () => index < values.length && (items === 0 || items < BATCH_ITEMS && bytes + size(values[index]) <= BATCH_BYTES && performance.now() - started < BATCH_MS);
+    if ("synchronous" in visitor) {
+      synchronousSlice(options, () => {
+        checkAbort(options);
+        // Charge the field work, not unavoidable process discovery. Otherwise
+        // a slow host-wide scan would reduce every batch to a single field.
+        started = performance.now();
+        while (more()) { const current = index++; bytes += size(values[current]) + visitor.synchronous(values[current], current); items++; }
+        checkAbort(options);
+      });
+    } else {
+      // Never execute a caller adapter within the lexical process observation,
+      // even when it happens to return a Buffer or an already-resolved Promise.
+      checkAbort(options); started = performance.now();
+      while (more()) { const current = index++; bytes += size(values[current]) + await visitor.asynchronous(values[current], current); items++; checkAbort(options); }
+    }
+    // Promise.resolve()/await of built-in crypto cannot dispatch Electron IPC.
+    // The next iteration obtains fresh process/owner/DB evidence after this turn.
+    if (index < values.length) await nextTurn();
+  }
+}
+function fieldSize(field: Field): number { return (field.encrypted?.byteLength ?? 0) + (field.plainCookie?.byteLength ?? 0); }
 function relativeDirectory(value: string): string {
   if (value === ".") return value;
   if (typeof value !== "string" || !value || value.length > 256 || value.includes("\\") || value.includes("\0") || path.posix.isAbsolute(value) || value.split("/").some(p => !p || p === "." || p === ".." || !/^[a-zA-Z0-9_. -]+$/.test(p))) fail("STAGING_PATH_INVALID");
@@ -476,11 +524,38 @@ function checkEncrypted(bytes: Buffer, adapter?: CredentialCryptoAdapter): void 
   if (bytes.length >= 20 && bytes.subarray(0, 20).toString("hex") === "01000000d08c9ddf0115d1118c7a00c04fc297eb") fail("WINDOWS_DPAPI_UNSUPPORTED");
   if (!["v10", "v11"].includes(prefixOf(bytes)) || adapter && !adapter.encryptedPrefixes.includes(prefixOf(bytes) as "v10" | "v11")) fail("CRYPTO_FORMAT_UNSUPPORTED");
 }
-async function decrypt(adapter: CredentialCryptoAdapter, bytes: Buffer, context: CredentialCryptoContext): Promise<Buffer> {
-  checkEncrypted(bytes, adapter); let result: Buffer;
-  try { result = await adapter.decrypt(bytes, context); } catch (error) { if (error instanceof CredentialPortabilityError) throw error; fail("DECRYPT_FAILED"); }
-  if (!Buffer.isBuffer(result) || result.length > MAX_VALUE || overlaps(result, bytes)) fail("ADAPTER_RESULT_INVALID");
-  return result;
+type CryptoMethod = "decrypt" | "encrypt";
+function cryptoResult(adapter: CredentialCryptoAdapter, method: CryptoMethod, input: Buffer, result: unknown): Buffer {
+  try {
+    if (!Buffer.isBuffer(result) || result.length > MAX_VALUE || overlaps(result, input) || method === "encrypt" && !result.length) fail("ADAPTER_RESULT_INVALID");
+    if (method === "encrypt") checkEncrypted(result, adapter);
+    return result;
+  } catch (error) {
+    if (Buffer.isBuffer(result) && !overlaps(result, input)) result.fill(0);
+    throw error;
+  }
+}
+function cryptoSynchronous(adapter: CredentialCryptoAdapter, method: CryptoMethod, input: Buffer, context: CredentialCryptoContext): Buffer {
+  if (!synchronousAdapters.has(adapter)) fail("ADAPTER_RESULT_INVALID");
+  if (method === "decrypt") checkEncrypted(input, adapter);
+  let result: unknown;
+  try { result = adapter[method](input, context); } catch (error) { if (error instanceof CredentialPortabilityError) throw error; fail(method === "decrypt" ? "DECRYPT_FAILED" : "ENCRYPT_FAILED"); }
+  return cryptoResult(adapter, method, input, result);
+}
+async function cryptoAsynchronous(options: ProfileCredentialOptions, adapter: CredentialCryptoAdapter, method: CryptoMethod, input: Buffer, context: CredentialCryptoContext): Promise<Buffer> {
+  if (method === "decrypt") checkEncrypted(input, adapter);
+  checkAbort(options); let result: unknown, failure: CredentialPortabilityError | undefined;
+  try { result = await adapter[method](input, context); }
+  catch (error) { failure = error instanceof CredentialPortabilityError ? error : new CredentialPortabilityError(method === "decrypt" ? "DECRYPT_FAILED" : "ENCRYPT_FAILED"); }
+  try {
+    // This is a new observation, including after an adapter rejects. A custom
+    // adapter may have yielded, changed the source or triggered cancellation.
+    checkAbort(options); if (failure) throw failure;
+    return cryptoResult(adapter, method, input, result);
+  } catch (error) {
+    if (Buffer.isBuffer(result) && !overlaps(result, input)) result.fill(0);
+    throw error;
+  }
 }
 function validateClear(clear: Buffer, field: Field, version: number): void {
   if (field.host !== undefined && version >= 24) {
@@ -494,15 +569,25 @@ function validateClear(clear: Buffer, field: Field, version: number): void {
     try { new TextDecoder("utf-8", { fatal: true }).decode(clear); } catch { fail("PASSWORD_ENCODING_INVALID"); }
   }
 }
-async function clearField(field: Field, result: SqlResult, group: Group, identity: CredentialIdentity, adapter: CredentialCryptoAdapter): Promise<Buffer | undefined> {
+function fieldValue(field: Field, result: SqlResult): { clear: Buffer | undefined } | { encrypted: Buffer } {
   const encrypted = field.encrypted === null ? Buffer.alloc(0) : Buffer.from(field.encrypted);
   if (field.host !== undefined) {
-    const plain = Buffer.from(field.plainCookie!);
+    const plain = field.plainCookie!;
     if (encrypted.length && plain.length) fail("COOKIE_VALUES_CONFLICT");
-    if (!encrypted.length) return result.version >= 24 ? Buffer.concat([createHash("sha256").update(field.host).digest(), plain]) : Buffer.from(plain);
-  } else if (!encrypted.length) return undefined; // Retain genuinely empty/null database fields unchanged.
-  const clear = await decrypt(adapter, encrypted, contextFor(group, field, result, identity));
+    if (!encrypted.length) return { clear: result.version >= 24 ? Buffer.concat([createHash("sha256").update(field.host).digest(), plain]) : Buffer.from(plain) };
+  } else if (!encrypted.length) return { clear: undefined }; // Retain genuinely empty/null database fields unchanged.
+  return { encrypted };
+}
+function checkedClear(clear: Buffer, field: Field, result: SqlResult): Buffer {
   try { validateClear(clear, field, result.version); return clear; } catch (error) { clear.fill(0); throw error; }
+}
+function clearFieldSynchronous(field: Field, result: SqlResult, group: Group, identity: CredentialIdentity, adapter: CredentialCryptoAdapter): Buffer | undefined {
+  const value = fieldValue(field, result); if ("clear" in value) return value.clear;
+  return checkedClear(cryptoSynchronous(adapter, "decrypt", value.encrypted, contextFor(group, field, result, identity)), field, result);
+}
+async function clearField(options: ProfileCredentialOptions, field: Field, result: SqlResult, group: Group, identity: CredentialIdentity, adapter: CredentialCryptoAdapter): Promise<Buffer | undefined> {
+  const value = fieldValue(field, result); if ("clear" in value) return value.clear;
+  return checkedClear(await cryptoAsynchronous(options, adapter, "decrypt", value.encrypted, contextFor(group, field, result, identity)), field, result);
 }
 function newReport(options: ProfileCredentialOptions, inputs: Input[]): ProfileCredentialReport {
   return { version: 1, scope: options.source.engine === "firefox" ? "firefox-nss-login-pair" : "chromium-login-cookie-databases", source: { ...options.source },
@@ -539,9 +624,12 @@ async function inspectFirefox(options: ProfileCredentialOptions, captured: Retur
   try { document = JSON.parse(captured.logins.bytes.toString("utf8")); } catch { fail("FIREFOX_LOGIN_INVALID"); }
   if (!document || ![1, 2, 3].includes(document.version as number) || !Array.isArray(document.logins) || document.logins.length > MAX_ROWS) fail("FIREFOX_LOGIN_INVALID");
   const group = captured.groups[0], result = await runSqlite(copyGroup(group, scratch), "nss", options), ids = new Set(result.keyIds);
-  for (const login of document.logins) {
-    if (!login || typeof login !== "object" || login.encType !== 1 || !ids.has(sdrKeyId(login.encryptedUsername)) || !ids.has(sdrKeyId(login.encryptedPassword))) fail("FIREFOX_NSS_KEY_MISMATCH");
-  }
+  await visitBatches(document.logins, options, login => (typeof login?.encryptedUsername === "string" ? login.encryptedUsername.length : 0) + (typeof login?.encryptedPassword === "string" ? login.encryptedPassword.length : 0), {
+    synchronous(login) {
+      if (!login || typeof login !== "object" || login.encType !== 1 || !ids.has(sdrKeyId(login.encryptedUsername)) || !ids.has(sdrKeyId(login.encryptedPassword))) fail("FIREFOX_NSS_KEY_MISMATCH");
+      return 0;
+    },
+  });
   const pair: FirefoxCredentialPairBinding = { version: 1, source: { ...options.source }, profileRelativePath: options.profileRelativePath, members: sourceInventory(captured.inputs) };
   if (options.expectedFirefoxPair) {
     const expected = options.expectedFirefoxPair;
@@ -565,12 +653,22 @@ export async function inspectProfileCredentials(options: ProfileCredentialOption
       const adapter = adapterFor(options.source, options.sourceAdapter); let needsCodec = false;
       for (const group of captured.groups) {
         const result = await runSqlite(copyGroup(group, scratch), group.kind, options); report.databases.push(summarize(group, result));
-        for (const field of result.fields) {
-          checkAbort(options); if (field.encrypted?.length) checkEncrypted(Buffer.from(field.encrypted), adapter);
+        const inspectField = (field: Field) => {
+          if (field.encrypted?.length) checkEncrypted(Buffer.from(field.encrypted), adapter);
           if (field.host !== undefined && field.encrypted?.length && field.plainCookie?.length) fail("COOKIE_VALUES_CONFLICT");
-          if (!adapter) { if (field.encrypted?.length || field.host !== undefined) needsCodec = true; continue; }
-          const clear = await clearField(field, result, group, options.source, adapter); clear?.fill(0);
-        }
+          if (!adapter && (field.encrypted?.length || field.host !== undefined)) needsCodec = true;
+        };
+        await visitBatches(result.fields, options, fieldSize, !adapter || synchronousAdapters.has(adapter) ? {
+          synchronous(field) {
+            inspectField(field); const clear = adapter ? clearFieldSynchronous(field, result, group, options.source, adapter) : undefined;
+            const bytes = clear?.length ?? 0; clear?.fill(0); return bytes;
+          },
+        } : {
+          async asynchronous(field) {
+            inspectField(field); const clear = await clearField(options, field, result, group, options.source, adapter);
+            const bytes = clear?.length ?? 0; clear?.fill(0); return bytes;
+          },
+        });
       }
       if (captured.groups.length) {
         report.status = needsCodec ? "source-codec-required" : "source-verified"; report.verification = needsCodec ? "not-verified" : "source-decrypt";
@@ -614,32 +712,49 @@ export async function convertProfileCredentials(options: ConvertProfileCredentia
       for (const group of captured.groups) {
         checkAbort(options); const file = copyGroup(group, output), before = await runSqlite(file, group.kind, options), changes: Change[] = [], expected = new Map<string, Buffer>();
         report.databases.push(summarize(group, before));
-        for (const field of before.fields) {
-          checkAbort(options); const clear = await clearField(field, before, group, options.source, source); if (clear === undefined) continue;
-          let encrypted: Buffer | undefined;
-          try {
-            try { encrypted = await receiver.encrypt(clear, contextFor(group, field, before, options.receiver)); } catch (error) { if (error instanceof CredentialPortabilityError) throw error; fail("ENCRYPT_FAILED"); }
-            if (!Buffer.isBuffer(encrypted) || overlaps(encrypted, clear) || !encrypted.length || encrypted.length > MAX_VALUE) fail("ADAPTER_RESULT_INVALID");
-            checkEncrypted(encrypted, receiver);
-            const id = [field.table, field.column, field.rowId].join(":"); expected.set(id, createHmac("sha256", macKey).update(clear).digest());
-            changes.push({ table: field.table, column: field.column, rowId: field.rowId, encrypted: Buffer.from(encrypted), storage: field.storage === "text" ? "text" : "blob" });
-          } finally { clear.fill(0); }
-        }
+        const recordChange = (field: Field, clear: Buffer, encrypted: Buffer): number => {
+          const id = [field.table, field.column, field.rowId].join(":"); expected.set(id, createHmac("sha256", macKey).update(clear).digest());
+          changes.push({ table: field.table, column: field.column, rowId: field.rowId, encrypted: Buffer.from(encrypted), storage: field.storage === "text" ? "text" : "blob" });
+          return clear.length + encrypted.length;
+        };
+        await visitBatches(before.fields, options, fieldSize, synchronousAdapters.has(source) && synchronousAdapters.has(receiver) ? {
+          synchronous(field) {
+            const clear = clearFieldSynchronous(field, before, group, options.source, source); if (clear === undefined) return 0;
+            try { return recordChange(field, clear, cryptoSynchronous(receiver, "encrypt", clear, contextFor(group, field, before, options.receiver))); }
+            finally { clear.fill(0); }
+          },
+        } : {
+          async asynchronous(field) {
+            const clear = await clearField(options, field, before, group, options.source, source); if (clear === undefined) return 0;
+            try { return recordChange(field, clear, await cryptoAsynchronous(options, receiver, "encrypt", clear, contextFor(group, field, before, options.receiver))); }
+            finally { clear.fill(0); }
+          },
+        });
         await runSqlite(file, group.kind, options, changes);
         const after = await runSqlite(file, group.kind, options);
         if (after.version !== before.version || after.logicalHash !== before.logicalHash || after.fields.length !== before.fields.length) fail("DATABASE_READBACK_MISMATCH");
-        for (const [index, field] of after.fields.entries()) {
+        const expectedFor = (field: Field, index: number): Buffer | undefined => {
           const original = before.fields[index], id = [field.table, field.column, field.rowId].join(":"), expectedMac = expected.get(id);
           if (field.table !== original.table || field.column !== original.column || field.rowId !== original.rowId || field.host !== original.host) fail("DATABASE_READBACK_MISMATCH");
-          if (!expectedMac) {
-            if (field.storage !== original.storage || !Buffer.from(field.encrypted ?? []).equals(Buffer.from(original.encrypted ?? []))) fail("DATABASE_READBACK_MISMATCH");
-            continue;
-          }
-          checkAbort(options); const clear = await clearField(field, after, group, options.receiver, receiver);
+          if (!expectedMac && (field.storage !== original.storage || !Buffer.from(field.encrypted ?? []).equals(Buffer.from(original.encrypted ?? [])))) fail("DATABASE_READBACK_MISMATCH");
+          return expectedMac;
+        };
+        const verifyClear = (field: Field, clear: Buffer | undefined, expectedMac: Buffer): number => {
           if (clear === undefined) fail("DATABASE_READBACK_MISMATCH");
-          try { if (!timingSafeEqual(createHmac("sha256", macKey).update(clear).digest(), expectedMac) || field.host !== undefined && field.plainCookie?.length) fail("RECEIVER_DECRYPT_MISMATCH"); }
-          finally { clear.fill(0); }
-        }
+          try {
+            if (!timingSafeEqual(createHmac("sha256", macKey).update(clear).digest(), expectedMac) || field.host !== undefined && field.plainCookie?.length) fail("RECEIVER_DECRYPT_MISMATCH");
+            return clear.length;
+          } finally { clear.fill(0); }
+        };
+        await visitBatches(after.fields, options, fieldSize, synchronousAdapters.has(receiver) ? {
+          synchronous(field, index) {
+            const mac = expectedFor(field, index); return mac ? verifyClear(field, clearFieldSynchronous(field, after, group, options.receiver, receiver), mac) : 0;
+          },
+        } : {
+          async asynchronous(field, index) {
+            const mac = expectedFor(field, index); return mac ? verifyClear(field, await clearField(options, field, after, group, options.receiver, receiver), mac) : 0;
+          },
+        });
         const member = captureFile(output, group.relativePath, MAX_GROUP); if (!member) fail("DATABASE_READBACK_MISMATCH");
         replacements.push({ relativePath: group.relativePath, outputPath: file, sha256: member.digest, bytes: member.bytes.length });
         for (const input of group.members) if (input.relativePath !== group.relativePath) removeRelativePaths.push(input.relativePath);

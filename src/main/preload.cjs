@@ -36,7 +36,7 @@ const api = {
     // Cookie management
     cookies: (dirId, filter) => ipcRenderer.invoke("profile:cookies", { dirId, filter }),
     setCookie: (dirId, cookie) => ipcRenderer.invoke("profile:set-cookie", { dirId, ...cookie }),
-    deleteCookie: (dirId, domain, name) => ipcRenderer.invoke("profile:delete-cookie", { dirId, domain, name }),
+    deleteCookie: (dirId, domain, name, path, partitionKey, deleteIdentityVerified) => ipcRenderer.invoke("profile:delete-cookie", { dirId, domain, name, path, partitionKey, deleteIdentityVerified }),
   },
   proxy: {
     list: () => ipcRenderer.invoke("proxy:list"),
@@ -89,10 +89,11 @@ const api = {
   sync: {
     push: (opts) => ipcRenderer.invoke("sync:push", opts),
     pull: (opts) => ipcRenderer.invoke("sync:pull", opts),
+    cancel: (opts) => ipcRenderer.invoke("sync:cancel", opts),
     status: () => ipcRenderer.invoke("sync:status"),
-    historyState: (dirId) => ipcRenderer.invoke("sync:history-state", dirId),
-    preview: () => ipcRenderer.invoke("sync:preview"),
-    previewDiff: () => ipcRenderer.invoke("sync:preview-diff"),
+    historyState: (dirId, opts) => ipcRenderer.invoke("sync:history-state", dirId, opts),
+    preview: (opts) => ipcRenderer.invoke("sync:preview", opts),
+    previewDiff: (opts) => ipcRenderer.invoke("sync:preview-diff", opts),
     configure: (config) => ipcRenderer.invoke("sync:configure", config),
   },
   team: {

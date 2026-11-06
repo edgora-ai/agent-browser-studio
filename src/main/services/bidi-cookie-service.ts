@@ -10,11 +10,11 @@
 // a cycle). The status lookup is therefore a deferred dynamic import.
 
 import type { CookieInfo } from "../types.js";
-import { connectBidi, getRegisteredFirefoxSession, normalizeBidiWebSocketUrl, bidiSetCookie, bidiDeleteCookies, type BidiConnection, type BidiCookie } from "./bidi-client.js";
+import { connectBidi, getRegisteredFirefoxSession, normalizeBidiWebSocketUrl, bidiSetCookie, type BidiConnection, type BidiCookie } from "./bidi-client.js";
 import { captureProtocolDispatchGuard, runWithProtocolDispatchGuard } from "./agent/dispatch-guard.js";
 import { getProfileEngineByDirId } from "./page-eval.js";
 import { runningProcesses } from "./browser/runtime-table.js";
-import { cdpCookieService, normalizeCookieForQueue, readQueuedCookieImportSnapshot, clearQueuedCookieImportsIfUnchanged, type CookieExportSnapshot } from "./cdp-cookie-service.js";
+import { cdpCookieService, assertCookieDeleteIdentity, normalizeCookieForQueue, readQueuedCookieImportSnapshot, clearQueuedCookieImportsIfUnchanged, type CookieExportSnapshot } from "./cdp-cookie-service.js";
 import { validateDirId } from "./utils.js";
 export type { CookieExportSnapshot } from "./cdp-cookie-service.js";
 
@@ -270,15 +270,13 @@ export const firefoxCookieService = {
     }
   },
 
-  /** Delete matching cookies on a running Firefox profile. */
-  async deleteCookie(dirId: string, domain: string, name: string): Promise<boolean> {
-    try {
-      const deleted = await withBidiClient(dirId, async (conn) => bidiDeleteCookies(conn, { domain, name }, 10000));
-      return deleted === 1;
-    } catch (e: any) {
-      console.error("[bidi] deleteCookie:", e?.message || String(e));
-      return false;
-    }
+  /** The current BiDi helper only carries domain/name and cannot preserve
+   * this operation's path/partition identity. Fail closed, without dispatch,
+   * until an audited exact-identity adapter exists; never broaden the filter. */
+  async deleteCookie(dirId: string, domain: string, name: string, cookiePath: string, partitionKey?: unknown, deleteIdentityVerified?: unknown): Promise<boolean> {
+    validateDirId(dirId);
+    assertCookieDeleteIdentity(domain, name, cookiePath, partitionKey, deleteIdentityVerified);
+    throw new Error("FIREFOX_COOKIE_DELETE_EXACT_IDENTITY_UNSUPPORTED");
   },
 
   /** Clear only the exact queue generation whose every native write completed.
@@ -313,7 +311,7 @@ interface CookieOps {
   exportCookiesSnapshot(dirId: string, signal?: AbortSignal): Promise<CookieExportSnapshot>;
   importCookies(dirId: string, cookies: CookieInfo[], signal?: AbortSignal): Promise<number>;
   setCookie(dirId: string, cookie: CookieInfo): Promise<boolean>;
-  deleteCookie(dirId: string, domain: string, name: string): Promise<boolean>;
+  deleteCookie(dirId: string, domain: string, name: string, cookiePath: string, partitionKey?: unknown, deleteIdentityVerified?: unknown): Promise<boolean>;
 }
 
 export const runtimeCookieOps: CookieOps = {
@@ -334,7 +332,9 @@ export const runtimeCookieOps: CookieOps = {
   setCookie(dirId, cookie) {
     return pickService(dirId).setCookie(dirId, cookie);
   },
-  deleteCookie(dirId, domain, name) {
-    return pickService(dirId).deleteCookie(dirId, domain, name);
+  async deleteCookie(dirId, domain, name, cookiePath, partitionKey, deleteIdentityVerified) {
+    validateDirId(dirId);
+    assertCookieDeleteIdentity(domain, name, cookiePath, partitionKey, deleteIdentityVerified);
+    return pickService(dirId).deleteCookie(dirId, domain, name, cookiePath, partitionKey, deleteIdentityVerified);
   },
 };

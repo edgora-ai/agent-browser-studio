@@ -483,7 +483,12 @@ async function runRule(
     if (resumeJobId) {
       job = { id: resumeJobId };
     } else {
-      try { job = enqueueJob({ ruleId: rule.id, ruleName: rule.name, source, planId: rule.planId ?? null }); } catch { /* ignore */ }
+      try {
+        job = enqueueJob({ ruleId: rule.id, ruleName: rule.name, source, planId: rule.planId ?? null });
+      } catch (error) {
+        console.error(`[automation] failed to enqueue ${rule.name}:`, error);
+        return; // No durable row means no permission to execute side effects.
+      }
     }
     // Global concurrency cap — overlapping different-rule runs queue up after the per-rule guard is held.
     try {
@@ -517,11 +522,30 @@ async function runRule(
       jobGuard.cancel(rule.id, Date.now());
       return;
     }
+    // A queued row can be cancelled even after the slot grant. Only a
+    // successful conditional UPDATE is execution permission; SQL errors fail closed.
+    let admitted = false;
     try {
-      if (resumeJobId) markRunningAttempt(resumeJobId, attempt);
-      else if (job?.id) markRunning(job.id, attempt);
-      if (job?.id) activeJobIds.add(job.id);
-    } catch { /* ignore */ }
+      if (job?.id && !cancelledJobIds.has(job.id)) {
+        admitted = resumeJobId ? markRunningAttempt(job.id, attempt) : markRunning(job.id, attempt);
+      }
+    } catch (error) {
+      console.error(`[automation] failed to start job ${job?.id}:`, error);
+    }
+    if (!admitted) {
+      if (job?.id) {
+        try {
+          if (resumeJobId) markRetryAbandoned(job.id, "retry abandoned: execution admission denied");
+          else markCancelled(job.id);
+        } catch (error) {
+          console.error(`[automation] failed to finalize unstarted job ${job.id}:`, error);
+        }
+        cancelledJobIds.delete(job.id);
+      }
+      jobGuard.cancel(rule.id, Date.now());
+      return; // finally releases this slot to the next queued rule.
+    }
+    if (job?.id) activeJobIds.add(job.id);
     let ok = false;
     let resultText = "";
     let errMsg: string | undefined;
@@ -545,7 +569,6 @@ async function runRule(
         onTimeout: () => { if (job?.id) cancelledJobIds.add(job.id); },
       });
       ok = true;
-      console.log(`[automation] ✅ ${rule.name}: ${resultText}`);
     } catch (e: any) {
       errMsg = e.message || String(e);
       retryAllowed = e?.automaticRetry !== false;
@@ -553,6 +576,12 @@ async function runRule(
       console.error(`[automation] ❌ ${rule.name} (attempt ${attempt + 1}):`, errMsg);
     }
     const cancelled = Boolean(job?.id && cancelledJobIds.has(job.id)) || stopping;
+    if (cancelled) {
+      ok = false; // Cancellation wins over an action's already-resolved success.
+      errMsg = stopping ? "automation scheduler stopping" : "job cancelled by user";
+      resultText = `cancelled: ${errMsg}`;
+    }
+    if (ok) console.log(`[automation] ✅ ${rule.name}: ${resultText}`);
     const end = cancelled
       ? jobGuard.cancel(rule.id, Date.now())
       : jobGuard.end(rule.id, ok, errMsg, attempt, {
@@ -565,8 +594,8 @@ async function runRule(
     const stillRunnable = !cancelled && generation === schedulerGeneration && !stopping && isRuleStillRunnable(rule.id);
     if (job) {
       try {
-        if (ok) markDone(job.id, resultText);
-        else if (cancelled) markCancelled(job.id);
+        if (cancelled) markCancelled(job.id);
+        else if (ok) markDone(job.id, resultText);
         // A retry is still this same logical execution: park the RUNNING row
         // below, rather than marking it failed first (the store deliberately
         // refuses to reopen a terminal row as retry-waiting).
@@ -1052,6 +1081,12 @@ export function getScheduleState(ruleId: string, now = Date.now()): RuleSchedule
 export function cancelRunningJob(jobId: string): void {
   cancelledJobIds.add(jobId);
   activeJobControllers.get(jobId)?.abort(new Error("job cancelled by user"));
+  for (const [ruleId, retryJobId] of retryJobByRule) {
+    if (retryJobId === jobId) {
+      clearRetry(ruleId, "retry abandoned: cancelled by user");
+      cancelledJobIds.delete(jobId); // No queued/running continuation owns this parked retry.
+    }
+  }
 }
 
 export function stopScheduler(): void {
@@ -1072,6 +1107,7 @@ export function stopScheduler(): void {
 
 /** 手动测试执行一个规则(不等触发)。应用超时,但用户显式触发不重试。 */
 export async function testRunRule(ruleId: string): Promise<{ ok: boolean; result: string }> {
+  if (stopping) return { ok: false, result: "automation scheduler stopping" };
   const cfg = getConfig() as any;
   const rules: AutomationRule[] = cfg.automation || [];
   const rule = rules.find((x) => x.id === ruleId);
@@ -1080,8 +1116,21 @@ export async function testRunRule(ruleId: string): Promise<{ ok: boolean; result
   if (!guardDecision.run) return { ok: false, result: `skipped: ${guardDecision.reason}` };
   const guardCfg = jobGuard.configFor(rule);
   let job: { id: string } | null = null;
-  try { job = enqueueJob({ ruleId: rule.id, ruleName: rule.name, source: "test" }); markRunning(job.id, 0); } catch { /* ignore */ }
-  if (job?.id) cancelledJobIds.delete(job.id);
+  try {
+    job = enqueueJob({ ruleId: rule.id, ruleName: rule.name, source: "test" });
+    if (!markRunning(job.id, 0)) throw new Error("job execution admission denied");
+  } catch (error: any) {
+    console.error(`[automation] failed to start manual job for ${rule.name}:`, error);
+    if (job?.id) {
+      try { markCancelled(job.id); } catch (finalizeError) {
+        console.error(`[automation] failed to finalize unstarted job ${job.id}:`, finalizeError);
+      }
+    }
+    jobGuard.cancel(ruleId, Date.now());
+    return { ok: false, result: error?.message || String(error) };
+  }
+  activeJobIds.add(job.id);
+  cancelledJobIds.delete(job.id);
   let wasCancelled = false;
   let ok = false;
   let result = "";
@@ -1103,10 +1152,14 @@ export async function testRunRule(ruleId: string): Promise<{ ok: boolean; result
     result = errMsg || "unknown error";
   }
   wasCancelled = Boolean(job?.id && cancelledJobIds.has(job.id)) || stopping;
+  if (wasCancelled) {
+    ok = false;
+    result = stopping ? "automation scheduler stopping" : "job cancelled by user";
+  }
   if (job) {
     try {
-      if (ok) markDone(job.id, result);
-      else if (wasCancelled) markCancelled(job.id);
+      if (wasCancelled) markCancelled(job.id);
+      else if (ok) markDone(job.id, result);
       else markFailed(job.id, result);
     } catch { /* ignore */ }
   }
@@ -1115,6 +1168,9 @@ export async function testRunRule(ruleId: string): Promise<{ ok: boolean; result
   jobGuard.cancel(ruleId, Date.now());
   runLogs.push({ ruleId: rule.id, ruleName: rule.name, at: Date.now(), ok, result: (ok ? result : `error: ${result}`).slice(0, 500) });
   if (runLogs.length > 200) runLogs.shift();
-  if (job?.id) cancelledJobIds.delete(job.id);
-  return { ok, result: ok ? result : result };
+  if (job?.id) {
+    activeJobIds.delete(job.id);
+    cancelledJobIds.delete(job.id);
+  }
+  return { ok, result };
 }
