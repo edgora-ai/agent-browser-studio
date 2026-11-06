@@ -86,7 +86,20 @@ diff --git a/content/shell/browser/shell_content_browser_client.cc b/content/she
  #include "base/android/apk_assets.h"
  #include "base/android/path_utils.h"
  #include "content/shell/android/shell_descriptors.h"
-@@ -410,6 +411,12 @@
+@@ -343,6 +344,12 @@
+ }  // namespace
+ 
+ std::string GetShellLanguage() {
++#if BUILDFLAG(IS_ANDROID)
++  const auto* command = base::CommandLine::ForCurrentProcess();
++  if (command->HasSwitch(kAgentBrowserProductProfileSwitch)) {
++    return command->GetSwitchValueASCII("accept-lang");
++  }
++#endif
+   return "en-us,en";
+ }
+ 
+@@ -410,6 +417,12 @@
      FrameTreeNodeId frame_tree_node_id,
      std::optional<int64_t> navigation_id) {
    std::vector<std::unique_ptr<blink::URLLoaderThrottle>> result;
@@ -99,3 +112,13 @@ diff --git a/content/shell/browser/shell_content_browser_client.cc b/content/she
  
    auto* factory = custom_handlers::SimpleProtocolHandlerRegistryFactory::
        GetForBrowserContext(browser_context);
+@@ -901,6 +914,9 @@
+     network::mojom::NetworkContextParams* context_params,
+     cert_verifier::mojom::CertVerifierCreationParams*
+         cert_verifier_creation_params) {
++#if BUILDFLAG(IS_ANDROID)
++  ConfigureAgentBrowserProductNetworkContextParams(context_params);
++#endif
+   context_params->user_agent = GetUserAgent();
+   context_params->accept_language = GetAcceptLangs(context);
+   context_params->enable_zstd = true;

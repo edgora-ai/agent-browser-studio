@@ -35,6 +35,9 @@ public final class LaunchCoordinator {
     private final LaunchReplayGuard replay = new LaunchReplayGuard(128);
     private Connection connection;
     private LaunchSpec current;
+    // Process-local, one-shot authority from publish, never inferred from a CLAIMED launch.
+    // Losing this marker on manager recreation must fall back to non-destructive reuse.
+    private String pendingFreshActivitySession;
     private RuntimeStateMachine machine;
     private Messenger remote;
     private IBinder remoteBinder;
@@ -48,16 +51,18 @@ public final class LaunchCoordinator {
     private boolean stopping;
     private long exitWaitGeneration;
     private Runnable observer;
-    private String status = "无活动验证环境；手机与 Ping0 尚未验收。";
+    private String status = "无活动环境。";
 
     private LaunchCoordinator(Context context) {
         this.context = context.getApplicationContext();
         store = new BootstrapStore(this.context);
     }
 
-    public static synchronized LaunchCoordinator get(Context context) {
-        if (instance == null) instance = new LaunchCoordinator(context);
-        return instance;
+    public static LaunchCoordinator get(Context context) {
+        synchronized (LaunchCoordinator.class) {
+            if (instance == null) instance = new LaunchCoordinator(context);
+            return instance;
+        }
     }
 
     public void observe(Runnable observer) { this.observer = observer; }
@@ -66,6 +71,7 @@ public final class LaunchCoordinator {
 
     public void open(ProfileSpec profile) {
         requireMain();
+        boolean publishedHere = false;
         try (ProcessLifecycle.Hold ignored = ProcessLifecycle.holdPublication(context)) {
             reconcile();
             BootstrapStore.ActiveLaunch active = store.readActive();
@@ -84,6 +90,8 @@ public final class LaunchCoordinator {
             }
             if (!ProcessLifecycle.isBrowserLockFree(context)) throw new IllegalStateException("BROWSER_PROCESS_BUSY");
             current = store.publish(profile.id, profile.revision, 120000);
+            publishedHere = true;
+            pendingFreshActivitySession = current.sessionId;
             machine = new RuntimeStateMachine(current, replay, System.currentTimeMillis());
             incarnation = null;
             pid = 0;
@@ -94,7 +102,32 @@ public final class LaunchCoordinator {
             stopping = false;
             if (bindControl()) update("启动票据已发布；等待同一 UID 浏览进程的一次性 claim。");
         } catch (IOException | RuntimeException failure) {
+            // A ticket published in this call that can never be claimed (e.g. bind failure)
+            // would otherwise wedge every future launch: the unique active-launch index keeps
+            // the row forever and nothing else can confirm a pid-less exit. The store itself
+            // proves no process ever held it (no incarnation, no PID), so revoke + record the
+            // confirmed exit — both operations re-validate every precondition and fail closed.
+            discardUnclaimedTicket(publishedHere);
             update("未启动或退出未确认：" + safeCode(failure));
+        }
+    }
+
+    /** Release a just-published, never-claimed ticket after an open() failure. */
+    private void discardUnclaimedTicket(boolean publishedHere) {
+        if (!publishedHere || current == null || incarnation != null || pid != 0) return;
+        try {
+            BootstrapStore.ActiveLaunch active = store.readActive();
+            if (active == null || !active.launch.sessionId.equals(current.sessionId)
+                    || active.state != BootstrapStore.State.PUBLISHED
+                    || active.incarnationId != null || active.pid != 0) return;
+            store.revoke(current.sessionId);
+            store.recordConfirmedExit(current.sessionId, null);
+            machine = null;
+            current = null;
+            rejectedPid = 0;
+            rejectedSession = null;
+        } catch (RuntimeException ignored) {
+            // Fail closed: the ticket stays and the failure status still reaches the user.
         }
     }
 
@@ -284,11 +317,23 @@ public final class LaunchCoordinator {
                             || browser.getClipData() != null || browser.getExtras() != null) {
                         throw new IllegalStateException("BROWSER_ENTRY_POINT_REJECTED");
                     }
+                    String activitySession = current.sessionId;
+                    boolean freshActivity = activitySession.equals(pendingFreshActivitySession);
+                    if (freshActivity) {
+                        // Only a newly published session may discard a dead session's record/state.
+                        // STANDARD + CLEAR_TOP must NOT keep SINGLE_TOP or REORDER_TO_FRONT.
+                        browser.setFlags((browser.getFlags() & ~(Intent.FLAG_ACTIVITY_SINGLE_TOP
+                                | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)) | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+                    }
                     browser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                    browser.putExtra(ControlProtocol.SESSION, current.sessionId);
+                    browser.putExtra(ControlProtocol.SESSION, activitySession);
                     browser.putExtra(ControlProtocol.NONCE, current.nonce);
                     context.startActivity(browser);
-                    update("已核对专用浏览进程；仅进入能力验证模式。");
+                    // A failed start keeps its authority; never consume another session's marker.
+                    if (freshActivity && activitySession.equals(pendingFreshActivitySession)) {
+                        pendingFreshActivitySession = null;
+                    }
+                    update("已核对专用浏览进程；已请求打开当前环境。");
                 }
             } else if (message.what == ControlProtocol.DRAIN_REPLY) {
                 if (!stopping) throw new IllegalStateException("UNREQUESTED_DRAIN_REPLY");
@@ -314,9 +359,10 @@ public final class LaunchCoordinator {
         } catch (RemoteException disconnected) {
             sent = false;
         }
-        String safeCookie = java.util.Arrays.asList("RETURNED", "FAILED", "TIMED_OUT", "NOT_ATTEMPTED").contains(cookie) ? cookie : "UNKNOWN";
-        update((sent ? "" : "退出请求回执不明；") + "Cookie flush=" + safeCookie
-                + "；等待真实进程退出，LS/IDB 完整性未证明。");
+        String safeCookie = java.util.Arrays.asList("RETURNED", "FAILED", "TIMED_OUT", "NOT_ATTEMPTED",
+                "LOCAL_STORAGE_CONFIRMED_COOKIE_ACK").contains(cookie) ? cookie : "UNKNOWN";
+        update((sent ? "" : "退出请求回执不明；") + "退出保存回执=" + safeCookie
+                + "；回执不等于磁盘 fsync 或 IDB/全部存储完整性；仍等待真实进程退出。");
         waitForExit(SystemClock.elapsedRealtime() + 5000);
     }
 

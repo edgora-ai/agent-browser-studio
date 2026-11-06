@@ -1,9 +1,12 @@
 """Actual small filesystem tests and source selection; no Chromium, Android, VM, network or keystore."""
+import hashlib
 import importlib.util
 import json
 import os
 from pathlib import Path
+import shutil
 import stat
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -118,7 +121,128 @@ class ProductStageTests(unittest.TestCase):
         self.assertIn("java/com/ahoo/abs/android/nativekernel/NativeBrowserActivity.java", destinations)
         self.assertIn("java/com/ahoo/abs/android/process/LaunchCoordinator.java", destinations)
         self.assertIn("chromium/product-bootstrap.patch", destinations)
+        self.assertIn("chromium/product-tabs.patch", destinations)
+        self.assertIn("chromium/product-policy-tests.patch", destinations)
+        for release_patch in ("runtime", "dns", "java", "security", "packaging"):
+            self.assertIn(f"chromium/product-{release_patch}-release.patch", destinations)
+        self.assertIn("chromium/agent_browser_android_product_policy_unittest.cc", destinations)
+        product_gni = next(row["data"] for row in rows if row["destination"] == "agent_browser_product.gni")
+        # Chromium's android_apk template consumes its version code as a GN string.
+        self.assertIn(b'version_code = "10000"', product_gni)
+        self.assertIn(b'debuggable = false', product_gni)
         self.assertTrue(all("debug.keystore" not in item and "androidTest" not in item for item in sources))
+
+    def test_release_runtime_guards_native_readiness_and_avoids_raw_android_log(self):
+        rows = stage.collect_inputs()
+        app = next(row["data"].decode() for row in rows
+                   if row["destination"].endswith("/NativeBrowserApplication.java"))
+        runtime = next(row["data"].decode() for row in rows
+                       if row["destination"].endswith("/NativeBrowserRuntime.java"))
+        self.assertNotIn("android.util.Log.", app)
+        self.assertIn("import org.chromium.base.Log;", app)
+        self.assertIn("BrowserStartupController.getInstance().isFullBrowserStarted()", runtime)
+        self.assertLess(runtime.index("isFullBrowserStarted()"),
+                        runtime.index("ShellManager.flushPersistentStorageForShutdown("))
+        self.assertIn('finishDrain(drainGeneration, current, callback, "NOT_ATTEMPTED")', runtime)
+
+    def test_security_overlay_disables_devtools_for_independent_product_or_preflight(self):
+        rows = stage.collect_inputs()
+        patch = next(row["data"].decode() for row in rows
+                     if row["destination"] == "chromium/product-security-release.patch")
+        self.assertIn("+  if (!IsAgentBrowserProductPreflight() &&", patch)
+        self.assertIn("+          kAgentBrowserProductProfileSwitch))", patch)
+
+    def test_packaging_overlay_keeps_the_default_and_forwards_the_override(self):
+        rows = stage.collect_inputs()
+        patch = next(row["data"].decode() for row in rows
+                     if row["destination"] == "chromium/product-packaging-release.patch")
+        self.assertEqual(2, patch.count('"debuggable",'))
+        self.assertIn('+    _debuggable = debuggable_apks', patch)
+        self.assertIn('+    if (defined(invoker.debuggable))', patch)
+        self.assertIn('+      _debuggable = invoker.debuggable', patch)
+
+    def test_native_proxy_regression_inputs_are_frozen_in_manifest(self):
+        rows = stage.collect_inputs()
+        frozen = stage.manifest(rows)
+        for relative, kind in (
+                ("chromium/agent_browser_android_product_policy_unittest.cc", "native"),
+                ("chromium/product-policy-tests.patch", "patch"),
+                ("chromium/product-runtime-release.patch", "patch"),
+                ("chromium/product-dns-release.patch", "patch"),
+                ("chromium/product-java-release.patch", "patch"),
+                ("chromium/product-security-release.patch", "patch"),
+                ("chromium/product-packaging-release.patch", "patch")):
+            with self.subTest(relative=relative):
+                row = next(item for item in rows if item["destination"] == relative)
+                data = stage.read_source(stage.MODULE / relative)
+                self.assertEqual(row["source"], "native-kernel/" + relative)
+                self.assertEqual(row["kind"], kind)
+                self.assertEqual(row["data"], data)
+                self.assertEqual(row["bytes"], len(data))
+                self.assertEqual(row["sha256"], hashlib.sha256(data).hexdigest())
+                self.assertIn({key: value for key, value in row.items() if key != "data"},
+                              frozen["files"])
+                changed = [dict(item) for item in rows]
+                next(item for item in changed if item["destination"] == relative)["sha256"] = "0" * 64
+                self.assertNotEqual(frozen["sourceSha256"], stage.manifest(changed)["sourceSha256"])
+                self.assertNotIn(relative, stage.sources_gni(rows).decode())
+
+    def test_native_proxy_test_patch_applies_and_reverses_with_patch_tool(self):
+        patch_tool = os.environ.get("ABS_ANDROID_PATCH_TOOL") or shutil.which("patch")
+        self.assertIsNotNone(patch_tool, "The patch tool is required to validate staged patches")
+        patch = stage.read_source(stage.MODULE / "chromium/product-policy-tests.patch")
+        # This is the unmodified Android sources block from Chromium 152's
+        # content_browsertests target. No Chromium checkout or git apply is used:
+        # git can otherwise report success while skipping ignored subdirectories.
+        original = b'''test("content_browsertests") {
+  sources = []
+  if (is_android) {
+    sources += [
+      "../browser/gpu/gpu_background_kill_android_browsertest.cc",
+      "../browser/navigation_transitions/back_forward_transition_animation_manager_android_browsertest.cc",
+      "../browser/network/quic_connection_migration_android_browsertest.cc",
+      "../browser/renderer_host/android_spare_renderer_navigation_throttle_browsertest.cc",
+      "../browser/renderer_host/render_widget_host_view_android_browsertest.cc",
+
+      # TODO(crbug.com/40267166): move out of Android once we can capture
+      # for other platforms.
+      "../browser/renderer_host/navigation_transitions/navigation_entry_screenshot_browsertest.cc",
+    ]
+  }
+
+}
+'''
+        fixtures = {"minimal": original}
+        # Supply a freshly captured complete content/test/BUILD.gn to exercise
+        # exactly the same bytes intended for deployment, not just this fixture.
+        captured_gn = os.environ.get("ABS_ANDROID_CONTENT_TEST_BUILD_GN")
+        if captured_gn:
+            fixtures["captured"] = stage.read_source(Path(captured_gn))
+        anchor = (b'      "../browser/renderer_host/navigation_transitions/'
+                  b'navigation_entry_screenshot_browsertest.cc",\n')
+        added = (b'\n      "../shell/android/agent_browser_product/chromium/'
+                 b'agent_browser_android_product_policy_unittest.cc",\n')
+        for name, original in fixtures.items():
+            with self.subTest(fixture=name):
+                self.assertEqual(original.count(anchor), 1)
+                self.assertNotIn(b"agent_browser_android_product_policy_unittest.cc", original)
+                work = self.root / name
+                target = work / "content/test/BUILD.gn"
+                target.parent.mkdir(mode=0o700, parents=True)
+                target.write_bytes(original)
+                expected = original.replace(anchor, anchor + added)
+                for options, expected_after in (
+                        (["--dry-run", "--forward"], original),
+                        (["--forward"], expected),
+                        (["--dry-run", "--reverse"], expected),
+                        (["--reverse"], original)):
+                    with self.subTest(options=options):
+                        result = subprocess.run(
+                            [patch_tool, "-p1", "-F", "0", "--batch", *options],
+                            input=patch, cwd=work, stdout=subprocess.PIPE,
+                            stderr=subprocess.STDOUT, timeout=15, check=False)
+                        self.assertEqual(result.returncode, 0, result.stdout.decode(errors="replace"))
+                        self.assertEqual(target.read_bytes(), expected_after)
 
     def test_generated_gni_has_exact_flat_asset_names_and_no_source_globs(self):
         rows = stage.collect_inputs()

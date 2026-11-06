@@ -1,0 +1,12 @@
+diff --git a/content/test/BUILD.gn b/content/test/BUILD.gn
+--- a/content/test/BUILD.gn
++++ b/content/test/BUILD.gn
+@@ -1859,6 +1859,8 @@
+       # TODO(crbug.com/40267166): move out of Android once we can capture
+       # for other platforms.
+       "../browser/renderer_host/navigation_transitions/navigation_entry_screenshot_browsertest.cc",
++
++      "../shell/android/agent_browser_product/chromium/agent_browser_android_product_policy_unittest.cc",
+     ]
+   }
+ 

@@ -2,6 +2,11 @@ package com.ahoo.abs.android.nativekernel;
 
 import android.os.Build;
 import android.os.Looper;
+import android.os.Handler;
+import org.chromium.base.Log;
+import org.chromium.base.library_loader.LibraryLoader;
+import org.chromium.content_public.browser.BrowserStartupController;
+import org.chromium.content_shell.ShellManager;
 import com.ahoo.abs.android.process.BrowserProcessRuntime;
 import com.ahoo.abs.core.AdmissionGate;
 import com.ahoo.abs.core.LaunchSpec;
@@ -12,6 +17,7 @@ import org.json.JSONObject;
 
 /** Owned native view and read-only timezone preflight; configuration flags are not network or storage proof. */
 public final class NativeBrowserRuntime implements BrowserProcessRuntime {
+    private static final String TAG = "AbsNativeRuntime";
     private enum Proof { UNVERIFIED, VERIFIED, UNSUPPORTED }
     private final NativeBrowserApplication application;
     final LaunchSpec launch;
@@ -23,7 +29,11 @@ public final class NativeBrowserRuntime implements BrowserProcessRuntime {
     private NativeBrowserActivity view;
     private long generation;
     private boolean draining;
-    private String status = "原生产品能力验证；普通浏览、代理认证及完整存储尚未验收。";
+    private boolean drainReturned;
+    private Runnable drainTimeout;
+    private final Handler main = new Handler(Looper.getMainLooper());
+    private static final long DRAIN_TIMEOUT_MS = 5000;
+    private String status = "原生独立环境；固定代理与独立资料目录已配置，完整身份和存储能力需实测验收。";
 
     NativeBrowserRuntime(NativeBrowserApplication application) {
         requireMain();
@@ -65,7 +75,7 @@ public final class NativeBrowserRuntime implements BrowserProcessRuntime {
         update("已采集真实原生时区子集：\nWindow " + window + "\nDedicated Worker 1 " + first
                 + "\nDedicated Worker 2 " + second
                 + "\n已按顺序调用 Worker terminate/recreate；这不是线程退出、完整身份或 Ping0 通过证明。"
-                + "\n普通浏览仍关闭：网络约束、代理认证及完整存储关闭尚未闭合。");
+                + "\n以上仅为时区子集；不代表网络隔离、代理认证或完整存储持久性通过。");
     }
 
     private static String sample(JSONObject sample) throws JSONException {
@@ -81,7 +91,7 @@ public final class NativeBrowserRuntime implements BrowserProcessRuntime {
 
     void failed(NativeBrowserActivity activity, long expectedGeneration, String code) {
         requireMain();
-        if (isCurrent(activity, expectedGeneration)) update("原生自检未完成：" + code + "；未开放普通浏览。");
+        if (isCurrent(activity, expectedGeneration)) update("原生自检未完成：" + code + "；该结果不代表网络隔离或存储持久性通过。");
     }
 
     public AdmissionGate.Decision decision() {
@@ -104,12 +114,55 @@ public final class NativeBrowserRuntime implements BrowserProcessRuntime {
         requireMain();
         if (draining) throw new IllegalStateException("DRAIN_ALREADY_STARTED");
         draining = true;
-        generation++;
-        NativeBrowserActivity current = view;
+        final long drainGeneration = ++generation;
+        final NativeBrowserActivity current = view;
         view = null;
-        if (current != null) current.closeNativeView();
-        // Android WebView's CookieManager does not flush this native engine. Never call it as proof.
-        callback.onDrained("NOT_ATTEMPTED");
+        drainTimeout = () -> finishDrain(drainGeneration, current, callback, "TIMED_OUT");
+        main.postDelayed(drainTimeout, DRAIN_TIMEOUT_MS);
+        try {
+            // Revoke interaction and hide/stop live pages, but keep Shells and their
+            // BrowserContext alive until the native commit attempt replies.
+            if (current != null) current.quiesceForShutdown();
+            // A loaded library does not imply that BrowserThread/UI and the native
+            // task runner exist. Startup can fail after load but before ContentMain.
+            if (!LibraryLoader.getInstance().isInitialized()
+                    || !BrowserStartupController.getInstance().isFullBrowserStarted()) {
+                finishDrain(drainGeneration, current, callback, "NOT_ATTEMPTED");
+                return;
+            }
+            ShellManager.flushPersistentStorageForShutdown(confirmed -> finishDrain(
+                    drainGeneration, current, callback,
+                    Boolean.TRUE.equals(confirmed) ? "LOCAL_STORAGE_CONFIRMED_COOKIE_ACK" : "FAILED"));
+        } catch (RuntimeException | LinkageError failure) {
+            finishDrain(drainGeneration, current, callback, "FAILED");
+        }
+    }
+
+    private void finishDrain(long expectedGeneration, NativeBrowserActivity current,
+            DrainCallback callback, String outcome) {
+        requireMain();
+        if (!draining || drainReturned || generation != expectedGeneration) return;
+        drainReturned = true;
+        if (drainTimeout != null) main.removeCallbacks(drainTimeout);
+        drainTimeout = null;
+        String result = outcome;
+        try {
+            if (current != null) {
+                current.closeNativeView();
+                Log.i(TAG, "DRAIN_NATIVE_VIEW_CLOSED");
+                // Remove only this Activity record after native teardown returns. finish()
+                // is neither process death nor an additional storage-durability receipt.
+                current.finish();
+                Log.i(TAG, "DRAIN_ACTIVITY_FINISH_REQUESTED");
+            }
+        } catch (RuntimeException | LinkageError failure) {
+            result = "FAILED";
+            Log.w(TAG, "DRAIN_VIEW_TEARDOWN_FAILED");
+        }
+        final String delivered = result;
+        // One Android main-loop turn lets already posted teardown work run before
+        // the controller can request self-exit. This is not a teardown/fsync proof.
+        main.post(() -> callback.onDrained(delivered));
     }
 
     private void update(String value) {

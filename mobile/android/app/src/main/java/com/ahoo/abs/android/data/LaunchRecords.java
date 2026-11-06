@@ -17,7 +17,7 @@ final class LaunchRecords {
         try (Cursor cursor = db.rawQuery(SELECT + " WHERE state<>'EXIT_CONFIRMED'", null)) {
             if (!cursor.moveToFirst()) return null;
             BootstrapStore.ActiveLaunch result = decode(cursor);
-            if (cursor.moveToNext()) StoredProfiles.integrity();
+            if (cursor.moveToNext()) throw StoredProfiles.integrity();
             return result;
         }
     }
@@ -26,7 +26,7 @@ final class LaunchRecords {
         try (Cursor cursor = db.rawQuery(SELECT + " WHERE session_id=?", new String[]{sessionId})) {
             if (!cursor.moveToFirst()) return null;
             BootstrapStore.ActiveLaunch result = decode(cursor);
-            if (cursor.moveToNext()) StoredProfiles.integrity();
+            if (cursor.moveToNext()) throw StoredProfiles.integrity();
             return result;
         }
     }
@@ -41,7 +41,7 @@ final class LaunchRecords {
 
     static void requireCurrentProfile(SQLiteDatabase db, BootstrapStore.ActiveLaunch active) {
         ProfileSpec current = StoredProfiles.find(db, active.launch.profile.id);
-        if (current == null) StoredProfiles.integrity();
+        if (current == null) throw StoredProfiles.integrity();
         StoreChecks.same(active.launch.profile.revision, current.revision);
         StoreChecks.same(active.launch.profile.fingerprint(), current.fingerprint());
         StoreChecks.same(ProfileCodec.toJson(active.launch.profile), ProfileCodec.toJson(current));

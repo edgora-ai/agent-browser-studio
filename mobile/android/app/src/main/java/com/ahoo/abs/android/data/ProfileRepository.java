@@ -35,12 +35,106 @@ public final class ProfileRepository implements AutoCloseable {
     }
 
     private static String requireTestName(String name) {
-        if (name == null) StoreChecks.invalid();
+        if (name == null) throw StoreChecks.invalid();
         return name;
     }
 
     public List<ProfileSpec> listProfiles() {
         return database.read(StoredProfiles::list);
+    }
+
+    public List<ManagedProxy> listProxies() {
+        return database.read(StoredProxies::list);
+    }
+
+    public ManagedProxy findProxy(String proxyId) {
+        StoreChecks.uuid(proxyId);
+        return database.read(db -> StoredProxies.find(db, proxyId));
+    }
+
+    public String proxyIdForProfile(String profileId) {
+        StoreChecks.uuid(profileId);
+        return database.read(db -> StoredProxies.association(db, profileId));
+    }
+
+    public int proxyUsageCount(String proxyId) {
+        StoreChecks.uuid(proxyId);
+        return database.read(db -> StoredProxies.usage(db, proxyId));
+    }
+
+    /** Endpoint edits atomically refresh all inactive linked frozen profile snapshots. */
+    public ManagedProxy saveProxy(ManagedProxy replacement, String expectedRevision) {
+        if (replacement == null) throw StoreChecks.invalid();
+        if (expectedRevision != null) StoreChecks.uuid(expectedRevision);
+        return database.transaction(db -> {
+            ManagedProxy old = StoredProxies.find(db, replacement.id);
+            if (expectedRevision == null ? old != null
+                    : old == null || !expectedRevision.equals(old.revision)) conflict();
+            if (old != null && old.revision.equals(replacement.revision)) conflict();
+            if (StoredProfiles.exists(db, "SELECT 1 FROM proxy_catalog WHERE name_key=? AND id<>?",
+                    StoreChecks.nameKey(replacement.name), replacement.id)) {
+                throw new StorageException(StorageException.Code.NAME_CONFLICT);
+            }
+            ManagedProxy duplicate = StoredProxies.endpoint(db, replacement.proxy);
+            if (duplicate != null && !duplicate.id.equals(replacement.id)) {
+                throw new StorageException(StorageException.Code.PROXY_ENDPOINT_CONFLICT);
+            }
+            boolean changesEndpoint = old != null
+                    && !StoredProxies.sameEndpoint(old.proxy, replacement.proxy);
+            List<ProfileSpec> linked = StoredProxies.linkedProfiles(db, replacement.id);
+            if (changesEndpoint) {
+                for (ProfileSpec profile : linked) StoredProfiles.requireInactive(db, profile.id);
+            }
+            if (old == null) db.insertOrThrow("proxy_catalog", null, StoredProxies.values(replacement));
+            else if (db.update("proxy_catalog", StoredProxies.values(replacement), "id=? AND revision=?",
+                    new String[]{replacement.id, expectedRevision}) != 1) conflict();
+            if (changesEndpoint) {
+                for (ProfileSpec profile : linked) {
+                    ProfileSpec refreshed = new ProfileSpec(profile.id, UUID.randomUUID().toString(),
+                            profile.name, replacement.proxy, profile.countryCode, profile.timeZoneId,
+                            profile.languageTags, profile.deviceMode, profile.deviceModel, "");
+                    try (CredentialUpdate update = CredentialUpdate.keep(); Credentials secrets = update.consume()) {
+                        save(db, refreshed, profile.revision, update, secrets);
+                    }
+                }
+            }
+            ManagedProxy readback = StoredProxies.find(db, replacement.id);
+            if (readback == null || !readback.revision.equals(replacement.revision)) throw StoredProfiles.integrity();
+            return readback;
+        });
+    }
+
+    /** Referenced endpoints cannot be removed; switching a profile is an explicit separate edit. */
+    public void deleteProxy(String proxyId, String expectedRevision) {
+        StoreChecks.uuid(proxyId);
+        StoreChecks.uuid(expectedRevision);
+        database.transaction(db -> {
+            ManagedProxy old = StoredProxies.find(db, proxyId);
+            if (old == null) throw new StorageException(StorageException.Code.PROXY_NOT_FOUND);
+            if (!old.revision.equals(expectedRevision)) conflict();
+            if (StoredProxies.usage(db, proxyId) != 0) {
+                throw new StorageException(StorageException.Code.PROXY_IN_USE);
+            }
+            if (db.delete("proxy_catalog", "id=? AND revision=?", new String[]{proxyId, expectedRevision}) != 1) conflict();
+            return null;
+        });
+    }
+
+    /** Proxy selection and the immutable launch snapshot are committed in one database transaction. */
+    public ProfileSpec saveProfileWithProxy(ProfileSpec replacement, String expectedRevision, String proxyId) {
+        StoreChecks.uuid(proxyId);
+        if (expectedRevision != null) StoreChecks.uuid(expectedRevision);
+        ProfileSpec frozen = ProfileCodec.freeze(replacement);
+        return database.transaction(db -> {
+            ManagedProxy selected = StoredProxies.find(db, proxyId);
+            if (selected == null) throw new StorageException(StorageException.Code.PROXY_NOT_FOUND);
+            if (!StoredProxies.sameEndpoint(frozen.proxy, selected.proxy)) conflict();
+            try (CredentialUpdate update = CredentialUpdate.clear(); Credentials secrets = update.consume()) {
+                ProfileSpec saved = save(db, frozen, expectedRevision, update, secrets);
+                StoredProxies.bind(db, saved.id, proxyId);
+                return saved;
+            }
+        });
     }
 
     public ProfileSpec findProfile(String id) {
@@ -55,7 +149,7 @@ public final class ProfileRepository implements AutoCloseable {
      */
     public ProfileSpec saveProfile(ProfileSpec replacement, String expectedRevision,
                                    CredentialUpdate credentialUpdate) {
-        if (credentialUpdate == null) StoreChecks.invalid();
+        if (credentialUpdate == null) throw StoreChecks.invalid();
         try (CredentialUpdate update = credentialUpdate; Credentials secrets = update.consume()) {
             if (expectedRevision != null) StoreChecks.uuid(expectedRevision);
             ProfileSpec frozen = ProfileCodec.freeze(replacement);
@@ -72,7 +166,7 @@ public final class ProfileRepository implements AutoCloseable {
      * Empty credential placeholders never clear or replace an existing password.
      */
     public void saveProfile(ProfileSpec profile, String proxyUsername, String proxyPassword) {
-        if (profile == null || profile.proxy == null) StoreChecks.invalid();
+        if (profile == null || profile.proxy == null) throw StoreChecks.invalid();
         if (profile.proxy.hasCredentials) {
             if (proxyPassword == null) {
                 throw new StorageException(StorageException.Code.CREDENTIAL_UPDATE_INVALID);
@@ -142,15 +236,16 @@ public final class ProfileRepository implements AutoCloseable {
             envelope.put("ciphertext", written.ciphertext);
             if (previous == null) db.insertOrThrow("credential_envelopes", null, envelope);
             else if (db.update("credential_envelopes", envelope, "profile_id=?",
-                    new String[]{saved.id}) != 1) StoredProfiles.integrity();
+                    new String[]{saved.id}) != 1) throw StoredProfiles.integrity();
         } else if (update.kind == CredentialUpdate.Kind.CLEAR) {
             db.delete("credential_envelopes", "profile_id=?", new String[]{saved.id});
         }
         ProfileSpec readback = StoredProfiles.find(db, saved.id);
-        if (readback == null) StoredProfiles.integrity();
+        if (readback == null) throw StoredProfiles.integrity();
         StoreChecks.same(ProfileCodec.toJson(saved), ProfileCodec.toJson(readback));
         verifyEnvelope(db, readback, written, update, secrets);
         StoredProfiles.searchReadback(db, readback);
+        StoredProxies.syncAssociation(db, readback);
         return readback;
     }
 
@@ -179,19 +274,19 @@ public final class ProfileRepository implements AutoCloseable {
                                 Credentials secrets) {
         CredentialCipher.Envelope actual = StoredProfiles.envelope(db, profile);
         if (expected == null) {
-            if (actual != null) StoredProfiles.integrity();
+            if (actual != null) throw StoredProfiles.integrity();
             return;
         }
         if (actual == null || !MessageDigest.isEqual(expected.iv, actual.iv)
                 || !MessageDigest.isEqual(expected.ciphertext, actual.ciphertext)) {
-            StoredProfiles.integrity();
+            throw StoredProfiles.integrity();
         }
         if (update.kind == CredentialUpdate.Kind.REPLACE) {
             try (Credentials readback = cipher.decrypt(db, profile.id,
                     profile.credentialRevision, actual)) {
                 if (!Arrays.equals(secrets.username(), readback.username())
                         || !Arrays.equals(secrets.password(), readback.password())) {
-                    StoredProfiles.integrity();
+                    throw StoredProfiles.integrity();
                 }
             }
         }
@@ -205,10 +300,10 @@ public final class ProfileRepository implements AutoCloseable {
             if (StoredProfiles.find(db, id) == null) {
                 throw new StorageException(StorageException.Code.PROFILE_NOT_FOUND);
             }
-            if (db.delete("profiles", "id=?", new String[]{id}) != 1) StoredProfiles.integrity();
+            if (db.delete("profiles", "id=?", new String[]{id}) != 1) throw StoredProfiles.integrity();
             if (StoredProfiles.find(db, id) != null || StoredProfiles.exists(db,
                     "SELECT 1 FROM credential_envelopes WHERE profile_id=?", id)) {
-                StoredProfiles.integrity();
+                throw StoredProfiles.integrity();
             }
             return null;
         });

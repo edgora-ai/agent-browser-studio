@@ -1,0 +1,92 @@
+diff --git a/content/shell/android/java/src/org/chromium/content_shell/ShellManager.java b/content/shell/android/java/src/org/chromium/content_shell/ShellManager.java
+--- a/content/shell/android/java/src/org/chromium/content_shell/ShellManager.java
++++ b/content/shell/android/java/src/org/chromium/content_shell/ShellManager.java
+@@ -7,6 +7,7 @@
+ import android.content.Context;
+ import android.util.AttributeSet;
+ import android.view.LayoutInflater;
++import android.view.ViewGroup;
+ import android.widget.FrameLayout;
+ 
+ import java.util.ArrayList;
+@@ -16,6 +17,7 @@
+ import org.jni_zero.JNINamespace;
+ import org.jni_zero.NativeMethods;
+ 
++import org.chromium.base.Callback;
+ import org.chromium.base.ThreadUtils;
+ import org.chromium.build.annotations.Initializer;
+ import org.chromium.build.annotations.NullMarked;
+@@ -110,8 +112,8 @@
+         addView(
+                 shellView,
+                 new FrameLayout.LayoutParams(
+-                        FrameLayout.LayoutParams.MATCH_PARENT,
+-                        FrameLayout.LayoutParams.MATCH_PARENT));
++                        ViewGroup.LayoutParams.MATCH_PARENT,
++                        ViewGroup.LayoutParams.MATCH_PARENT));
+         mActiveShell = shellView;
+         if (!mShells.contains(shellView)) mShells.add(shellView);
+         WebContents webContents = mActiveShell.getWebContents();
+@@ -146,6 +148,9 @@
+         ThreadUtils.assertOnUiThread();
+         if (shell == mActiveShell || !mShells.contains(shell)) return;
+         if (mActiveShell != null) detachShell(mActiveShell);
++        if (mContentViewRenderView == null) {
++            throw new IllegalStateException("SHELL_MANAGER_NOT_INITIALIZED");
++        }
+         showShell(shell);
+     }
+ 
+@@ -192,10 +197,18 @@
+         }
+     }
+ 
++    /** Async product-only storage attempt; native owns context lookup independently of views. */
++    public static void flushPersistentStorageForShutdown(Callback<Boolean> callback) {
++        ThreadUtils.assertOnUiThread();
++        ShellManagerJni.get().flushPersistentStorageForShutdown(callback);
++    }
++
+     @NativeMethods
+     interface Natives {
+         void init(Object shellManagerInstance);
+ 
+         void launchShell(String url);
++
++        void flushPersistentStorageForShutdown(Callback<Boolean> callback);
+     }
+ }
+diff --git a/content/shell/android/java/src/org/chromium/content_shell/Shell.java b/content/shell/android/java/src/org/chromium/content_shell/Shell.java
+--- a/content/shell/android/java/src/org/chromium/content_shell/Shell.java
++++ b/content/shell/android/java/src/org/chromium/content_shell/Shell.java
+@@ -17,6 +17,7 @@
+ import android.view.Menu;
+ import android.view.MenuItem;
+ import android.view.View;
++import android.view.ViewGroup;
+ import android.view.inputmethod.EditorInfo;
+ import android.view.inputmethod.InputMethodManager;
+ import android.widget.EditText;
+@@ -105,8 +106,8 @@
+             contentViewHolder.addView(
+                     contentViewRenderView,
+                     new FrameLayout.LayoutParams(
+-                            FrameLayout.LayoutParams.MATCH_PARENT,
+-                            FrameLayout.LayoutParams.MATCH_PARENT));
++                            ViewGroup.LayoutParams.MATCH_PARENT,
++                            ViewGroup.LayoutParams.MATCH_PARENT));
+         }
+         mContentViewRenderView = contentViewRenderView;
+     }
+@@ -333,8 +334,8 @@
+                 .addView(
+                         cv,
+                         new FrameLayout.LayoutParams(
+-                                FrameLayout.LayoutParams.MATCH_PARENT,
+-                                FrameLayout.LayoutParams.MATCH_PARENT));
++                                ViewGroup.LayoutParams.MATCH_PARENT,
++                                ViewGroup.LayoutParams.MATCH_PARENT));
+         cv.requestFocus();
+         assumeNonNull(mContentViewRenderView).setCurrentWebContents(mWebContents);
+     }

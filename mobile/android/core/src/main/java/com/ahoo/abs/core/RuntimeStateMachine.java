@@ -26,100 +26,136 @@ public final class RuntimeStateMachine {
         profile = launch.profile;
     }
 
-    public synchronized State state() {
-        return state;
+    @SuppressWarnings("NoSynchronizedThisCheck")
+    public State state() {
+        synchronized (this) {
+            return state;
+        }
     }
 
-    public synchronized int recordedPid() {
-        return recordedPid;
+    @SuppressWarnings("NoSynchronizedThisCheck")
+    public int recordedPid() {
+        synchronized (this) {
+            return recordedPid;
+        }
     }
 
-    public synchronized void recordPid(String messageSessionId, int pid) {
-        requireSession(messageSessionId);
-        requireState(State.STARTING, State.BOOTSTRAPPED);
-        if (recordedPid != 0) throw invalidTransition();
-        if (pid <= 0) throw CoreValidation.error("INVALID_PID", "A positive observed runtime PID is required");
-        recordedPid = pid;
+    @SuppressWarnings("NoSynchronizedThisCheck")
+    public void recordPid(String messageSessionId, int pid) {
+        synchronized (this) {
+            requireSession(messageSessionId);
+            requireState(State.STARTING, State.BOOTSTRAPPED);
+            if (recordedPid != 0) throw invalidTransition();
+            if (pid <= 0) throw CoreValidation.error("INVALID_PID", "A positive observed runtime PID is required");
+            recordedPid = pid;
+        }
     }
 
-    public synchronized void bootstrapped(String messageSessionId) {
-        requireSession(messageSessionId);
-        requireState(State.STARTING);
-        state = State.BOOTSTRAPPED;
+    @SuppressWarnings("NoSynchronizedThisCheck")
+    public void bootstrapped(String messageSessionId) {
+        synchronized (this) {
+            requireSession(messageSessionId);
+            requireState(State.STARTING);
+            state = State.BOOTSTRAPPED;
+        }
     }
 
-    public synchronized void beginProbing(String messageSessionId) {
-        requireSession(messageSessionId);
-        requireState(State.BOOTSTRAPPED);
-        state = State.PROBING;
+    @SuppressWarnings("NoSynchronizedThisCheck")
+    public void beginProbing(String messageSessionId) {
+        synchronized (this) {
+            requireSession(messageSessionId);
+            requireState(State.BOOTSTRAPPED);
+            state = State.PROBING;
+        }
     }
 
     /** A later loss of evidence removes READY immediately; BLOCKED is terminal until draining. */
-    public synchronized void applyAdmission(String messageSessionId, AdmissionGate.Decision decision) {
-        requireSession(messageSessionId);
-        requireState(State.PROBING, State.READY);
-        if (decision == null) throw CoreValidation.error("INVALID_EVIDENCE", "An admission decision is required");
-        if (!decision.matches(profile)) {
-            throw CoreValidation.error("PROFILE_MISMATCH", "Admission evidence belongs to another profile revision");
-        }
-        switch (decision.status) {
-            case VERIFIED:
-                state = State.READY;
-                break;
-            case BLOCKED:
-                state = State.BLOCKED;
-                break;
-            case UNVERIFIED:
-                state = State.PROBING;
-                break;
-            default:
-                throw CoreValidation.error("INVALID_EVIDENCE", "An unknown admission status cannot admit a runtime");
+    @SuppressWarnings("NoSynchronizedThisCheck")
+    public void applyAdmission(String messageSessionId, AdmissionGate.Decision decision) {
+        synchronized (this) {
+            requireSession(messageSessionId);
+            requireState(State.PROBING, State.READY);
+            if (decision == null) throw CoreValidation.error("INVALID_EVIDENCE", "An admission decision is required");
+            if (!decision.matches(profile)) {
+                throw CoreValidation.error("PROFILE_MISMATCH", "Admission evidence belongs to another profile revision");
+            }
+            switch (decision.status) {
+                case VERIFIED:
+                    state = State.READY;
+                    break;
+                case BLOCKED:
+                    state = State.BLOCKED;
+                    break;
+                case UNVERIFIED:
+                    state = State.PROBING;
+                    break;
+                default:
+                    throw CoreValidation.error("INVALID_EVIDENCE", "An unknown admission status cannot admit a runtime");
+            }
         }
     }
 
-    public synchronized void requestDrain(String messageSessionId) {
-        requireSession(messageSessionId);
-        requireState(State.STARTING, State.BOOTSTRAPPED, State.PROBING, State.READY, State.BLOCKED);
-        state = State.DRAINING;
+    @SuppressWarnings("NoSynchronizedThisCheck")
+    public void requestDrain(String messageSessionId) {
+        synchronized (this) {
+            requireSession(messageSessionId);
+            requireState(State.STARTING, State.BOOTSTRAPPED, State.PROBING, State.READY, State.BLOCKED);
+            state = State.DRAINING;
+        }
     }
 
-    public synchronized void drainComplete(String messageSessionId) {
-        requireSession(messageSessionId);
-        requireState(State.DRAINING);
-        state = State.EXIT_WAIT;
+    @SuppressWarnings("NoSynchronizedThisCheck")
+    public void drainComplete(String messageSessionId) {
+        synchronized (this) {
+            requireSession(messageSessionId);
+            requireState(State.DRAINING);
+            state = State.EXIT_WAIT;
+        }
     }
 
     /** Activity.finish/onDestroy is a lifecycle report, not proof that the process exited. */
-    public synchronized void finishReported(String messageSessionId) {
-        requireSession(messageSessionId);
-        requireState(State.STARTING, State.BOOTSTRAPPED, State.PROBING, State.READY, State.BLOCKED, State.DRAINING);
-        state = State.EXIT_WAIT;
+    @SuppressWarnings("NoSynchronizedThisCheck")
+    public void finishReported(String messageSessionId) {
+        synchronized (this) {
+            requireSession(messageSessionId);
+            requireState(State.STARTING, State.BOOTSTRAPPED, State.PROBING, State.READY, State.BLOCKED, State.DRAINING);
+            state = State.EXIT_WAIT;
+        }
     }
 
-    public synchronized void exitTimedOut(String messageSessionId) {
-        requireSession(messageSessionId);
-        requireState(State.DRAINING, State.EXIT_WAIT);
-        state = State.EXIT_UNKNOWN;
+    @SuppressWarnings("NoSynchronizedThisCheck")
+    public void exitTimedOut(String messageSessionId) {
+        synchronized (this) {
+            requireSession(messageSessionId);
+            requireState(State.DRAINING, State.EXIT_WAIT);
+            state = State.EXIT_UNKNOWN;
+        }
     }
 
     /** trustedDeath is set only by the controller's actual session-bound Binder.DeathRecipient. */
-    public synchronized void observeBinderDeath(String messageSessionId, boolean trustedDeath, boolean lifecycleLockFree) {
-        requireSession(messageSessionId);
-        if (!trustedDeath) {
-            throw CoreValidation.error("UNTRUSTED_EXIT_EVIDENCE", "An IPC death claim is not a trusted binder-death observation");
+    @SuppressWarnings("NoSynchronizedThisCheck")
+    public void observeBinderDeath(String messageSessionId, boolean trustedDeath, boolean lifecycleLockFree) {
+        synchronized (this) {
+            requireSession(messageSessionId);
+            if (!trustedDeath) {
+                throw CoreValidation.error("UNTRUSTED_EXIT_EVIDENCE", "An IPC death claim is not a trusted binder-death observation");
+            }
+            requireNotConfirmed();
+            state = lifecycleLockFree ? State.EXIT_CONFIRMED : State.EXIT_UNKNOWN;
         }
-        requireNotConfirmed();
-        state = lifecycleLockFree ? State.EXIT_CONFIRMED : State.EXIT_UNKNOWN;
     }
 
     /** errno must be the actual no-signal PID check result; EPERM/unknown/timeout never mean ESRCH. */
-    public synchronized void observePidCheck(String messageSessionId, int observedPid, int errno, boolean lifecycleLockFree) {
-        requireSession(messageSessionId);
-        if (recordedPid <= 0 || observedPid != recordedPid) {
-            throw CoreValidation.error("PID_MISMATCH", "Exit evidence must identify the recorded runtime PID exactly");
+    @SuppressWarnings("NoSynchronizedThisCheck")
+    public void observePidCheck(String messageSessionId, int observedPid, int errno, boolean lifecycleLockFree) {
+        synchronized (this) {
+            requireSession(messageSessionId);
+            if (recordedPid <= 0 || observedPid != recordedPid) {
+                throw CoreValidation.error("PID_MISMATCH", "Exit evidence must identify the recorded runtime PID exactly");
+            }
+            requireNotConfirmed();
+            state = errno == ESRCH && lifecycleLockFree ? State.EXIT_CONFIRMED : State.EXIT_UNKNOWN;
         }
-        requireNotConfirmed();
-        state = errno == ESRCH && lifecycleLockFree ? State.EXIT_CONFIRMED : State.EXIT_UNKNOWN;
     }
 
     private void requireSession(String messageSessionId) {

@@ -55,14 +55,14 @@ public final class BootstrapStore implements AutoCloseable {
     }
 
     public BootstrapStore(Context context, String verificationDatabaseName) {
-        if (verificationDatabaseName == null) StoreChecks.invalid();
+        if (verificationDatabaseName == null) throw StoreChecks.invalid();
         database = new StoreDatabase(context, verificationDatabaseName, true);
     }
 
     public LaunchSpec publish(String profileId, String expectedRevision, long ttlMillis) {
         StoreChecks.uuid(profileId);
         StoreChecks.uuid(expectedRevision);
-        if (ttlMillis < 1 || ttlMillis > 120000) StoreChecks.invalid();
+        if (ttlMillis < 1 || ttlMillis > 120000) throw StoreChecks.invalid();
         return database.transaction(db -> {
             if (LaunchRecords.active(db) != null) {
                 throw new StorageException(StorageException.Code.LAUNCH_ACTIVE);
@@ -93,7 +93,7 @@ public final class BootstrapStore implements AutoCloseable {
             db.insertOrThrow("launch_records", null, values);
             ActiveLaunch readback = LaunchRecords.requireActive(db, launch.sessionId);
             if (readback.state != State.PUBLISHED || readback.phase != RuntimePhase.PUBLISHED) {
-                StoredProfiles.integrity();
+                throw StoredProfiles.integrity();
             }
             StoreChecks.same(launch.nonce, readback.launch.nonce);
             StoreChecks.same(launch.configHash(), readback.launch.configHash());
@@ -127,7 +127,7 @@ public final class BootstrapStore implements AutoCloseable {
                         new String[]{active.launch.sessionId}) != 1) replay();
                 ActiveLaunch readback = LaunchRecords.requireActive(db, active.launch.sessionId);
                 if (readback.state != State.CLAIMED || readback.phase != RuntimePhase.CLAIMED
-                        || readback.pid != Process.myPid()) StoredProfiles.integrity();
+                        || readback.pid != Process.myPid()) throw StoredProfiles.integrity();
                 StoreChecks.same(incarnationId, readback.incarnationId);
                 StoreChecks.same(active.launch.nonce, readback.launch.nonce);
                 return readback.launch;
@@ -167,7 +167,7 @@ public final class BootstrapStore implements AutoCloseable {
             else values.put("provider", provider);
             update(db, active, values);
             ActiveLaunch readback = LaunchRecords.requireActive(db, sessionId);
-            if (readback.phase != phase || readback.pid != pid) StoredProfiles.integrity();
+            if (readback.phase != phase || readback.pid != pid) throw StoredProfiles.integrity();
             StoreChecks.same(provider, readback.provider);
             return null;
         });
@@ -228,7 +228,7 @@ public final class BootstrapStore implements AutoCloseable {
                 throw new StorageException(StorageException.Code.EXIT_EVIDENCE_REQUIRED);
             }
             transition(db, active, State.EXIT_CONFIRMED, RuntimePhase.EXIT_CONFIRMED);
-            if (LaunchRecords.active(db) != null) StoredProfiles.integrity();
+            if (LaunchRecords.active(db) != null) throw StoredProfiles.integrity();
             return null;
         });
     }
@@ -241,10 +241,10 @@ public final class BootstrapStore implements AutoCloseable {
         update(db, active, values);
         ActiveLaunch readback = LaunchRecords.find(db, active.launch.sessionId);
         if (readback == null || readback.state != state || readback.phase != phase) {
-            StoredProfiles.integrity();
+            throw StoredProfiles.integrity();
         }
         StoreChecks.same(active.incarnationId, readback.incarnationId);
-        if (readback.pid != active.pid) StoredProfiles.integrity();
+        if (readback.pid != active.pid) throw StoredProfiles.integrity();
     }
 
     private static void update(SQLiteDatabase db, ActiveLaunch active, ContentValues values) {

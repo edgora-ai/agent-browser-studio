@@ -8,9 +8,9 @@ final class StoreChecks {
     private StoreChecks() {}
 
     static String uuid(String value) {
-        if (value == null) invalid();
+        if (value == null) throw invalid();
         try {
-            if (!UUID.fromString(value).toString().equals(value)) invalid();
+            if (!UUID.fromString(value).toString().equals(value)) throw invalid();
         } catch (IllegalArgumentException exception) {
             throw new StorageException(StorageException.Code.INVALID_ARGUMENT);
         }
@@ -18,7 +18,7 @@ final class StoreChecks {
     }
 
     static String nameKey(String name) {
-        if (name == null || name.trim().isEmpty()) invalid();
+        if (name == null || name.trim().isEmpty()) throw invalid();
         String folded = Normalizer.normalize(name, Normalizer.Form.NFKC)
                 .toUpperCase(Locale.ROOT).toLowerCase(Locale.ROOT);
         return Normalizer.normalize(folded, Normalizer.Form.NFKC);
@@ -30,7 +30,7 @@ final class StoreChecks {
         }
     }
 
-    static void invalid() {
-        throw new StorageException(StorageException.Code.INVALID_ARGUMENT);
+    static StorageException invalid() {
+        return new StorageException(StorageException.Code.INVALID_ARGUMENT);
     }
 }

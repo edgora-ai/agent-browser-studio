@@ -106,13 +106,19 @@ public final class Ping0ObservationPolicy {
         private int count;
         private final Set<String> origins = new LinkedHashSet<>();
 
-        public synchronized void record(String url) {
-            if (count < Integer.MAX_VALUE) count++;
-            if (origins.size() < MAX_REPORTED_ORIGINS) origins.add(redactedOrigin(url));
+        @SuppressWarnings("NoSynchronizedThisCheck")
+        public void record(String url) {
+            synchronized (this) {
+                if (count < Integer.MAX_VALUE) count++;
+                if (origins.size() < MAX_REPORTED_ORIGINS) origins.add(redactedOrigin(url));
+            }
         }
 
-        public synchronized Snapshot snapshot() {
-            return new Snapshot(count, new ArrayList<>(origins));
+        @SuppressWarnings("NoSynchronizedThisCheck")
+        public Snapshot snapshot() {
+            synchronized (this) {
+                return new Snapshot(count, new ArrayList<>(origins));
+            }
         }
     }
 

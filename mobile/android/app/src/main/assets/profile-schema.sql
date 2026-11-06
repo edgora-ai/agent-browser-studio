@@ -1,4 +1,5 @@
--- Version 1. SQLiteOpenHelper executes these exact statements, separated by markers.
+-- Version 2. SQLiteOpenHelper executes these exact statements, separated by markers.
+-- Version 1 upgrades execute only the two catalog tables below, then import existing endpoints.
 -- Python executes this original file with executescript; it is not an Android execution.
 -- @statement
 CREATE TABLE store_meta (
@@ -216,3 +217,19 @@ BEGIN SELECT RAISE(ABORT, 'store_identity_immutable'); END;
 -- @statement
 CREATE TRIGGER store_identity_is_not_deleted BEFORE DELETE ON store_meta
 BEGIN SELECT RAISE(ABORT, 'store_identity_required'); END;
+-- @statement
+CREATE TABLE proxy_catalog (
+    id TEXT PRIMARY KEY NOT NULL CHECK (length(id) = 36),
+    revision TEXT NOT NULL UNIQUE CHECK (length(revision) = 36),
+    name TEXT NOT NULL CHECK (length(trim(name)) BETWEEN 1 AND 80),
+    name_key TEXT NOT NULL UNIQUE COLLATE NOCASE CHECK (length(name_key) > 0),
+    scheme TEXT NOT NULL CHECK (scheme IN ('HTTP', 'HTTPS', 'SOCKS5')),
+    host TEXT NOT NULL COLLATE NOCASE CHECK (length(host) BETWEEN 1 AND 253),
+    port INTEGER NOT NULL CHECK (typeof(port) = 'integer' AND port BETWEEN 1 AND 65535),
+    UNIQUE (scheme, host, port)
+);
+-- @statement
+CREATE TABLE profile_proxy_links (
+    profile_id TEXT PRIMARY KEY NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+    proxy_id TEXT NOT NULL REFERENCES proxy_catalog(id) ON DELETE RESTRICT
+);

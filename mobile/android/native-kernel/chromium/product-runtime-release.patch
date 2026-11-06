@@ -1,0 +1,205 @@
+diff --git a/content/shell/android/shell_manager.cc b/content/shell/android/shell_manager.cc
+--- a/content/shell/android/shell_manager.cc
++++ b/content/shell/android/shell_manager.cc
+@@ -4,15 +4,32 @@
+ 
+ #include "content/shell/android/shell_manager.h"
+ 
++#include <algorithm>
++#include <utility>
++#include <vector>
++
++#include "base/android/callback_android.h"
+ #include "base/android/jni_android.h"
+ #include "base/android/jni_string.h"
+ #include "base/android/scoped_java_ref.h"
++#include "base/barrier_callback.h"
++#include "base/command_line.h"
+ #include "base/functional/bind.h"
+ #include "base/lazy_instance.h"
++#include "base/memory/weak_ptr.h"
++#include "base/task/bind_post_task.h"
++#include "content/public/browser/browser_thread.h"
++#include "content/public/browser/dom_storage_context.h"
++#include "content/public/browser/storage_partition.h"
++#include "content/public/browser/storage_partition_config.h"
++#include "content/public/browser/visibility.h"
+ #include "content/public/browser/web_contents.h"
++#include "content/shell/android/agent_browser_product/chromium/agent_browser_android_product_policy.h"
+ #include "content/shell/browser/shell.h"
+ #include "content/shell/browser/shell_browser_context.h"
+ #include "content/shell/browser/shell_content_browser_client.h"
++#include "mojo/public/cpp/bindings/callback_helpers.h"
++#include "services/network/public/mojom/cookie_manager.mojom.h"
+ #include "url/gurl.h"
+ 
+ // Must come after all headers that specialize FromJniType() / ToJniType().
+@@ -60,6 +77,108 @@
+   Shell::CreateNewWindow(browserContext, url, nullptr, gfx::Size());
+ }
+ 
++// Global/static bridge: draining must still work after an Activity and its
++// ShellManager view have gone away. Callers must revoke navigation/input first,
++// await this callback with a bounded timeout, and only then close the engine.
++// True means Local Storage commit confirmed plus Cookie flush acknowledged for
++// every loaded persistent partition, not fsync or a fence for all storage APIs.
++static void JNI_ShellManager_FlushPersistentStorageForShutdown(
++    JNIEnv* env,
++    const JavaRef<jobject>& j_callback) {
++  DCHECK_CURRENTLY_ON(BrowserThread::UI);
++  auto complete = base::BindPostTaskToCurrentDefault(base::BindOnce(
++      [](base::android::ScopedJavaGlobalRef<jobject> callback, bool confirmed) {
++        base::android::RunBooleanCallbackAndroid(callback, confirmed);
++      },
++      base::android::ScopedJavaGlobalRef<jobject>(j_callback)));
++
++  if (!base::CommandLine::ForCurrentProcess()->HasSwitch(
++          kAgentBrowserProductProfileSwitch)) {
++    std::move(complete).Run(false);
++    return;
++  }
++  auto* client = ShellContentBrowserClient::Get();
++  auto* context = client && client->shell_browser_main_parts()
++                      ? client->browser_context()
++                      : nullptr;
++  if (!context || context->IsOffTheRecord() || context->ShutdownStarted()) {
++    std::move(complete).Run(false);
++    return;
++  }
++
++  // Best-effort quiesce only, not an all-writer fence: service workers and
++  // writes already in transit may outlive these page lifecycle notifications.
++  // Snapshot weak pointers before notifying observers, which may destroy tabs.
++  auto weak_context = context->GetWeakPtr();
++  std::vector<base::WeakPtr<WebContents>> pages;
++  for (auto* shell : Shell::windows()) {
++    auto* contents = shell->web_contents();
++    if (contents && contents->GetBrowserContext() == context &&
++        !contents->IsBeingDestroyed()) {
++      pages.push_back(contents->GetWeakPtr());
++    }
++  }
++  for (auto& contents : pages) {
++    if (!contents || contents->IsBeingDestroyed()) {
++      continue;
++    }
++    contents->Stop();
++    if (!contents || contents->IsBeingDestroyed()) {
++      continue;
++    }
++    contents->WasHidden();
++    if (contents && !contents->IsBeingDestroyed() &&
++        contents->GetVisibility() == Visibility::HIDDEN) {
++      contents->SetPageFrozen(true);
++    }
++  }
++  if (!weak_context || weak_context->ShutdownStarted()) {
++    std::move(complete).Run(false);
++    return;
++  }
++
++  // Do not instantiate unloaded partitions just to flush them, and never
++  // reinterpret off-the-record or memory-only storage as persistent evidence.
++  std::vector<StoragePartition*> partitions;
++  weak_context->ForEachLoadedStoragePartition([&](StoragePartition* partition) {
++    if (!partition->GetConfig().in_memory()) {
++      partitions.push_back(partition);
++    }
++  });
++  if (partitions.empty()) {
++    std::move(complete).Run(false);
++    return;
++  }
++
++  auto barrier = base::BarrierCallback<bool>(
++      2 * partitions.size(),
++      base::BindOnce(
++          [](base::OnceCallback<void(bool)> complete,
++             std::vector<bool> confirmations) {
++            std::move(complete).Run(std::all_of(
++                confirmations.begin(), confirmations.end(),
++                [](bool confirmed) { return confirmed; }));
++          },
++          std::move(complete)));
++  for (auto* partition : partitions) {
++    if (auto* dom_storage = partition->GetDOMStorageContext()) {
++      dom_storage->FlushLocalStorageForShutdown(
++          mojo::WrapCallbackWithDefaultInvokeIfNotRun(base::BindOnce(barrier),
++                                                    false));
++    } else {
++      barrier.Run(false);
++    }
++    if (auto* cookies = partition->GetCookieManagerForBrowserProcess()) {
++      // CookieManager has no disk-write error result. An invoked reply is only
++      // an acknowledgment; a dropped/disconnected reply is not confirmation.
++      cookies->FlushCookieStore(mojo::WrapCallbackWithDropHandler(
++          base::BindOnce(barrier, true), base::BindOnce(barrier, false)));
++    } else {
++      barrier.Run(false);
++    }
++  }
++}
++
+ void DestroyShellManager() {
+   JNIEnv* env = base::android::AttachCurrentThread();
+   Java_ShellManager_destroy(env, g_global_state.Get().j_shell_manager);
+diff --git a/content/shell/browser/shell.cc b/content/shell/browser/shell.cc
+--- a/content/shell/browser/shell.cc
++++ b/content/shell/browser/shell.cc
+@@ -221,8 +221,19 @@
+   if (quit_loop)
+     std::move(quit_loop).Run();
+ 
+-  // Pump the message loop to allow window teardown tasks to run. On iOS the
+-  // run loop is controlled differently and cannot be pumped.
++  // The Android product is driven by Java's UI loop. MessagePumpAndroid::Run()
++  // is invalid there, including through RunUntilIdle(). Keep the teardown above
++  // and let its tasks run asynchronously. This is not a storage flush; callers
++  // must await FlushPersistentStorageForShutdown before closing the last Shell.
++#if BUILDFLAG(IS_ANDROID)
++  if (base::CommandLine::ForCurrentProcess()->HasSwitch(
++          kAgentBrowserProductProfileSwitch)) {
++    return;
++  }
++#endif
++
++  // Preserve the ordinary shell's behavior. On iOS the run loop is controlled
++  // differently and cannot be pumped.
+ #if !BUILDFLAG(IS_IOS)
+   base::RunLoop().RunUntilIdle();
+ #endif  // !BUILDFLAG(IS_IOS)
+diff --git a/content/shell/browser/shell_content_browser_client.cc b/content/shell/browser/shell_content_browser_client.cc
+--- a/content/shell/browser/shell_content_browser_client.cc
++++ b/content/shell/browser/shell_content_browser_client.cc
+@@ -902,6 +902,31 @@
+         cert_verifier_creation_params) {
+   ConfigureNetworkContextParamsForShell(context, network_context_params,
+                                         cert_verifier_creation_params);
++#if BUILDFLAG(IS_ANDROID)
++  if (base::CommandLine::ForCurrentProcess()->HasSwitch(
++          kAgentBrowserProductProfileSwitch) &&
++      !in_memory && !context->IsOffTheRecord()) {
++    CHECK(context->GetPath().IsAbsolute());
++    CHECK(!relative_partition_path.IsAbsolute());
++    CHECK(!relative_partition_path.ReferencesParent());
++    if (!network_context_params->file_paths) {
++      network_context_params->file_paths =
++          network::mojom::NetworkContextFilePaths::New();
++    }
++    // Keep each profile and StoragePartition isolated. NetworkContext data must
++    // live in a dedicated directory, not beside unrelated profile databases.
++    // This configures new storage only: do not migrate or delete existing data.
++    auto& file_paths = network_context_params->file_paths;
++    file_paths->data_directory =
++        context->GetPath()
++            .Append(relative_partition_path)
++            .Append(FILE_PATH_LITERAL("Network"));
++    file_paths->cookie_database_name =
++        base::FilePath(FILE_PATH_LITERAL("Cookies"));
++    // Keep the standard session-cookie lifetime: neither
++    // restore_old_session_cookies nor persist_session_cookies is enabled.
++  }
++#endif
+ }
+ 
+ std::vector<base::FilePath>

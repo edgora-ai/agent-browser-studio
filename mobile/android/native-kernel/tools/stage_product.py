@@ -82,7 +82,8 @@ def collect_inputs(android=ANDROID):
                 if within_package in EXCLUDED_WEBVIEW:
                     continue
             selected.append((source, "java/" + relative, "java"))
-    for relative in ("drawable/ic_launcher.xml", "values/strings.xml", "values/styles.xml", "xml/data_extraction_rules.xml"):
+    for relative in ("drawable/ic_launcher.xml", "values/strings.xml", "values/styles.xml",
+                     "values-night/styles.xml", "xml/data_extraction_rules.xml"):
         selected.append((android / "app/src/main/res" / relative, "res/" + relative, "resource"))
     selected.extend([
         (android / "app/src/main/assets/profile-schema.sql", "assets/profile-schema.sql", "asset"),
@@ -91,7 +92,16 @@ def collect_inputs(android=ANDROID):
         (module / "agent_browser_product.gni", "agent_browser_product.gni", "gn"),
         (module / "chromium/agent_browser_android_product_policy.h", "chromium/agent_browser_android_product_policy.h", "native"),
         (module / "chromium/agent_browser_android_product_policy.cc", "chromium/agent_browser_android_product_policy.cc", "native"),
+        (module / "chromium/agent_browser_android_product_policy_unittest.cc", "chromium/agent_browser_android_product_policy_unittest.cc", "native"),
         (module / "chromium/product-bootstrap.patch", "chromium/product-bootstrap.patch", "patch"),
+        (module / "chromium/product-tabs.patch", "chromium/product-tabs.patch", "patch"),
+        (module / "chromium/product-language.patch", "chromium/product-language.patch", "patch"),
+        (module / "chromium/product-policy-tests.patch", "chromium/product-policy-tests.patch", "patch"),
+        (module / "chromium/product-runtime-release.patch", "chromium/product-runtime-release.patch", "patch"),
+        (module / "chromium/product-dns-release.patch", "chromium/product-dns-release.patch", "patch"),
+        (module / "chromium/product-java-release.patch", "chromium/product-java-release.patch", "patch"),
+        (module / "chromium/product-security-release.patch", "chromium/product-security-release.patch", "patch"),
+        (module / "chromium/product-packaging-release.patch", "chromium/product-packaging-release.patch", "patch"),
     ])
     if len(selected) > MAX_FILES:
         raise ValueError("Selected source count exceeds the limit")

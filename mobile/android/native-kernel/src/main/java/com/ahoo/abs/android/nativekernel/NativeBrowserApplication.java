@@ -24,6 +24,7 @@ import java.util.UUID;
 import org.chromium.base.ApplicationStatus;
 import org.chromium.base.CommandLine;
 import org.chromium.base.ContextUtils;
+import org.chromium.base.Log;
 import org.chromium.base.PathUtils;
 import org.chromium.base.library_loader.LibraryLoader;
 import org.chromium.base.library_loader.LibraryProcessType;
@@ -51,7 +52,8 @@ public final class NativeBrowserApplication extends Application implements Brows
             if (base.getPackageName().equals(process)) return;
             String prefix = base.getPackageName() + ":";
             if (!process.startsWith(prefix)
-                    || !process.substring(prefix.length()).matches("(?:sandboxed_process|privileged_process)[0-9]+")) {
+                    || !process.substring(prefix.length()).matches(
+                            "(?:sandboxed_process|privileged_process)[0-9]+(?::[A-Za-z0-9_.$]+)*")) {
                 throw new IllegalStateException("NATIVE_PROCESS_ROLE_REJECTED");
             }
             initializeChromiumProcess(false);
@@ -76,6 +78,7 @@ public final class NativeBrowserApplication extends Application implements Brows
             }
         } catch (IOException | RuntimeException failure) {
             startupFailure = "BOOTSTRAP_" + failure.getClass().getSimpleName();
+            Log.e("AbsNativeBootstrap", "NATIVE_BOOTSTRAP_ATTACH_FAILED");
         }
         super.attachBaseContext(configured);
         if (startupFailure != null) return;
@@ -90,6 +93,7 @@ public final class NativeBrowserApplication extends Application implements Brows
             }
         } catch (IOException | RuntimeException failure) {
             startupFailure = "BOOTSTRAP_" + failure.getClass().getSimpleName();
+            Log.e("AbsNativeBootstrap", "NATIVE_BOOTSTRAP_AFTER_ATTACH_FAILED");
         }
     }
 
@@ -98,8 +102,10 @@ public final class NativeBrowserApplication extends Application implements Brows
         File profile = new File(base, "native_" + launch.directorySuffix());
         try {
             StructStat parent = Os.lstat(base.getAbsolutePath());
+            // Android 16/OEM no_backup dirs can be 0771 (traverse-only other bit);
+            // the profile subdirectory below is still required to be 0700.
             if (parent.st_uid != android.os.Process.myUid() || (parent.st_mode & 0170000) != 0040000
-                    || (parent.st_mode & 0077) != 0) throw new IOException("UNSAFE_NATIVE_PROFILE_PARENT");
+                    || (parent.st_mode & 0006) != 0) throw new IOException("UNSAFE_NATIVE_PROFILE_PARENT");
             try { Os.mkdir(profile.getAbsolutePath(), 0700); }
             catch (ErrnoException exists) {
                 if (exists.errno != OsConstants.EEXIST) throw exists;
@@ -124,13 +130,18 @@ public final class NativeBrowserApplication extends Application implements Brows
     private void freezeCommandLine() {
         if (CommandLine.isInitialized()) throw new IllegalStateException("NATIVE_COMMAND_LINE_ALREADY_INITIALIZED");
         String[] timezone = frozen.commandLine();
-        String[] arguments = new String[]{timezone[0], timezone[1], timezone[2], "--agent-browser-product-preflight",
+        // Route A: ordinary browsing is enabled; the preflight-only switch is no longer forced.
+        String[] arguments = new String[]{timezone[0], timezone[1], timezone[2],
+                "--agent-browser-product-profile",
                 "--proxy-server=" + launch.profile.proxy.proxyRule(), "--proxy-bypass-list=<-loopback>",
-                "--disable-quic", "--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
-                "--lang=" + launch.profile.languageTags.get(0)};
+                "--disable-quic", "--use-mobile-user-agent",
+                "--disable-features=ReduceAcceptLanguage,ReduceAcceptLanguageHTTP",
+                "--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
+                "--lang=" + launch.profile.languageTags.get(0),
+                "--accept-lang=" + String.join(",", launch.profile.languageTags)};
         CommandLine.init(arguments);
         verifyFrozenCommandLine();
-        android.util.Log.i("AbsNativeBootstrap", "ABS_ANDROID_TIMEZONE_V1 frozen=1 input_sha256="
+        Log.i("AbsNativeBootstrap", "ABS_ANDROID_TIMEZONE_V1 frozen=1 input_sha256="
                 + frozen.inputSha256() + " pid=" + android.os.Process.myPid());
     }
 
@@ -139,14 +150,18 @@ public final class NativeBrowserApplication extends Application implements Brows
             throw new IllegalStateException("NATIVE_FROZEN_CONFIG_MISSING");
         }
         CommandLine command = CommandLine.getInstance();
-        if (!command.hasSwitch("agent-browser-product-preflight")
+        if (!command.hasSwitch("agent-browser-product-profile")
+                || command.hasSwitch("agent-browser-product-preflight")
                 || !command.hasSwitch(NativeTimezoneLaunchConfig.REQUIRED_SWITCH)
                 || !frozen.encoded().equals(command.getSwitchValue(NativeTimezoneLaunchConfig.CONFIG_SWITCH))
                 || !launch.profile.proxy.proxyRule().equals(command.getSwitchValue("proxy-server"))
                 || !"<-loopback>".equals(command.getSwitchValue("proxy-bypass-list"))
                 || !command.hasSwitch("disable-quic")
+                || !command.hasSwitch("use-mobile-user-agent")
+                || !"ReduceAcceptLanguage,ReduceAcceptLanguageHTTP".equals(command.getSwitchValue("disable-features"))
                 || !"disable_non_proxied_udp".equals(command.getSwitchValue("force-webrtc-ip-handling-policy"))
-                || !launch.profile.languageTags.get(0).equals(command.getSwitchValue("lang"))) {
+                || !launch.profile.languageTags.get(0).equals(command.getSwitchValue("lang"))
+                || !String.join(",", launch.profile.languageTags).equals(command.getSwitchValue("accept-lang"))) {
             throw new IllegalStateException("NATIVE_FROZEN_CONFIG_CHANGED");
         }
         for (String forbidden : new String[]{"roxy-fingerprint-config", "js-flags", "user-data-dir",
@@ -194,17 +209,26 @@ public final class NativeBrowserApplication extends Application implements Brows
         verifyFrozenCommandLine();
     }
 
-    public synchronized NativeBrowserRuntime browserRuntime() {
-        requireBrowserActivation();
-        if (runtime == null) runtime = new NativeBrowserRuntime(this);
-        return runtime;
+    @SuppressWarnings("NoSynchronizedThisCheck")
+    public NativeBrowserRuntime browserRuntime() {
+        synchronized (this) {
+            requireBrowserActivation();
+            if (runtime == null) runtime = new NativeBrowserRuntime(this);
+            return runtime;
+        }
     }
 
     @Override
-    public synchronized BrowserProcessRuntime existingControlRuntime() { return runtime; }
+    @SuppressWarnings("NoSynchronizedThisCheck")
+    public BrowserProcessRuntime existingControlRuntime() {
+        synchronized (this) { return runtime; }
+    }
 
     @Override
-    public Intent createBrowserActivityIntent() { return new Intent(this, NativeBrowserActivity.class); }
+    public Intent createBrowserActivityIntent() {
+        return new Intent(this, NativeBrowserActivity.class).addFlags(
+                Intent.FLAG_ACTIVITY_REORDER_TO_FRONT | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+    }
 
     @Override
     public void markDraining() {

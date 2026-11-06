@@ -19,7 +19,7 @@ final class StoredProfiles {
         try (Cursor cursor = db.rawQuery(SELECT + " WHERE id=?", new String[]{id})) {
             if (!cursor.moveToFirst()) return null;
             ProfileSpec profile = decode(cursor);
-            if (cursor.moveToNext()) integrity();
+            if (cursor.moveToNext()) throw integrity();
             return profile;
         }
     }
@@ -38,7 +38,7 @@ final class StoredProfiles {
         StoreChecks.same(cursor.getString(1), profile.revision);
         StoreChecks.same(cursor.getString(2), profile.name);
         StoreChecks.same(cursor.getString(3), StoreChecks.nameKey(profile.name));
-        if (cursor.getInt(4) != (profile.proxy.hasCredentials ? 1 : 0)) integrity();
+        if (cursor.getInt(4) != (profile.proxy.hasCredentials ? 1 : 0)) throw integrity();
         StoreChecks.same(cursor.isNull(5) ? "" : cursor.getString(5), profile.credentialRevision);
         StoreChecks.same(cursor.getString(7), profile.fingerprint());
         StoreChecks.same(cursor.getString(8), profile.dataDirectorySuffix());
@@ -78,14 +78,14 @@ final class StoredProfiles {
         try (Cursor cursor = db.rawQuery("SELECT credential_revision,iv,ciphertext "
                 + "FROM credential_envelopes WHERE profile_id=?", new String[]{profile.id})) {
             if (!cursor.moveToFirst()) {
-                if (profile.proxy.hasCredentials) integrity();
+                if (profile.proxy.hasCredentials) throw integrity();
                 return null;
             }
-            if (!profile.proxy.hasCredentials) integrity();
+            if (!profile.proxy.hasCredentials) throw integrity();
             StoreChecks.same(profile.credentialRevision, cursor.getString(0));
             CredentialCipher.Envelope result = new CredentialCipher.Envelope(
                     cursor.getBlob(1), cursor.getBlob(2));
-            if (cursor.moveToNext()) integrity();
+            if (cursor.moveToNext()) throw integrity();
             return result;
         }
     }
@@ -95,11 +95,11 @@ final class StoredProfiles {
                 + "WHERE id=? AND revision=? AND name_key=?", new String[]{profile.id,
                 profile.revision, StoreChecks.nameKey(profile.name)})) {
             if (!cursor.moveToFirst() || !profile.id.equals(cursor.getString(0))
-                    || cursor.moveToNext()) integrity();
+                    || cursor.moveToNext()) throw integrity();
         }
     }
 
-    static void integrity() {
-        throw new StorageException(StorageException.Code.INTEGRITY_FAILURE);
+    static StorageException integrity() {
+        return new StorageException(StorageException.Code.INTEGRITY_FAILURE);
     }
 }

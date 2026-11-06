@@ -10,7 +10,6 @@ import android.os.Message;
 import android.os.Messenger;
 import android.os.Process;
 import android.os.RemoteException;
-import android.util.Log;
 import com.ahoo.abs.android.process.BrowserProcessOwner;
 import com.ahoo.abs.android.process.BrowserProcessRuntime;
 import com.ahoo.abs.core.LaunchSpec;
@@ -36,7 +35,7 @@ public final class BrowserControlService extends Service {
 
     private boolean receive(Message message) {
         if (message.sendingUid != Process.myUid()) {
-            Log.w("AbsBrowserControl", "CONTROL_CALLER_REJECTED");
+            warn("CONTROL_CALLER_REJECTED");
             return true;
         }
         BrowserProcessOwner application = (BrowserProcessOwner) getApplication();
@@ -120,6 +119,14 @@ public final class BrowserControlService extends Service {
         return value;
     }
 
+    // Shared with the standalone Android manager/WebView build, whose classpath
+    // intentionally has no Chromium base dependency. Only constant event IDs,
+    // never profile/URL/credential data, are logged through this narrow adapter.
+    @SuppressWarnings("NoAndroidLog")
+    private static void warn(String event) {
+        android.util.Log.w("AbsBrowserControl", event);
+    }
+
     private static void replyError(Messenger destination, String code) {
         Bundle value = new Bundle();
         value.putString(ControlProtocol.CODE, code);
@@ -128,7 +135,7 @@ public final class BrowserControlService extends Service {
 
     private static void reply(Messenger destination, int what, Bundle value) {
         if (destination == null) {
-            Log.w("AbsBrowserControl", "CONTROL_REPLY_MISSING");
+            warn("CONTROL_REPLY_MISSING");
             return;
         }
         Message response = Message.obtain(null, what);
@@ -136,7 +143,7 @@ public final class BrowserControlService extends Service {
         try {
             destination.send(response);
         } catch (RemoteException disconnected) {
-            Log.w("AbsBrowserControl", "CONTROL_REPLY_DISCONNECTED");
+            warn("CONTROL_REPLY_DISCONNECTED");
         }
     }
 }

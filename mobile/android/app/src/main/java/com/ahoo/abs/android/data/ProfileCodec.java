@@ -77,7 +77,9 @@ final class ProfileCodec {
                     text(proxyJson, "host"), (Integer) port, (Boolean) authentication);
             JSONArray tags = json.getJSONArray("languageTags");
             List<String> languages = new ArrayList<>();
-            if (tags.length() == 0 || tags.length() > 64) throw invalid();
+            // Storable must equal launchable: the editor, IdentityReport and the native launch
+            // path all bound the list at 8 tags; accepting more here created launch-time dead rows.
+            if (tags.length() == 0 || tags.length() > 8) throw invalid();
             for (int i = 0; i < tags.length(); i++) {
                 Object tag = tags.get(i);
                 if (!(tag instanceof String)) throw invalid();

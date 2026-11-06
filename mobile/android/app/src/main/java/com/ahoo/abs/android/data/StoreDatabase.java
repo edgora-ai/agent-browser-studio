@@ -14,7 +14,7 @@ import java.io.File;
 /** Database transactions and the controller's process-lifetime file lock are independent. */
 final class StoreDatabase implements AutoCloseable {
     static final String DEFAULT_NAME = "abs_profiles_v1.sqlite";
-    private static final int VERSION = 1;
+    private static final int VERSION = 2;
     private static final DatabaseErrorHandler FAIL_CORRUPTION = db -> {
         throw new StorageException(StorageException.Code.DATABASE_CORRUPT);
     };
@@ -28,7 +28,7 @@ final class StoreDatabase implements AutoCloseable {
     private boolean closed;
 
     StoreDatabase(Context context, String verificationName, boolean existingOnly) {
-        if (context == null) StoreChecks.invalid();
+        if (context == null) throw StoreChecks.invalid();
         if ((context.getApplicationInfo().flags & ApplicationInfo.FLAG_ALLOW_BACKUP) != 0) {
             throw new StorageException(StorageException.Code.BACKUP_ENABLED);
         }
@@ -38,12 +38,12 @@ final class StoreDatabase implements AutoCloseable {
         String name = DEFAULT_NAME;
         if (verificationName != null) {
             if (!verificationName.matches("verification_[A-Za-z0-9_-]{1,64}\\.sqlite")) {
-                StoreChecks.invalid();
+                throw StoreChecks.invalid();
             }
             name = verificationName;
         }
         File directory = context.getNoBackupFilesDir();
-        if (directory == null) unavailable();
+        if (directory == null) throw unavailable();
         File file = new File(directory, name);
         path = file.getAbsolutePath();
         Helper openedHelper = null;
@@ -64,7 +64,7 @@ final class StoreDatabase implements AutoCloseable {
                 operation = Operation.CONFIGURE;
                 configure(opened);
                 operation = Operation.CHECK_WAL;
-                if (!opened.isWriteAheadLoggingEnabled()) unavailable();
+                if (!opened.isWriteAheadLoggingEnabled()) throw unavailable();
             } else {
                 openedHelper = new Helper(context, path);
                 openedHelper.setWriteAheadLoggingEnabled(true);
@@ -75,14 +75,14 @@ final class StoreDatabase implements AutoCloseable {
                 throw new StorageException(StorageException.Code.UNSUPPORTED_SCHEMA);
             }
             operation = Operation.CHECK_WAL;
-            if (!opened.isWriteAheadLoggingEnabled()) unavailable();
+            if (!opened.isWriteAheadLoggingEnabled()) throw unavailable();
             operation = Operation.READ_META;
             try (Cursor cursor = opened.rawQuery(
                     "SELECT store_id FROM store_meta WHERE singleton=1", null)) {
-                if (!cursor.moveToFirst()) integrity();
+                if (!cursor.moveToFirst()) throw integrity();
                 storeId = cursor.getString(0);
                 if (storeId == null || !storeId.matches("[0-9a-f]{32}") || cursor.moveToNext()) {
-                    integrity();
+                    throw integrity();
                 }
             }
             db = opened;
@@ -105,23 +105,38 @@ final class StoreDatabase implements AutoCloseable {
 
     synchronized <T> T transaction(Work<T> work) {
         requireOpen();
-        try {
-            db.beginTransactionNonExclusive();
+        try (Transaction transaction = new Transaction(db)) {
             try {
                 T result = work.run(db);
-                db.setTransactionSuccessful();
+                transaction.markSuccessful();
                 return result;
             } catch (SQLiteException exception) {
                 throw StorageException.databaseFailure(Operation.TRANSACTION_BODY, exception);
-            } finally {
-                try {
-                    db.endTransaction();
-                } catch (SQLiteException exception) {
-                    throw StorageException.databaseFailure(Operation.TRANSACTION_END, exception);
-                }
             }
-        } catch (SQLiteException exception) {
-            throw StorageException.databaseFailure(Operation.TRANSACTION_BEGIN, exception);
+        }
+    }
+
+    /** End failures are sanitized and suppressed behind any original work failure. */
+    private static final class Transaction implements AutoCloseable {
+        private final SQLiteDatabase db;
+
+        Transaction(SQLiteDatabase db) {
+            this.db = db;
+            try {
+                db.beginTransactionNonExclusive();
+            } catch (SQLiteException exception) {
+                throw StorageException.databaseFailure(Operation.TRANSACTION_BEGIN, exception);
+            }
+        }
+
+        void markSuccessful() { db.setTransactionSuccessful(); }
+
+        @Override public void close() {
+            try {
+                db.endTransaction();
+            } catch (SQLiteException exception) {
+                throw StorageException.databaseFailure(Operation.TRANSACTION_END, exception);
+            }
         }
     }
 
@@ -130,11 +145,13 @@ final class StoreDatabase implements AutoCloseable {
     }
 
     @Override
-    public synchronized void close() {
-        if (!closed) {
-            if (helper != null) helper.close();
-            else db.close();
-            closed = true;
+    public void close() {
+        synchronized (this) {
+            if (!closed) {
+                if (helper != null) helper.close();
+                else db.close();
+                closed = true;
+            }
         }
     }
 
@@ -156,17 +173,17 @@ final class StoreDatabase implements AutoCloseable {
             if (!cursor.moveToFirst() || cursor.getColumnCount() != 1
                     || cursor.getType(0) != Cursor.FIELD_TYPE_INTEGER
                     || cursor.getLong(0) != expected || cursor.moveToNext()) {
-                unavailable();
+                throw unavailable();
             }
         }
     }
 
-    private static void unavailable() {
-        throw new StorageException(StorageException.Code.DATABASE_UNAVAILABLE);
+    private static StorageException unavailable() {
+        return new StorageException(StorageException.Code.DATABASE_UNAVAILABLE);
     }
 
-    private static void integrity() {
-        throw new StorageException(StorageException.Code.INTEGRITY_FAILURE);
+    private static StorageException integrity() {
+        return new StorageException(StorageException.Code.INTEGRITY_FAILURE);
     }
 
     private static final class Helper extends SQLiteOpenHelper {
@@ -188,7 +205,11 @@ final class StoreDatabase implements AutoCloseable {
 
         @Override
         public void onUpgrade(SQLiteDatabase db, int oldVersion, int newVersion) {
-            throw new StorageException(StorageException.Code.UNSUPPORTED_SCHEMA);
+            if (oldVersion != 1 || newVersion != 2) {
+                throw new StorageException(StorageException.Code.UNSUPPORTED_SCHEMA);
+            }
+            SchemaLoader.upgradeProxyCatalog(context, db);
+            StoredProxies.importLegacy(db);
         }
 
         @Override

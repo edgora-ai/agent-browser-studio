@@ -48,6 +48,9 @@ public final class ProxyGeoProbe {
         ProbeException(String code) { super(code); this.code = code; }
     }
 
+    // This standalone Android manager also ships without Chromium. Its explicit proxy-only
+    // observation client cannot depend on ChromiumNetworkAdapter or the browser network stack.
+    @SuppressWarnings("UseNetworkAnnotations")
     public static Observation fetch(android.content.Context context, ProxySpec spec) throws ProbeException {
         if (spec.hasCredentials) throw new ProbeException("GEO_AUTH_UNSUPPORTED");
         if (spec.scheme != ProxySpec.Scheme.HTTP) throw new ProbeException("GEO_TRANSPORT_UNSUPPORTED");
@@ -101,14 +104,14 @@ public final class ProxyGeoProbe {
 
     /** Strict parsing is also exercised by the owned Android instrumentation suite. */
     public static Observation parse(JSONObject response, long observedAtMillis) throws ProbeException {
-        if (response == null || !Boolean.TRUE.equals(response.opt("success")) || observedAtMillis <= 0) invalid();
+        if (response == null || !Boolean.TRUE.equals(response.opt("success")) || observedAtMillis <= 0) throw invalid();
         Object country = response.opt("country_code");
         Object timeZone = response.opt("timezone");
         Object ip = response.opt("ip");
         if (!(country instanceof String) || !COUNTRIES.contains(country)
-                || !(timeZone instanceof JSONObject) || !(ip instanceof String) || !numericAddress((String) ip)) invalid();
+                || !(timeZone instanceof JSONObject) || !(ip instanceof String) || !numericAddress((String) ip)) throw invalid();
         Object id = ((JSONObject) timeZone).opt("id");
-        if (!(id instanceof String) || ((String) id).length() > 128) invalid();
+        if (!(id instanceof String) || ((String) id).length() > 128) throw invalid();
         try {
             String validated = ZoneId.of((String) id).getId();
             return new Observation((String) country, validated, observedAtMillis);
@@ -158,5 +161,5 @@ public final class ProxyGeoProbe {
         }
     }
 
-    private static void invalid() throws ProbeException { throw new ProbeException("GEO_RESPONSE_INVALID"); }
+    private static ProbeException invalid() { return new ProbeException("GEO_RESPONSE_INVALID"); }
 }

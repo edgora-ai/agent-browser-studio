@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">ABS 环境浏览器 · 开发版</string>
-    <string name="preview_notice">内部能力验证候选，尚未通过手机与 Ping0 验收。不用于真实账号。</string>
+    <string name="app_name">ABS Browser</string>
+    <string name="preview_notice">单活动环境 · 独立配置与存储 · 开发版，指纹能力仍在验收。</string>
     <string name="startup_failure">启动/能力配置失败，未开放普通浏览：%1$s</string>
     <string name="navigation_refused">导航被拒绝：%1$s</string>
     <string name="storage_unavailable">配置存储不可用，已停止操作；不会创建默认环境替代：%1$s</string>

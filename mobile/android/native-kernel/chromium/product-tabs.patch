@@ -1,0 +1,95 @@
+diff --git a/content/shell/android/java/src/org/chromium/content_shell/ShellManager.java b/content/shell/android/java/src/org/chromium/content_shell/ShellManager.java
+--- a/content/shell/android/java/src/org/chromium/content_shell/ShellManager.java
++++ b/content/shell/android/java/src/org/chromium/content_shell/ShellManager.java
+@@ -8,6 +8,9 @@
+ import android.util.AttributeSet;
+ import android.view.LayoutInflater;
+ import android.widget.FrameLayout;
++
++import java.util.ArrayList;
++import java.util.List;
+ 
+ import org.jni_zero.CalledByNative;
+ import org.jni_zero.JNINamespace;
+@@ -31,6 +34,7 @@
+     public static final String DEFAULT_SHELL_URL = "http://www.google.com";
+     private WindowAndroid mWindow;
+     private @Nullable Shell mActiveShell;
++    private final List<Shell> mShells = new ArrayList<>();
+ 
+     // The target for all content rendering.
+     private @Nullable ContentViewRenderView mContentViewRenderView;
+@@ -93,8 +97,8 @@
+         Shell shellView = (Shell) inflater.inflate(R.layout.shell_view, null);
+         shellView.initialize(nativeShellPtr, mWindow);
+ 
+-        // TODO(tedchoc): Allow switching back to these inactive shells.
+-        if (mActiveShell != null) removeShell(mActiveShell);
++        // Previous shells stay alive so this manager can host multiple tabs.
++        if (mActiveShell != null) detachShell(mActiveShell);
+ 
+         showShell(shellView);
+         return shellView;
+@@ -109,6 +113,7 @@
+                         FrameLayout.LayoutParams.MATCH_PARENT,
+                         FrameLayout.LayoutParams.MATCH_PARENT));
+         mActiveShell = shellView;
++        if (!mShells.contains(shellView)) mShells.add(shellView);
+         WebContents webContents = mActiveShell.getWebContents();
+         if (webContents != null) {
+             mContentViewRenderView.setCurrentWebContents(webContents);
+@@ -116,8 +121,54 @@
+         }
+     }
+ 
++    private void detachShell(Shell shellView) {
++        WebContents contents = shellView.getWebContents();
++        if (contents != null) contents.updateWebContentsVisibility(Visibility.HIDDEN);
++        if (shellView == mActiveShell) mActiveShell = null;
++        if (shellView.getParent() == null) return;
++        shellView.setContentViewRenderView(null);
++        removeView(shellView);
++    }
++
++    /** Opens a URL in a new tab without closing existing tabs. */
++    public void launchShellInNewTab(String url) {
++        ThreadUtils.assertOnUiThread();
++        ShellManagerJni.get().launchShell(url);
++    }
++
++    /** All live shells (tabs); the active tab is not guaranteed to be last. */
++    public List<Shell> getShells() {
++        return new ArrayList<>(mShells);
++    }
++
++    /** Switches to an existing shell without destroying the current one. */
++    public void selectShell(Shell shell) {
++        ThreadUtils.assertOnUiThread();
++        if (shell == mActiveShell || !mShells.contains(shell)) return;
++        if (mActiveShell != null) detachShell(mActiveShell);
++        showShell(shell);
++    }
++
++    /** Closes one tab and activates the last remaining tab, if any. */
++    public void closeShell(Shell shell) {
++        ThreadUtils.assertOnUiThread();
++        boolean wasActive = shell == mActiveShell;
++        if (wasActive) {
++            removeShell(shell);
++        } else {
++            if (shell.getParent() != null) {
++                shell.setContentViewRenderView(null);
++                removeView(shell);
++            }
++            mShells.remove(shell);
++        }
++        shell.close();
++        if (wasActive && !mShells.isEmpty()) selectShell(mShells.get(mShells.size() - 1));
++    }
++
+     @CalledByNative
+     private void removeShell(Shell shellView) {
++        mShells.remove(shellView);
+         if (shellView == mActiveShell) mActiveShell = null;
+         if (shellView.getParent() == null) return;
+         shellView.setContentViewRenderView(null);

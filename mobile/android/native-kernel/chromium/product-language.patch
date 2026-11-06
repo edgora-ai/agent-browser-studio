@@ -1,0 +1,119 @@
+diff --git a/content/shell/browser/shell.cc b/content/shell/browser/shell.cc
+--- a/content/shell/browser/shell.cc
++++ b/content/shell/browser/shell.cc
+@@ -52,6 +52,10 @@
+ #include "third_party/blink/public/mojom/input/pointer_lock_result.mojom.h"
+ #include "third_party/blink/public/mojom/window_features/window_features.mojom.h"
+ 
++#if BUILDFLAG(IS_ANDROID)
++#include "content/shell/android/agent_browser_product/chromium/agent_browser_android_product_policy.h"
++#endif
++
+ namespace content {
+ 
+ namespace {
+@@ -84,6 +88,17 @@
+     UpdateFontRendererPreferencesFromSystemSettings(
+         web_contents_->GetMutableRendererPrefs());
+   }
++
++#if BUILDFLAG(IS_ANDROID)
++  if (base::CommandLine::ForCurrentProcess()->HasSwitch(
++          kAgentBrowserProductProfileSwitch)) {
++    // Store the full list on WebContents for cross-process navigations and
++    // dedicated workers. A newly attached popup may already have a renderer.
++    web_contents_->GetMutableRendererPrefs()->accept_languages =
++        GetShellLanguage();
++    web_contents_->SyncRendererPrefs();
++  }
++#endif
+ 
+   windows_.push_back(this);
+ 
+diff --git a/content/shell/browser/shell_content_browser_client.cc b/content/shell/browser/shell_content_browser_client.cc
+--- a/content/shell/browser/shell_content_browser_client.cc
++++ b/content/shell/browser/shell_content_browser_client.cc
+@@ -93,6 +93,7 @@
+ #include "third_party/blink/public/common/associated_interfaces/associated_interface_registry.h"
+ #include "third_party/blink/public/common/agent_browser_android_timezone_config.h"
+ #include "third_party/blink/public/common/features.h"
++#include "third_party/blink/public/common/renderer_preferences/renderer_preferences.h"
+ #include "third_party/blink/public/common/switches.h"
+ #include "third_party/blink/public/common/user_agent/user_agent_metadata.h"
+ #include "third_party/blink/public/common/web_preferences/web_preferences.h"
+@@ -550,8 +551,34 @@
+ #endif
+ }
+ 
++std::string ShellContentBrowserClient::GetApplicationLocale() {
++#if BUILDFLAG(IS_ANDROID)
++  const auto* command = base::CommandLine::ForCurrentProcess();
++  if (command->HasSwitch(kAgentBrowserProductProfileSwitch)) {
++    // The product freezes --lang before native startup. Content uses this
++    // locale to set renderer --lang, rather than copying the browser switch.
++    return command->GetSwitchValueASCII(switches::kLang);
++  }
++#endif
++  return ContentBrowserClient::GetApplicationLocale();
++}
++
+ std::string ShellContentBrowserClient::GetAcceptLangs(BrowserContext* context) {
+   return GetShellLanguage();
++}
++
++void ShellContentBrowserClient::UpdateRendererPreferencesForWorker(
++    BrowserContext* browser_context,
++    blink::RendererPreferences* out_prefs) {
++  ContentBrowserClient::UpdateRendererPreferencesForWorker(browser_context,
++                                                         out_prefs);
++#if BUILDFLAG(IS_ANDROID)
++  if (base::CommandLine::ForCurrentProcess()->HasSwitch(
++          kAgentBrowserProductProfileSwitch)) {
++    // Shared and service workers do not inherit a frame's preferences.
++    out_prefs->accept_languages = GetShellLanguage();
++  }
++#endif
+ }
+ 
+ std::string ShellContentBrowserClient::GetDefaultDownloadName() {
+@@ -779,6 +806,12 @@
+ }
+ 
+ std::string ShellContentBrowserClient::GetUserAgent() {
++#if BUILDFLAG(IS_ANDROID)
++  if (base::CommandLine::ForCurrentProcess()->HasSwitch(
++          kAgentBrowserProductProfileSwitch)) {
++    return embedder_support::GetUserAgent();
++  }
++#endif
+   const auto custom_ua = embedder_support::GetUserAgentFromCommandLine();
+   if (custom_ua.has_value()) {
+     return custom_ua.value();
+@@ -797,6 +830,12 @@
+ }
+ 
+ blink::UserAgentMetadata ShellContentBrowserClient::GetUserAgentMetadata() {
++#if BUILDFLAG(IS_ANDROID)
++  if (base::CommandLine::ForCurrentProcess()->HasSwitch(
++          kAgentBrowserProductProfileSwitch)) {
++    return embedder_support::GetUserAgentMetadata(false);
++  }
++#endif
+   return GetShellUserAgentMetadata();
+ }
+ 
+diff --git a/content/shell/browser/shell_content_browser_client.h b/content/shell/browser/shell_content_browser_client.h
+--- a/content/shell/browser/shell_content_browser_client.h
++++ b/content/shell/browser/shell_content_browser_client.h
+@@ -59,7 +59,11 @@
+   bool AreIsolatedWebAppsEnabled(BrowserContext* browser_context) override;
+   void AppendExtraCommandLineSwitches(base::CommandLine* command_line,
+                                       int child_process_id) override;
++  std::string GetApplicationLocale() override;
+   std::string GetAcceptLangs(BrowserContext* context) override;
++  void UpdateRendererPreferencesForWorker(
++      BrowserContext* browser_context,
++      blink::RendererPreferences* out_prefs) override;
+   std::string GetDefaultDownloadName() override;
+   std::unique_ptr<WebContentsViewDelegate> GetWebContentsViewDelegate(
+       WebContents* web_contents) override;

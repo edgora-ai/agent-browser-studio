@@ -88,6 +88,9 @@ public final class ProfileSpec {
     private static String zone(String value) {
         CoreValidation.text(value, "INVALID_TIME_ZONE");
         try {
+            // Deliberately lenient: offset shapes are storable by contract and rejected at the
+            // native launch config (UNSUPPORTED_NATIVE_TIME_ZONE). The editor enforces named
+            // IANA zones at the UI layer, which is where users can be steered.
             return ZoneId.of(value).getId();
         } catch (DateTimeException e) {
             throw CoreValidation.error("INVALID_TIME_ZONE", "A real ZoneId is required");

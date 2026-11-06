@@ -9,6 +9,7 @@ import("//build/config/android/rules.gni")
 # product/core files, not a source-tree glob at build time.
 template("agent_browser_product_apk") {
   assert(is_android)
+  not_needed(invoker, "*")
   import("//content/shell/android/agent_browser_product/product_sources.gni")
   _product = "//content/shell/android/agent_browser_product"
   _prefix = target_name
@@ -32,7 +33,7 @@ template("agent_browser_product_apk") {
     renaming_destinations = agent_browser_product_asset_destinations
   }
 
-  android_library("${_prefix}__java") {
+  android_library("${_prefix}_java") {
     testonly = true
     resources_package = "com.ahoo.abs.android"
     sources = agent_browser_product_java_sources
@@ -40,8 +41,8 @@ template("agent_browser_product_apk") {
       ":${_prefix}__resources",
       "//base:base_java",
       "//build/android:build_java",
+      "//components/embedder_support/android:view_java",
       "//content/public/android:content_java",
-      "//content/shell/android:content_shell_apk_java",
       "//content/shell/android:content_shell_java",
       "//net/android:net_java",
       "//ui/android:ui_java",
@@ -51,7 +52,12 @@ template("agent_browser_product_apk") {
 
   android_apk(target_name) {
     testonly = true
-    apk_name = "AgentBrowserProduct"
+    apk_name = "ABSBrowser"
+    # The release-packaging overlay forwards this per-target override to aapt2;
+    # the manifest alone is otherwise overridden in non-official Chromium builds.
+    debuggable = false
+    version_code = "10000"
+    version_name = "1.0.0"
     android_manifest = _manifest
     android_manifest_dep = ":${_prefix}__manifest"
     min_sdk_version = 29
@@ -60,12 +66,10 @@ template("agent_browser_product_apk") {
         [ "//content/shell/android:libagent_browser_product__jni_registration" ]
     deps = [
       ":${_prefix}__assets",
-      ":${_prefix}__java",
-      "//base:base_java_test_support",
+      ":${_prefix}_java",
       "//components/crash/android:java",
       "//components/crash/core/app:chrome_crashpad_handler_named_as_so",
       "//components/metrics:metrics_java",
-      "//content/public/test/android:android_test_message_pump_support_java",
       "//content/shell/android:content_shell_assets",
       "//media/capture/video/android:capture_java",
       "//services/shape_detection:shape_detection_java",
