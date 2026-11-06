@@ -27,14 +27,27 @@ GCLIENT_ROOT="$(normalize_path "${1:-$HOME/workspace/chromium-build-152}")"
 ARCHIVE="$(normalize_path "${2:-$GCLIENT_ROOT/chromium-$CHROMIUM_VERSION.tar.gz}")"
 CHROMIUM_SRC="$GCLIENT_ROOT/src"
 EXPECTED_ARCHIVE_SHA256="${CHROMIUM_ARCHIVE_SHA256:-}"
-if [[ "$CHROMIUM_VERSION" == "152.0.7977.65" && "$CHROMIUM_COMMIT" == "fc4d67f1788019a27e32511137ceccbd2fafdaaa" ]]; then
-  trusted_sha256="1a544857555a0c391753e7f9f3016cc07b0288d9da02260c451aa9082b305066"
-  if [[ -n "$EXPECTED_ARCHIVE_SHA256" && "$EXPECTED_ARCHIVE_SHA256" != "$trusted_sha256" ]]; then
-    echo "error: configured SHA-256 does not match the trusted Chromium 152.0.7977.65 archive" >&2
+case "$CHROMIUM_VERSION:$CHROMIUM_COMMIT" in
+  152.0.7977.65:fc4d67f1788019a27e32511137ceccbd2fafdaaa)
+    trusted_sha256="1a544857555a0c391753e7f9f3016cc07b0288d9da02260c451aa9082b305066"
+    ;;
+  152.0.7977.72:026bb13a93d60e7adfefa2bbf58d6f57c2d335cc)
+    # Entire archive authenticated with verify-source-archive.py on 2026-11-01:
+    # raw Git commit -> root 871b7886d768a863341e9212fe29548555137adc,
+    # including modes, symlinks, omitted gitlinks and one exact tracked CRLF
+    # export (--allow-reviewed-git-archive-exports). This is not a download pin.
+    trusted_sha256="478c17ee1c0021b22b9ff184ee416b19b35a9e141b2da1b8206074947414a45f"
+    ;;
+  *)
+    echo "error: no authenticated archive is registered for Chromium $CHROMIUM_VERSION ($CHROMIUM_COMMIT)" >&2
     exit 2
-  fi
-  EXPECTED_ARCHIVE_SHA256="$trusted_sha256"
+    ;;
+esac
+if [[ -n "$EXPECTED_ARCHIVE_SHA256" && "$EXPECTED_ARCHIVE_SHA256" != "$trusted_sha256" ]]; then
+  echo "error: configured SHA-256 does not match the trusted Chromium $CHROMIUM_VERSION archive" >&2
+  exit 2
 fi
+EXPECTED_ARCHIVE_SHA256="$trusted_sha256"
 
 for command_name in git tar; do
   if ! command -v "$command_name" >/dev/null 2>&1; then

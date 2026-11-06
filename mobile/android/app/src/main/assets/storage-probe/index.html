@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'none'; frame-src 'none'; worker-src 'none'; img-src 'none'; font-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <meta name="referrer" content="no-referrer">
+  <title>合成存储验证</title>
+  <link rel="stylesheet" href="probe.css">
+  <script src="probe.js" defer></script>
+</head>
+<body>
+  <main>
+    <h1>合成存储验证</h1>
+    <p>仅 App 内置页面，不访问外网或真实账号。首次打开只读检索，不补写缺失值。</p>
+    <p>“写入”只替换本页面自己的随机样本；不会清空其他网站数据。正常退出后重新进入，比较 Cookie、LocalStorage、IndexedDB 原值。</p>
+    <div class="actions">
+      <button id="read" type="button">只读检查</button>
+      <button id="write" type="button">写入合成样本</button>
+    </div>
+    <p id="status" role="status" aria-live="polite">等待只读检索。</p>
+    <pre id="result" tabindex="0" aria-label="存储样本结果">尚无结果。</pre>
+    <footer>不证明完整存储持久性、真实登录态、崩溃恢复、CacheStorage 或 Service Worker；普通浏览仍未开放。</footer>
+  </main>
+</body>
+</html>

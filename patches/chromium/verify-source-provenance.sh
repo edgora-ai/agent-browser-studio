@@ -38,6 +38,14 @@ case "$base_commit" in
   fc4d67f1788019a27e32511137ceccbd2fafdaaa)
     trusted_archive_sha256="1a544857555a0c391753e7f9f3016cc07b0288d9da02260c451aa9082b305066"
     ;;
+  026bb13a93d60e7adfefa2bbf58d6f57c2d335cc)
+    # Full archive authentication, 2026-11-01: raw pinned Git commit ->
+    # root 871b7886d768a863341e9212fe29548555137adc; 497012 files,
+    # 19 symlinks, 270 authenticated omitted gitlinks, and one exact tracked
+    # eol=crlf export. Reproduce with verify-source-archive.py and its explicit
+    # --allow-reviewed-git-archive-exports option; never trust a new digest alone.
+    trusted_archive_sha256="478c17ee1c0021b22b9ff184ee416b19b35a9e141b2da1b8206074947414a45f"
+    ;;
   *)
     echo "error: untrusted Chromium archive base commit: $base_commit" >&2
     exit 2

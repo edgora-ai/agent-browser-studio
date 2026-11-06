@@ -1,0 +1,71 @@
+diff --git a/third_party/blink/renderer/platform/graphics/image_data_buffer.cc b/third_party/blink/renderer/platform/graphics/image_data_buffer.cc
+--- a/third_party/blink/renderer/platform/graphics/image_data_buffer.cc
++++ b/third_party/blink/renderer/platform/graphics/image_data_buffer.cc
+@@ -32,7 +32,7 @@
+ 
+ #include "third_party/blink/renderer/platform/graphics/image_data_buffer.h"
+ 
+-#include <bit>
++#include <array>
+ #include <cstring>
+ 
+ #include "base/compiler_specific.h"
+@@ -153,38 +153,47 @@
+       !pixmap.writable_addr()) {
+     return;
+   }
++  const auto pixels = gfx::SkPixmapToWritableSpan(pixmap);
++  if (pixels.empty())
++    return;
+ 
+   for (int y = 0; y < pixmap.height(); ++y) {
+-    auto* row = static_cast<uint8_t*>(pixmap.writable_addr(0, y));
++    const auto row = pixels.subspan(
++        static_cast<size_t>(y) * pixmap.rowBytes(),
++        static_cast<size_t>(pixmap.width()) * bytes_per_pixel);
+     for (int x = 0; x < pixmap.width(); ++x) {
++      auto pixel = row.subspan(static_cast<size_t>(x) * bytes_per_pixel,
++                               bytes_per_pixel);
+       uint64_t hash = config.canvas_noise_seed();
+       hash ^= static_cast<uint64_t>(y) << 32 | static_cast<uint32_t>(x);
+       hash = MixCanvasNoise(hash);
+       const int channel = static_cast<int>(hash % 3);
+       const uint32_t desired_bit = static_cast<uint32_t>((hash >> 8) & 1);
+       if (bytes_per_pixel == 4) {
+-        uint8_t* pixel = row + x * 4;
+         if (pixel[3] == 0)
+           continue;
+         pixel[channel] = static_cast<uint8_t>(
+             (pixel[channel] & 0xfeU) | desired_bit);
+       } else if (bytes_per_pixel == 8) {
+-        auto* pixel = reinterpret_cast<uint16_t*>(row + x * 8);
+-        if ((pixel[3] & 0x7fff) == 0)
+-          continue;
+-        uint16_t& value = pixel[channel];
++        std::array<uint16_t, 4> channels;
++        base::as_writable_byte_span(channels).copy_from(pixel);
++        if ((channels[3] & 0x7fff) == 0)
++          continue;
++        uint16_t& value = channels[channel];
+         if ((value & 0x7c00) == 0x7c00)
+           continue;
+         value = static_cast<uint16_t>((value & 0xfffeU) | desired_bit);
++        pixel.copy_from(base::as_byte_span(channels));
+       } else {
+-        auto* pixel = reinterpret_cast<float*>(row + x * 16);
+-        if (pixel[3] == 0.0f)
+-          continue;
+-        uint32_t value = std::bit_cast<uint32_t>(pixel[channel]);
++        std::array<uint32_t, 4> channels;
++        base::as_writable_byte_span(channels).copy_from(pixel);
++        if ((channels[3] & 0x7fffffffU) == 0)
++          continue;
++        uint32_t& value = channels[channel];
+         if ((value & 0x7f800000U) == 0x7f800000U)
+           continue;
+         value = (value & 0xfffffffeU) | desired_bit;
+-        pixel[channel] = std::bit_cast<float>(value);
++        pixel.copy_from(base::as_byte_span(channels));
+       }
+     }
+   }

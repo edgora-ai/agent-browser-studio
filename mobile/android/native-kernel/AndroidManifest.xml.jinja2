@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.ahoo.abs.browser">
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <application
+        android:name="com.ahoo.abs.android.nativekernel.NativeBrowserApplication"
+        android:allowBackup="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="false"
+        android:debuggable="false"
+        android:icon="@drawable/ic_launcher"
+        android:label="@string/app_name"
+        android:supportsRtl="true"
+        android:theme="@style/AppTheme"
+        android:usesCleartextTraffic="false"
+        android:zygotePreloadName="org.chromium.content_public.app.ZygotePreload"
+        android:zygotePreloadNativeLib="libagent_browser_product.so">
+        <activity android:name="com.ahoo.abs.android.MainActivity" android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+        <activity
+            android:name="com.ahoo.abs.android.nativekernel.NativeBrowserActivity"
+            android:configChanges="orientation|screenSize|keyboardHidden|uiMode"
+            android:exported="false"
+            android:hardwareAccelerated="true"
+            android:process=":browser" />
+        <service
+            android:name="com.ahoo.abs.android.browser.BrowserControlService"
+            android:exported="false"
+            android:process=":browser"
+            android:stopWithTask="false" />
+        {% set num_sandboxed_services = 40 %}
+        <meta-data android:name="org.chromium.content.browser.NUM_SANDBOXED_SERVICES"
+            android:value="{{ num_sandboxed_services }}" />
+        {% for i in range(num_sandboxed_services) %}
+        <service android:name="org.chromium.content.app.SandboxedProcessService{{ i }}"
+            android:process=":sandboxed_process{{ i }}"
+            {% if i == 0 %}android:useAppZygote="true"{% endif %}
+            android:isolatedProcess="true"
+            android:exported="false" />
+        {% endfor %}
+        {% for i in range(2) %}
+        <service android:name="org.chromium.content.app.NativeOnlySandboxedProcessService{{ i }}"
+            android:nativeService="true"
+            android:process=":sandboxed_process{{ i }}"
+            {% if i == 0 %}android:useAppZygote="true"{% endif %}
+            android:isolatedProcess="true"
+            android:exported="false">
+            <property android:name="android.app.PROPERTY_NATIVE_SERVICE_LIBRARY_NAME"
+                android:value="libagent_browser_product.so" />
+            <property android:name="android.app.PROPERTY_NATIVE_SERVICE_FUNCTION_NAME"
+                android:value="NativeChildProcessService_onCreate" />
+        </service>
+        {% endfor %}
+        {% set num_privileged_services = 5 %}
+        <meta-data android:name="org.chromium.content.browser.NUM_PRIVILEGED_SERVICES"
+            android:value="{{ num_privileged_services }}" />
+        {% for i in range(num_privileged_services) %}
+        <service android:name="org.chromium.content.app.PrivilegedProcessService{{ i }}"
+            android:process=":privileged_process{{ i }}"
+            android:isolatedProcess="false"
+            android:exported="false" />
+        {% endfor %}
+    </application>
+</manifest>

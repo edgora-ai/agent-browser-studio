@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; frame-src https://appassets.androidplatform.net/assets/identity-probe/frame.html https://frames.abs-browser.invalid/assets/identity-probe/frame.html; worker-src 'self'; child-src 'self' https://frames.abs-browser.invalid/assets/identity-probe/frame.html; connect-src 'none'; img-src 'none'; font-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <meta name="referrer" content="no-referrer">
+  <title>内核身份自检</title>
+  <link rel="stylesheet" href="probe.css">
+  <script src="timing.js" defer></script>
+  <script src="readings.js" defer></script>
+  <script src="protocol.js" defer></script>
+  <script src="channels.js" defer></script>
+  <script src="contexts.js" defer></script>
+  <script src="service-client.js" defer></script>
+  <script src="main.js" defer></script>
+</head>
+<body>
+  <main>
+    <header>
+      <p class="eyebrow">ABS / 本地诊断</p>
+      <h1>内核身份自检</h1>
+      <p class="mode">只读采集 · 六种上下文</p>
+    </header>
+    <p class="notice">仅内核身份自检，不代表Ping0或网络无泄漏</p>
+    <p class="description">直接读取当前内核，不改写身份。缺失为 null，不支持与失败分别记录。</p>
+    <section aria-labelledby="result-heading">
+      <h2 id="result-heading">采集结果</h2>
+      <p id="status" role="status" aria-live="polite">等待启动自检。</p>
+      <pre id="result" tabindex="0" aria-label="身份自检 JSON 结果">尚无结果。</pre>
+    </section>
+    <footer>仅使用 App 内置资源。网络请求头、代理路由及硬件模拟均未验证。</footer>
+    <noscript>JavaScript 不可用，无法执行身份自检。</noscript>
+  </main>
+</body>
+</html>

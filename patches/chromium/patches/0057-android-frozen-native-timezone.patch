@@ -1,0 +1,978 @@
+diff --git a/content/shell/BUILD.gn b/content/shell/BUILD.gn
+--- a/content/shell/BUILD.gn
++++ b/content/shell/BUILD.gn
+@@ -369,6 +369,7 @@
+     "//services/test/echo/public/mojom",
+     "//third_party/blink/public:blink",
+     "//third_party/blink/public:image_resources",
++    "//third_party/blink/public/common",
+     "//third_party/blink/public:resources",
+     "//third_party/blink/public/strings",
+     "//third_party/inspector_protocol:crdtp",
+diff --git a/content/shell/android/BUILD.gn b/content/shell/android/BUILD.gn
+--- a/content/shell/android/BUILD.gn
++++ b/content/shell/android/BUILD.gn
+@@ -6,6 +6,13 @@
+ import("//build/config/android/rules.gni")
+ import("//third_party/icu/config.gni")
+ import("//third_party/jni_zero/jni_zero.gni")
++import("//v8/gni/v8.gni")
++
++declare_args() {
++  # Empty keeps the ordinary content shell unchanged. Only packaged synthetic
++  # fixtures are accepted; never a writable device path or arbitrary argv.
++  agent_browser_timezone_fixture = ""
++}
+ 
+ content_shell_manifest =
+     "$target_gen_dir/content_shell_manifest/AndroidManifest.xml"
+@@ -226,6 +233,61 @@
+   command_line_flags_file = "content-shell-command-line"
+ }
+ 
++if (agent_browser_timezone_fixture != "") {
++  assert(agent_browser_timezone_fixture == "native-control" ||
++             agent_browser_timezone_fixture == "new-york" ||
++             agent_browser_timezone_fixture == "shanghai",
++         "Choose native-control, new-york or shanghai for the internal fixture.")
++  assert(v8_enable_i18n_support, "Native timezone fixtures require V8 Intl/ICU.")
++
++  jinja_template("agent_browser_timezone_manifest") {
++    testonly = true
++    input = "shell_apk/AndroidManifest.xml.jinja2"
++    output = "$target_gen_dir/agent_browser_timezone/AndroidManifest.xml"
++    variables = [
++      "manifest_package=com.ahoo.abs.android.native_timezone.preview",
++      "library_name=content_shell_content_view",
++      "application_class=org.chromium.content_shell_apk.AgentBrowserTimezoneApplication",
++      "activity_class=org.chromium.content_shell_apk.AgentBrowserTimezoneActivity",
++    ]
++  }
++
++  android_library("agent_browser_timezone_java") {
++    testonly = true
++    deps = [
++      ":content_shell_apk_java",
++      "//base:base_java",
++    ]
++    sources = [
++      "shell_apk/src/org/chromium/content_shell_apk/AgentBrowserTimezoneActivity.java",
++      "shell_apk/src/org/chromium/content_shell_apk/AgentBrowserTimezoneApplication.java",
++    ]
++  }
++
++  android_assets("agent_browser_timezone_fixture_assets") {
++    testonly = true
++    renaming_sources = [
++      "shell_apk/timezone_fixtures/$agent_browser_timezone_fixture.json",
++    ]
++    renaming_destinations = [ "agent_browser_timezone_fixture.json" ]
++  }
++
++  content_shell_apk_tmpl("agent_browser_timezone_apk") {
++    target_type = "android_apk"
++    apk_name = "AgentBrowserNativeTimezone"
++    android_manifest =
++        "$target_gen_dir/agent_browser_timezone/AndroidManifest.xml"
++    android_manifest_dep = ":agent_browser_timezone_manifest"
++    shared_libraries = [ ":libcontent_shell_content_view" ]
++    srcjar_deps = [ ":libcontent_shell_content_view__jni_registration" ]
++    deps = [
++      ":agent_browser_timezone_java",
++      ":agent_browser_timezone_fixture_assets",
++    ]
++    # Deliberately no command_line_flags_file: configuration is APK-owned.
++  }
++}
++
+ content_shell_apk_tmpl("content_shell_test_apk") {
+   target_type = "instrumentation_test_apk"
+   apk_name = "ContentShellTest"
+diff --git a/content/shell/android/shell_apk/AndroidManifest.xml.jinja2 b/content/shell/android/shell_apk/AndroidManifest.xml.jinja2
+--- a/content/shell/android/shell_apk/AndroidManifest.xml.jinja2
++++ b/content/shell/android/shell_apk/AndroidManifest.xml.jinja2
+@@ -26,12 +26,12 @@
+         <package android:name="org.chromium.ui.accessibility.testservice" />
+     </queries>
+ 
+-    <application android:name="org.chromium.content_shell_apk.ContentShellApplication"
++    <application android:name="{{ application_class | default('org.chromium.content_shell_apk.ContentShellApplication') }}"
+             android:icon="@mipmap/app_icon"
+             android:zygotePreloadName="org.chromium.content_public.app.ZygotePreload"
+             android:zygotePreloadNativeLib="lib{{ library_name }}.so"
+             android:label="{% block application_label %}Content Shell{% endblock %}">
+-        <activity android:name="org.chromium.content_shell_apk.ContentShellActivity"
++        <activity android:name="{{ activity_class | default('org.chromium.content_shell_apk.ContentShellActivity') }}"
+                   android:launchMode="singleTask"
+                   android:theme="@android:style/Theme.Holo.Light.NoActionBar"
+                   android:configChanges="orientation|keyboardHidden|keyboard|screenSize"
+diff --git a/content/shell/android/shell_apk/src/org/chromium/content_shell_apk/AgentBrowserTimezoneActivity.java b/content/shell/android/shell_apk/src/org/chromium/content_shell_apk/AgentBrowserTimezoneActivity.java
+new file mode 100644
+--- /dev/null
++++ b/content/shell/android/shell_apk/src/org/chromium/content_shell_apk/AgentBrowserTimezoneActivity.java
+@@ -0,0 +1,29 @@
++// Copyright 2026 The Agent Browser Studio Authors
++// Use of this source code is governed by a BSD-style license.
++
++package org.chromium.content_shell_apk;
++
++import android.content.Intent;
++import android.os.Bundle;
++
++/** The fixture cannot accept configuration through initial or subsequent Intents. */
++public final class AgentBrowserTimezoneActivity extends ContentShellActivity {
++    private void validateStartupIntent(Intent intent) {
++        if (intent != null && intent.hasExtra(COMMAND_LINE_ARGS_KEY)) {
++            throw new SecurityException("ABS_TIMEZONE_INTENT_COMMAND_LINE_REJECTED");
++        }
++        ((AgentBrowserTimezoneApplication) getApplication()).verifyFrozenCommandLine();
++    }
++
++    @Override
++    protected void onCreate(Bundle savedInstanceState) {
++        validateStartupIntent(getIntent());
++        super.onCreate(savedInstanceState);
++    }
++
++    @Override
++    protected void onNewIntent(Intent intent) {
++        validateStartupIntent(intent);
++        super.onNewIntent(intent);
++    }
++}
+diff --git a/content/shell/android/shell_apk/src/org/chromium/content_shell_apk/AgentBrowserTimezoneApplication.java b/content/shell/android/shell_apk/src/org/chromium/content_shell_apk/AgentBrowserTimezoneApplication.java
+new file mode 100644
+--- /dev/null
++++ b/content/shell/android/shell_apk/src/org/chromium/content_shell_apk/AgentBrowserTimezoneApplication.java
+@@ -0,0 +1,153 @@
++// Copyright 2026 The Agent Browser Studio Authors
++// Use of this source code is governed by a BSD-style license.
++
++package org.chromium.content_shell_apk;
++
++import android.app.Application;
++import android.content.Context;
++import android.util.Base64;
++
++import org.chromium.base.CommandLine;
++import org.chromium.base.Log;
++
++import org.json.JSONObject;
++
++import java.io.ByteArrayOutputStream;
++import java.io.InputStream;
++import java.nio.charset.StandardCharsets;
++import java.security.MessageDigest;
++import java.util.UUID;
++
++/** Internal native-kernel fixture only; no Intent or writable command-line-file configuration. */
++public final class AgentBrowserTimezoneApplication extends ContentShellApplication {
++    private static final String TAG = "ABSTimezone";
++    private static final String CONFIG_SWITCH = "agent-browser-fingerprint-config";
++    private static final String REQUIRED_SWITCH = "agent-browser-timezone-required";
++    private static final String ASSET = "agent_browser_timezone_fixture.json";
++    private static final String UUID_V4 =
++            "[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}";
++    private String mEncoded = "";
++    private String mProfileId = "";
++
++    @Override
++    protected void attachBaseContext(Context base) {
++        // This is intentionally before even the parent Application's LibraryLoader access.
++        // Child services receive the frozen argv from native child-process launch instead.
++        if (base.getPackageName().equals(Application.getProcessName())) {
++            freezeBeforeNative(base);
++        }
++        super.attachBaseContext(base);
++    }
++
++    private void freezeBeforeNative(Context base) {
++        if (CommandLine.isInitialized() || !mEncoded.isEmpty()) {
++            throw new IllegalStateException("ABS_TIMEZONE_COMMAND_LINE_ALREADY_INITIALIZED");
++        }
++        try {
++            ByteArrayOutputStream bytes = new ByteArrayOutputStream();
++            try (InputStream input = base.getAssets().open(ASSET)) {
++                byte[] buffer = new byte[512];
++                int length;
++                while ((length = input.read(buffer)) != -1) {
++                    if (bytes.size() + length > 2048) {
++                        throw new IllegalArgumentException("ABS_TIMEZONE_ASSET_TOO_LARGE");
++                    }
++                    bytes.write(buffer, 0, length);
++                }
++            }
++            byte[] inputBytes = bytes.toByteArray();
++            for (byte value : inputBytes) {
++                if (value < 32 || value > 126) {
++                    throw new IllegalArgumentException("ABS_TIMEZONE_ASSET_NOT_CANONICAL_ASCII");
++                }
++            }
++            String input = new String(inputBytes, StandardCharsets.UTF_8);
++            JSONObject fixture = new JSONObject(input);
++            Object schema = fixture.get("schemaVersion");
++            Object modeValue = fixture.get("mode");
++            Object profileValue = fixture.get("profileId");
++            if (!(schema instanceof Integer) || ((Integer) schema) != 1
++                    || !(modeValue instanceof String) || !(profileValue instanceof String)) {
++                throw new IllegalArgumentException("ABS_TIMEZONE_ASSET_SCHEMA");
++            }
++            String mode = (String) modeValue;
++            mProfileId = (String) profileValue;
++            boolean override = mode.equals("timezone-only");
++            if (!mProfileId.matches(UUID_V4)
++                    || (!override && !mode.equals("native-control"))
++                    || fixture.length() != (override ? 4 : 3)) {
++                throw new IllegalArgumentException("ABS_TIMEZONE_ASSET_FIELDS");
++            }
++            String timezone = "";
++            if (override) {
++                Object timezoneValue = fixture.get("timezone");
++                if (!(timezoneValue instanceof String)) {
++                    throw new IllegalArgumentException("ABS_TIMEZONE_ASSET_TIMEZONE");
++                }
++                timezone = (String) timezoneValue;
++                if (timezone.length() > 128 || !timezone.matches("[A-Za-z0-9/_+\\-]+")) {
++                    throw new IllegalArgumentException("ABS_TIMEZONE_ASSET_TIMEZONE");
++                }
++            }
++            String tail = override ? ",\"timezone\":\"" + timezone + "\"}" : "}";
++            String suffix = "\"mode\":\"" + mode + "\",\"profileId\":\"" + mProfileId
++                    + "\",\"schemaVersion\":1" + tail;
++            if (!input.equals("{" + suffix)) {
++                throw new IllegalArgumentException("ABS_TIMEZONE_ASSET_NOT_CANONICAL_JSON");
++            }
++            String json = "{\"launchId\":\"" + UUID.randomUUID() + "\"," + suffix;
++            byte[] payload = json.getBytes(StandardCharsets.UTF_8);
++            mEncoded = Base64.encodeToString(
++                    payload, Base64.URL_SAFE | Base64.NO_WRAP | Base64.NO_PADDING);
++            CommandLine.init(new String[] {
++                    "agent-browser-timezone-fixture",
++                    "--" + CONFIG_SWITCH + "=" + mEncoded,
++                    "--" + REQUIRED_SWITCH
++            });
++            verifyFrozenCommandLine();
++            byte[] digest = MessageDigest.getInstance("SHA-256").digest(payload);
++            StringBuilder hex = new StringBuilder(64);
++            for (byte value : digest) {
++                hex.append("0123456789abcdef".charAt((value & 255) >>> 4));
++                hex.append("0123456789abcdef".charAt(value & 15));
++            }
++            Log.i(TAG, "ABS_ANDROID_TIMEZONE_V1 frozen=1 input_sha256=%s pid=%d",
++                    hex.toString(), android.os.Process.myPid());
++        } catch (Exception failure) {
++            // No payload, arbitrary exception text, path or Intent values in the receipt.
++            throw new IllegalStateException(
++                    "ABS_TIMEZONE_STARTUP_REJECTED:" + failure.getClass().getSimpleName());
++        }
++    }
++
++    public void verifyFrozenCommandLine() {
++        if (mEncoded.isEmpty() || !CommandLine.isInitialized()
++                || !CommandLine.getInstance().hasSwitch(REQUIRED_SWITCH)
++                || !mEncoded.equals(CommandLine.getInstance().getSwitchValue(CONFIG_SWITCH))
++                || CommandLine.getInstance().hasSwitch("roxy-fingerprint-config")
++                || CommandLine.getInstance().hasSwitch("js-flags")) {
++            throw new IllegalStateException("ABS_TIMEZONE_FROZEN_COMMAND_LINE_CHANGED");
++        }
++    }
++
++    @Override
++    public void initCommandLine() {
++        verifyFrozenCommandLine();  // Never repair or replace a late/missing configuration.
++    }
++
++    @Override
++    protected String getPrivateDataDirectorySuffix() {
++        if (mProfileId.isEmpty()) {
++            throw new IllegalStateException("ABS_TIMEZONE_PROFILE_NOT_FROZEN");
++        }
++        return "abs_timezone_" + mProfileId.replace("-", "");
++    }
++
++    @Override
++    public void onCreate() {
++        if (getPackageName().equals(Application.getProcessName())) {
++            verifyFrozenCommandLine();
++        }
++        super.onCreate();
++    }
++}
+diff --git a/content/shell/android/shell_apk/src/org/chromium/content_shell_apk/ContentShellApplication.java b/content/shell/android/shell_apk/src/org/chromium/content_shell_apk/ContentShellApplication.java
+--- a/content/shell/android/shell_apk/src/org/chromium/content_shell_apk/ContentShellApplication.java
++++ b/content/shell/android/shell_apk/src/org/chromium/content_shell_apk/ContentShellApplication.java
+@@ -36,7 +36,7 @@
+                                 ? LibraryProcessType.PROCESS_BROWSER
+                                 : LibraryProcessType.PROCESS_CHILD);
+         if (isBrowserProcess) {
+-            PathUtils.setPrivateDataDirectorySuffix(PRIVATE_DATA_DIRECTORY_SUFFIX);
++            PathUtils.setPrivateDataDirectorySuffix(getPrivateDataDirectorySuffix());
+             ApplicationStatus.initialize(this);
+         }
+     }
+@@ -50,6 +50,10 @@
+         }
+     }
+ 
++    protected String getPrivateDataDirectorySuffix() {
++        return PRIVATE_DATA_DIRECTORY_SUFFIX;
++    }
++
+     public void initCommandLine() {
+         if (!CommandLine.isInitialized()) {
+             CommandLine.initFromFile(COMMAND_LINE_FILE);
+diff --git a/content/shell/android/shell_apk/timezone_fixtures/native-control.json b/content/shell/android/shell_apk/timezone_fixtures/native-control.json
+new file mode 100644
+--- /dev/null
++++ b/content/shell/android/shell_apk/timezone_fixtures/native-control.json
+@@ -0,0 +1 @@
++{"mode":"native-control","profileId":"33333333-3333-4333-8333-333333333333","schemaVersion":1}
+\ No newline at end of file
+diff --git a/content/shell/android/shell_apk/timezone_fixtures/new-york.json b/content/shell/android/shell_apk/timezone_fixtures/new-york.json
+new file mode 100644
+--- /dev/null
++++ b/content/shell/android/shell_apk/timezone_fixtures/new-york.json
+@@ -0,0 +1 @@
++{"mode":"timezone-only","profileId":"11111111-1111-4111-8111-111111111111","schemaVersion":1,"timezone":"America/New_York"}
+\ No newline at end of file
+diff --git a/content/shell/android/shell_apk/timezone_fixtures/shanghai.json b/content/shell/android/shell_apk/timezone_fixtures/shanghai.json
+new file mode 100644
+--- /dev/null
++++ b/content/shell/android/shell_apk/timezone_fixtures/shanghai.json
+@@ -0,0 +1 @@
++{"mode":"timezone-only","profileId":"44444444-4444-4444-8444-444444444444","schemaVersion":1,"timezone":"Asia/Shanghai"}
+\ No newline at end of file
+diff --git a/content/shell/browser/agent_browser_android_timezone_browsertest.cc b/content/shell/browser/agent_browser_android_timezone_browsertest.cc
+new file mode 100644
+--- /dev/null
++++ b/content/shell/browser/agent_browser_android_timezone_browsertest.cc
+@@ -0,0 +1,113 @@
++// Copyright 2026 The Agent Browser Studio Authors
++// Use of this source code is governed by a BSD-style license.
++
++#include "build/build_config.h"
++
++#if BUILDFLAG(IS_ANDROID)
++#include <string>
++
++#include "base/base64url.h"
++#include "base/command_line.h"
++#include "content/public/common/content_switches.h"
++#include "content/public/test/browser_test.h"
++#include "content/public/test/browser_test_utils.h"
++#include "content/public/test/content_browser_test.h"
++#include "content/shell/browser/shell.h"
++#include "content/shell/browser/shell_content_browser_client.h"
++#include "net/test/embedded_test_server/embedded_test_server.h"
++#include "third_party/blink/public/common/agent_browser_android_timezone_config.h"
++#include "third_party/blink/public/common/roxy_fingerprint_config.h"
++
++namespace content {
++namespace {
++
++class AgentBrowserAndroidTimezoneBrowserTest : public ContentBrowserTest {
++ public:
++  static std::string EncodedConfig() {
++    constexpr char kJson[] =
++        "{\"launchId\":\"22222222-2222-4222-8222-222222222222\","
++        "\"mode\":\"timezone-only\","
++        "\"profileId\":\"11111111-1111-4111-8111-111111111111\","
++        "\"schemaVersion\":1,\"timezone\":\"America/New_York\"}";
++    std::string encoded;
++    base::Base64UrlEncode(kJson, base::Base64UrlEncodePolicy::OMIT_PADDING,
++                          &encoded);
++    return encoded;
++  }
++
++  void SetUpCommandLine(base::CommandLine* command_line) override {
++    command_line->AppendSwitchASCII(
++        blink::AgentBrowserAndroidTimezoneConfig::kConfigSwitch,
++        EncodedConfig());
++    command_line->AppendSwitch(
++        blink::AgentBrowserAndroidTimezoneConfig::kRequiredSwitch);
++  }
++};
++
++IN_PROC_BROWSER_TEST_F(AgentBrowserAndroidTimezoneBrowserTest,
++                       CopiesExactPayloadOnlyToRendererCommandLines) {
++  ASSERT_TRUE(blink::AgentBrowserAndroidTimezoneConfig::Get().timezone_only());
++  EXPECT_FALSE(blink::RoxyFingerprintConfig::Get().enabled());
++  auto* client = ShellContentBrowserClient::Get();
++  ASSERT_TRUE(client);
++  for (const char* type : {switches::kRendererProcess, switches::kGpuProcess,
++                           switches::kUtilityProcess}) {
++    base::CommandLine child(base::CommandLine::NO_PROGRAM);
++    child.AppendSwitchASCII(switches::kProcessType, type);
++    client->AppendExtraCommandLineSwitches(&child, 0);
++    const bool renderer = std::string_view(type) == switches::kRendererProcess;
++    EXPECT_EQ(renderer, child.HasSwitch(
++        blink::AgentBrowserAndroidTimezoneConfig::kConfigSwitch));
++    EXPECT_EQ(renderer, child.HasSwitch(
++        blink::AgentBrowserAndroidTimezoneConfig::kRequiredSwitch));
++    if (renderer) {
++      EXPECT_EQ(EncodedConfig(), child.GetSwitchValueASCII(
++          blink::AgentBrowserAndroidTimezoneConfig::kConfigSwitch));
++    }
++  }
++}
++
++IN_PROC_BROWSER_TEST_F(AgentBrowserAndroidTimezoneBrowserTest,
++                       NativeWindowAndRecreatedDedicatedWorkers) {
++  embedded_test_server()->ServeFilesFromSourceDirectory("content/test/data");
++  ASSERT_TRUE(embedded_test_server()->Start());
++  ASSERT_TRUE(NavigateToURL(shell(), embedded_test_server()->GetURL("/title1.html")));
++  EXPECT_EQ(true, EvalJs(shell(), R"JS(
++    (async () => {
++      const sample = () => [
++        new Intl.DateTimeFormat().resolvedOptions().timeZone,
++        new Date('2026-01-15T12:00:00Z').getTimezoneOffset(),
++        new Date('2026-07-15T12:00:00Z').getTimezoneOffset()
++      ];
++      const expected = JSON.stringify(['America/New_York', 300, 240]);
++      if (JSON.stringify(sample()) !== expected) return false;
++      const source = 'const first = (' + sample.toString() +
++          ')(); onmessage = () => postMessage(first);';
++      const url = URL.createObjectURL(new Blob([source], {type: 'text/javascript'}));
++      try {
++        for (let i = 0; i < 2; i++) {
++          const value = await new Promise((resolve, reject) => {
++            const worker = new Worker(url);
++            const finish = (result, error) => {
++              clearTimeout(timer);
++              worker.terminate();
++              if (error) reject(new Error(error)); else resolve(result);
++            };
++            const timer = setTimeout(() => finish(null, 'worker timeout'), 5000);
++            worker.onmessage = event => finish(event.data, null);
++            worker.onerror = () => finish(null, 'worker error');
++            worker.postMessage('read first native sample');
++          });
++          if (JSON.stringify(value) !== expected) return false;
++        }
++        return true;
++      } finally {
++        URL.revokeObjectURL(url);
++      }
++    })()
++  )JS"));
++}
++
++}  // namespace
++}  // namespace content
++#endif  // BUILDFLAG(IS_ANDROID)
+diff --git a/content/shell/browser/shell_content_browser_client.cc b/content/shell/browser/shell_content_browser_client.cc
+--- a/content/shell/browser/shell_content_browser_client.cc
++++ b/content/shell/browser/shell_content_browser_client.cc
+@@ -14,6 +14,7 @@
+ #include <vector>
+ 
+ #include "base/base_switches.h"
++#include "base/check.h"
+ #include "base/command_line.h"
+ #include "base/containers/fixed_flat_set.h"
+ #include "base/containers/flat_set.h"
+@@ -90,6 +91,7 @@
+ #include "services/network/public/mojom/network_service.mojom.h"
+ #include "services/network/public/mojom/permissions_policy/permissions_policy_feature.mojom-shared.h"
+ #include "third_party/blink/public/common/associated_interfaces/associated_interface_registry.h"
++#include "third_party/blink/public/common/agent_browser_android_timezone_config.h"
+ #include "third_party/blink/public/common/features.h"
+ #include "third_party/blink/public/common/switches.h"
+ #include "third_party/blink/public/common/user_agent/user_agent_metadata.h"
+@@ -379,6 +381,9 @@
+ std::unique_ptr<BrowserMainParts>
+ ShellContentBrowserClient::CreateBrowserMainParts(
+     bool /* is_integration_test */) {
++#if BUILDFLAG(IS_ANDROID)
++  CHECK(!blink::AgentBrowserAndroidTimezoneConfig::Get().startup_invalid());
++#endif
+   auto browser_main_parts = std::make_unique<ShellBrowserMainParts>();
+   DCHECK(!GetSharedState().shell_browser_main_parts);
+   GetSharedState().shell_browser_main_parts = browser_main_parts.get();
+@@ -463,6 +468,19 @@
+ 
+   command_line->CopySwitchesFrom(*base::CommandLine::ForCurrentProcess(),
+                                  kForwardSwitches);
++
++#if BUILDFLAG(IS_ANDROID)
++  if (command_line->GetSwitchValueASCII(switches::kProcessType) ==
++      switches::kRendererProcess) {
++    const char* const kTimezoneSwitches[] = {
++        blink::AgentBrowserAndroidTimezoneConfig::kConfigSwitch,
++        blink::AgentBrowserAndroidTimezoneConfig::kLegacySwitch,
++        blink::AgentBrowserAndroidTimezoneConfig::kRequiredSwitch,
++    };
++    command_line->CopySwitchesFrom(*base::CommandLine::ForCurrentProcess(),
++                                   kTimezoneSwitches);
++  }
++#endif
+ 
+ #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
+   if (base::CommandLine::ForCurrentProcess()->HasSwitch(
+diff --git a/content/test/BUILD.gn b/content/test/BUILD.gn
+--- a/content/test/BUILD.gn
++++ b/content/test/BUILD.gn
+@@ -1821,6 +1821,7 @@
+     "../renderer/render_widget_browsertest.cc",
+     "../renderer/visual_state_browsertest.cc",
+     "../renderer/webclipboard_impl_browsertest.cc",
++    "../shell/browser/agent_browser_android_timezone_browsertest.cc",
+     "../shell/browser/mojo_bindings_test_browsertest.cc",
+     "../shell/browser/rust_mojo_test_browsertest.cc",
+     "../test/browser_test_utils_browsertest.cc",
+diff --git a/third_party/blink/common/BUILD.gn b/third_party/blink/common/BUILD.gn
+--- a/third_party/blink/common/BUILD.gn
++++ b/third_party/blink/common/BUILD.gn
+@@ -381,6 +381,7 @@
+   testonly = true
+ 
+   sources = [
++    "agent_browser_android_timezone_config_unittest.cc",
+     "bluetooth/web_bluetooth_device_id_unittest.cc",
+     "client_hints/client_hints_unittest.cc",
+     "client_hints/enabled_client_hints_unittest.cc",
+diff --git a/third_party/blink/common/agent_browser_android_timezone_config_unittest.cc b/third_party/blink/common/agent_browser_android_timezone_config_unittest.cc
+new file mode 100644
+--- /dev/null
++++ b/third_party/blink/common/agent_browser_android_timezone_config_unittest.cc
+@@ -0,0 +1,154 @@
++// Copyright 2026 The Agent Browser Studio Authors
++// Use of this source code is governed by a BSD-style license.
++
++#include "third_party/blink/public/common/agent_browser_android_timezone_config.h"
++
++#if BUILDFLAG(IS_ANDROID)
++#include <memory>
++#include <utility>
++
++#include "base/base64url.h"
++#include "base/command_line.h"
++#include "testing/gtest/include/gtest/gtest.h"
++#include "third_party/blink/public/common/roxy_fingerprint_config.h"
++
++namespace blink {
++
++class AgentBrowserAndroidTimezoneConfigTestPeer {
++ public:
++  static std::unique_ptr<AgentBrowserAndroidTimezoneConfig> Parse(
++      const base::CommandLine& command_line) {
++    return std::unique_ptr<AgentBrowserAndroidTimezoneConfig>(
++        new AgentBrowserAndroidTimezoneConfig(command_line));
++  }
++};
++
++namespace {
++constexpr char kNewYork[] =
++    "{\"launchId\":\"22222222-2222-4222-8222-222222222222\","
++    "\"mode\":\"timezone-only\","
++    "\"profileId\":\"11111111-1111-4111-8111-111111111111\","
++    "\"schemaVersion\":1,\"timezone\":\"America/New_York\"}";
++
++std::string Encode(std::string_view json) {
++  std::string encoded;
++  base::Base64UrlEncode(json, base::Base64UrlEncodePolicy::OMIT_PADDING, &encoded);
++  return encoded;
++}
++
++base::CommandLine Command(std::string_view json) {
++  base::CommandLine command(base::CommandLine::NO_PROGRAM);
++  command.AppendSwitchASCII(AgentBrowserAndroidTimezoneConfig::kConfigSwitch,
++                            Encode(json));
++  command.AppendSwitch(AgentBrowserAndroidTimezoneConfig::kRequiredSwitch);
++  return command;
++}
++
++TEST(AgentBrowserAndroidTimezoneConfigTest, AbsentIsNotAnOverride) {
++  base::CommandLine command(base::CommandLine::NO_PROGRAM);
++  const auto config = AgentBrowserAndroidTimezoneConfigTestPeer::Parse(command);
++  EXPECT_FALSE(config->requested());
++  EXPECT_FALSE(config->valid());
++  EXPECT_FALSE(config->startup_invalid());
++  EXPECT_FALSE(config->timezone_only());
++}
++
++TEST(AgentBrowserAndroidTimezoneConfigTest, MissingRequiredPayloadIsInvalid) {
++  base::CommandLine command(base::CommandLine::NO_PROGRAM);
++  command.AppendSwitch(AgentBrowserAndroidTimezoneConfig::kRequiredSwitch);
++  EXPECT_TRUE(AgentBrowserAndroidTimezoneConfigTestPeer::Parse(command)
++                  ->startup_invalid());
++}
++
++TEST(AgentBrowserAndroidTimezoneConfigTest, NewYorkUsesIcuSystemIdentity) {
++  const auto config = AgentBrowserAndroidTimezoneConfigTestPeer::Parse(Command(kNewYork));
++  ASSERT_TRUE(config->valid());
++  EXPECT_TRUE(config->timezone_only());
++  EXPECT_FALSE(config->native_control());
++  EXPECT_EQ("America/New_York", config->canonical_timezone());
++  EXPECT_EQ(64u, config->config_sha256().size());
++  EXPECT_EQ("22222222-2222-4222-8222-222222222222", config->launch_id());
++}
++
++TEST(AgentBrowserAndroidTimezoneConfigTest, NativeControlHasNoTimezone) {
++  const auto config = AgentBrowserAndroidTimezoneConfigTestPeer::Parse(Command(
++      "{\"launchId\":\"22222222-2222-4222-8222-222222222222\","
++      "\"mode\":\"native-control\","
++      "\"profileId\":\"11111111-1111-4111-8111-111111111111\","
++      "\"schemaVersion\":1}"));
++  ASSERT_TRUE(config->valid());
++  EXPECT_TRUE(config->native_control());
++  EXPECT_FALSE(config->timezone_only());
++  EXPECT_TRUE(config->canonical_timezone().empty());
++}
++
++TEST(AgentBrowserAndroidTimezoneConfigTest, InvalidInputsNeverBecomeNativeControl) {
++  for (const auto& change : {
++           std::pair<std::string, std::string>{"America/New_York", "NoSuch/Zone"},
++           {"America/New_York", "GMT+05:30"},
++           {"America/New_York", "Etc/Unknown"},
++           {"America/New_York", ""},
++           {"America/New_York", "America/New_York "},
++           {"\"schemaVersion\":1", "\"schemaVersion\":2"},
++           {"\"schemaVersion\":1", "\"schemaVersion\":true"},
++           {"\"schemaVersion\":1", "\"schemaVersion\":1.0"},
++           {"timezone-only", "desktop"},
++           {"timezone-only", "native-control"},
++           {"11111111-1111-4111-8111-111111111111", "bad-profile"},
++           {"22222222-2222-4222-8222-222222222222", "bad-launch"},
++           {"11111111-1111-4111-8111-111111111111", "11111111-1111-1111-8111-111111111111"},
++           {"\"mode\":\"timezone-only\",", "\"mode\":\"timezone-only\",\"platform\":\"Win32\","},
++           {"\"schemaVersion\":1", "\"schemaVersion\":1,\"schemaVersion\":1"},
++           {"\"timezone\":", " \"timezone\":"},
++       }) {
++    std::string json(kNewYork);
++    const auto at = json.find(change.first);
++    ASSERT_NE(std::string::npos, at);
++    json.replace(at, change.first.size(), change.second);
++    const auto config = AgentBrowserAndroidTimezoneConfigTestPeer::Parse(Command(json));
++    EXPECT_TRUE(config->startup_invalid()) << change.second;
++    EXPECT_FALSE(config->native_control());
++    EXPECT_FALSE(config->timezone_only());
++  }
++}
++
++TEST(AgentBrowserAndroidTimezoneConfigTest, CorruptPublicNeverFallsBackToLegacy) {
++  auto command = Command(kNewYork);
++  command.AppendSwitchASCII(AgentBrowserAndroidTimezoneConfig::kConfigSwitch, "broken!");
++  command.AppendSwitchASCII(AgentBrowserAndroidTimezoneConfig::kLegacySwitch, Encode(kNewYork));
++  EXPECT_TRUE(AgentBrowserAndroidTimezoneConfigTestPeer::Parse(command)->startup_invalid());
++}
++
++TEST(AgentBrowserAndroidTimezoneConfigTest, LegacyOnlyStillUsesTheSameContract) {
++  base::CommandLine command(base::CommandLine::NO_PROGRAM);
++  command.AppendSwitchASCII(AgentBrowserAndroidTimezoneConfig::kLegacySwitch, Encode(kNewYork));
++  EXPECT_TRUE(AgentBrowserAndroidTimezoneConfigTestPeer::Parse(command)->timezone_only());
++}
++
++TEST(AgentBrowserAndroidTimezoneConfigTest, OversizedOrPaddedEncodingIsRejected) {
++  for (const std::string& encoded : {std::string(90000, 'A'), Encode(kNewYork) + "=", std::string("!")}) {
++    base::CommandLine command(base::CommandLine::NO_PROGRAM);
++    command.AppendSwitchASCII(AgentBrowserAndroidTimezoneConfig::kConfigSwitch, encoded);
++    EXPECT_TRUE(AgentBrowserAndroidTimezoneConfigTestPeer::Parse(command)->startup_invalid());
++  }
++}
++
++TEST(AgentBrowserAndroidTimezoneConfigTest, V8TimezoneRedetectionFlagsAreNotAllowed) {
++  auto command = Command(kNewYork);
++  command.AppendSwitchASCII("js-flags", "--no-icu-timezone-data");
++  EXPECT_TRUE(AgentBrowserAndroidTimezoneConfigTestPeer::Parse(command)->startup_invalid());
++}
++
++TEST(AgentBrowserAndroidTimezoneConfigTest, ParsedSnapshotDoesNotFollowLaterCommandChanges) {
++  auto command = Command(kNewYork);
++  const auto config = AgentBrowserAndroidTimezoneConfigTestPeer::Parse(command);
++  ASSERT_TRUE(config->timezone_only());
++  const auto digest = config->config_sha256();
++  command.RemoveSwitch(AgentBrowserAndroidTimezoneConfig::kConfigSwitch);
++  EXPECT_EQ(digest, config->config_sha256());
++  EXPECT_EQ("America/New_York", config->canonical_timezone());
++}
++
++}  // namespace
++}  // namespace blink
++#endif  // BUILDFLAG(IS_ANDROID)
+diff --git a/third_party/blink/public/common/BUILD.gn b/third_party/blink/public/common/BUILD.gn
+--- a/third_party/blink/public/common/BUILD.gn
++++ b/third_party/blink/public/common/BUILD.gn
+@@ -296,6 +296,7 @@
+     "use_counter/use_counter_feature.h",
+     "use_counter/use_counter_feature_tracker.h",
+     "use_counter/webdx_feature_maps.h",
++    "agent_browser_android_timezone_config.h",
+     "roxy_fingerprint_config.h",
+     "roxy_webrtc_rewriter.h",
+     "user_agent/user_agent_brand_version_type.h",
+@@ -371,6 +372,10 @@
+   }
+ 
+   if (is_android) {
++    public_deps += [
++      "//crypto",
++      "//third_party/icu",
++    ]
+     sources += [
+       "font_unique_name_lookup/font_table_matcher.h",
+       "font_unique_name_lookup/font_table_persistence.h",
+diff --git a/third_party/blink/public/common/agent_browser_android_timezone_config.h b/third_party/blink/public/common/agent_browser_android_timezone_config.h
+new file mode 100644
+--- /dev/null
++++ b/third_party/blink/public/common/agent_browser_android_timezone_config.h
+@@ -0,0 +1,170 @@
++// Copyright 2026 The Agent Browser Studio Authors
++// Use of this source code is governed by a BSD-style license.
++
++#ifndef THIRD_PARTY_BLINK_PUBLIC_COMMON_AGENT_BROWSER_ANDROID_TIMEZONE_CONFIG_H_
++#define THIRD_PARTY_BLINK_PUBLIC_COMMON_AGENT_BROWSER_ANDROID_TIMEZONE_CONFIG_H_
++
++#include "build/build_config.h"
++
++#if BUILDFLAG(IS_ANDROID)
++#include <string>
++#include <string_view>
++
++#include "base/base64url.h"
++#include "base/command_line.h"
++#include "base/json/json_reader.h"
++#include "base/no_destructor.h"
++#include "base/strings/string_number_conversions.h"
++#include "base/strings/string_util.h"
++#include "crypto/hash.h"
++#include "third_party/icu/source/i18n/unicode/timezone.h"
++
++namespace blink {
++
++// A deliberately separate Android contract. The legacy desktop parser remains
++// disabled for these payloads; this class never enables a desktop persona.
++class AgentBrowserAndroidTimezoneConfig {
++ public:
++  static constexpr char kConfigSwitch[] = "agent-browser-fingerprint-config";
++  static constexpr char kLegacySwitch[] = "roxy-fingerprint-config";
++  static constexpr char kRequiredSwitch[] = "agent-browser-timezone-required";
++
++  static const AgentBrowserAndroidTimezoneConfig& Get() {
++    static const base::NoDestructor<AgentBrowserAndroidTimezoneConfig> config;
++    return *config;
++  }
++
++  bool requested() const { return requested_; }
++  bool valid() const { return valid_; }
++  bool startup_invalid() const { return requested_ && !valid_; }
++  bool timezone_only() const { return valid_ && mode_ == "timezone-only"; }
++  bool native_control() const { return valid_ && mode_ == "native-control"; }
++  const std::string& canonical_timezone() const { return canonical_timezone_; }
++  const std::string& config_sha256() const { return config_sha256_; }
++  const std::string& launch_id() const { return launch_id_; }
++
++ private:
++  friend class base::NoDestructor<AgentBrowserAndroidTimezoneConfig>;
++  friend class AgentBrowserAndroidTimezoneConfigTestPeer;
++
++  AgentBrowserAndroidTimezoneConfig()
++      : AgentBrowserAndroidTimezoneConfig(
++            *base::CommandLine::ForCurrentProcess()) {}
++
++  explicit AgentBrowserAndroidTimezoneConfig(
++      const base::CommandLine& command_line) {
++    constexpr size_t kMaxConfigBytes = 64 * 1024;
++    const char* selected = command_line.HasSwitch(kConfigSwitch)
++                               ? kConfigSwitch : kLegacySwitch;
++    const bool has_payload = command_line.HasSwitch(selected);
++    requested_ = has_payload || command_line.HasSwitch(kRequiredSwitch);
++    if (!has_payload || command_line.HasSwitch("js-flags"))
++      return;
++
++    const std::string encoded = command_line.GetSwitchValueASCII(selected);
++    if (encoded.empty() || encoded.size() > 4 * ((kMaxConfigBytes + 2) / 3))
++      return;
++    // Two contradictory aliases are not a recovery path for a bad public flag.
++    if (command_line.HasSwitch(kConfigSwitch) &&
++        command_line.HasSwitch(kLegacySwitch) &&
++        encoded != command_line.GetSwitchValueASCII(kLegacySwitch)) {
++      return;
++    }
++    std::string decoded;
++    if (!base::Base64UrlDecode(encoded,
++                              base::Base64UrlDecodePolicy::DISALLOW_PADDING,
++                              &decoded) || decoded.size() > kMaxConfigBytes) {
++      return;
++    }
++    std::string reencoded;
++    base::Base64UrlEncode(decoded, base::Base64UrlEncodePolicy::OMIT_PADDING,
++                          &reencoded);
++    if (reencoded != encoded)
++      return;
++    auto root = base::JSONReader::ReadDict(decoded, base::JSON_PARSE_RFC);
++    if (!root || root->FindInt("schemaVersion").value_or(0) != 1)
++      return;
++    const std::string* mode = root->FindString("mode");
++    const std::string* profile_id = root->FindString("profileId");
++    const std::string* launch_id = root->FindString("launchId");
++    if (!mode || !profile_id || !launch_id || !IsUuidV4(*profile_id) ||
++        !IsUuidV4(*launch_id)) {
++      return;
++    }
++    const bool override_requested = *mode == "timezone-only";
++    if ((!override_requested && *mode != "native-control") ||
++        root->size() != (override_requested ? 5u : 4u)) {
++      return;
++    }
++    const std::string* timezone = root->FindString("timezone");
++    if (override_requested && (!timezone || !IsTimezoneToken(*timezone)))
++      return;
++    // Exact, small canonical JSON prevents duplicate-key ambiguity, coercions,
++    // extra desktop fields and escaped lookalike identifiers across runtimes.
++    std::string canonical = "{\"launchId\":\"" + *launch_id +
++        "\",\"mode\":\"" + *mode + "\",\"profileId\":\"" + *profile_id +
++        "\",\"schemaVersion\":1";
++    if (override_requested)
++      canonical += ",\"timezone\":\"" + *timezone + "\"";
++    canonical += "}";
++    if (decoded != canonical)
++      return;
++    if (override_requested) {
++      UErrorCode status = U_ZERO_ERROR;
++      UBool is_system_id = false;
++      icu::UnicodeString canonical_id;
++      icu::TimeZone::getCanonicalID(
++          icu::UnicodeString(timezone->c_str(), -1, US_INV), canonical_id,
++          is_system_id, status);
++      if (U_FAILURE(status) || !is_system_id ||
++          canonical_id == icu::UnicodeString("Etc/Unknown", -1, US_INV)) {
++        return;
++      }
++      canonical_id.toUTF8String(canonical_timezone_);
++    }
++    mode_ = *mode;
++    launch_id_ = *launch_id;
++    config_sha256_ = base::HexEncodeLower(crypto::hash::Sha256(decoded));
++    valid_ = true;
++  }
++
++  static bool IsUuidV4(std::string_view value) {
++    if (value.size() != 36 || value[14] != '4' ||
++        std::string_view("89ab").find(value[19]) == std::string_view::npos) {
++      return false;
++    }
++    for (size_t i = 0; i < value.size(); ++i) {
++      if (i == 8 || i == 13 || i == 18 || i == 23) {
++        if (value[i] != '-')
++          return false;
++      } else if (!(base::IsAsciiDigit(value[i]) ||
++                   (value[i] >= 'a' && value[i] <= 'f'))) {
++        return false;
++      }
++    }
++    return true;
++  }
++
++  static bool IsTimezoneToken(std::string_view value) {
++    if (value.empty() || value.size() > 128)
++      return false;
++    for (const char c : value) {
++      if (!base::IsAsciiAlphaNumeric(c) && c != '/' && c != '_' &&
++          c != '+' && c != '-') {
++        return false;
++      }
++    }
++    return true;
++  }
++
++  bool requested_ = false;
++  bool valid_ = false;
++  std::string mode_;
++  std::string canonical_timezone_;
++  std::string config_sha256_;
++  std::string launch_id_;
++};
++
++}  // namespace blink
++#endif  // BUILDFLAG(IS_ANDROID)
++#endif  // THIRD_PARTY_BLINK_PUBLIC_COMMON_AGENT_BROWSER_ANDROID_TIMEZONE_CONFIG_H_
+diff --git a/third_party/blink/renderer/core/timezone/timezone_controller.cc b/third_party/blink/renderer/core/timezone/timezone_controller.cc
+--- a/third_party/blink/renderer/core/timezone/timezone_controller.cc
++++ b/third_party/blink/renderer/core/timezone/timezone_controller.cc
+@@ -4,10 +4,15 @@
+ 
+ #include "third_party/blink/renderer/core/timezone/timezone_controller.h"
+ 
++#include "base/check.h"
+ #include "base/command_line.h"
+ #include "base/feature_list.h"
++#include "base/logging.h"
++#include "base/process/process_handle.h"
++#include "build/build_config.h"
+ #include "mojo/public/cpp/bindings/pending_remote.h"
+ #include "mojo/public/cpp/bindings/remote.h"
++#include "third_party/blink/public/common/agent_browser_android_timezone_config.h"
+ #include "third_party/blink/public/common/features.h"
+ #include "third_party/blink/public/common/switches.h"
+ #include "third_party/blink/public/common/roxy_fingerprint_config.h"
+@@ -44,7 +49,8 @@
+ // Notify V8 that the date/time configuration of the system might have changed.
+ void NotifyTimezoneChangeToV8(v8::Isolate* isolate) {
+   DCHECK(isolate);
+-  isolate->DateTimeConfigurationChangeNotification();
++  isolate->DateTimeConfigurationChangeNotification(
++      v8::Isolate::TimeZoneDetection::kSkip);
+ }
+ 
+ void NotifyTimezoneChangeOnWorkerThread(WorkerThread* worker_thread) {
+@@ -100,6 +106,26 @@
+   if (!base::FeatureList::IsEnabled(kLazyBlinkTimezoneInit)) {
+     host_timezone_id_ = GetCurrentTimezoneId();
+   }
++#if BUILDFLAG(IS_ANDROID)
++  const auto& android_config = AgentBrowserAndroidTimezoneConfig::Get();
++  CHECK(!android_config.startup_invalid());
++  if (android_config.timezone_only()) {
++    const String timezone_id(android_config.canonical_timezone());
++    CHECK(SetIcuTimeZoneAndNotifyV8(timezone_id));
++    override_timezone_id_ = timezone_id;
++    LOG(INFO) << "ABS_ANDROID_TIMEZONE_V1 applied=1 input_sha256="
++              << android_config.config_sha256()
++              << " pid=" << base::GetCurrentProcId()
++              << " canonical_timezone=" << android_config.canonical_timezone();
++    return;
++  }
++  if (android_config.native_control()) {
++    LOG(INFO) << "ABS_ANDROID_TIMEZONE_V1 applied=0 mode=native-control input_sha256="
++              << android_config.config_sha256()
++              << " pid=" << base::GetCurrentProcId();
++    return;
++  }
++#endif
+   const RoxyFingerprintConfig& config = RoxyFingerprintConfig::Get();
+   if (config.enabled() && !config.timezone().empty()) {
+     const String timezone_id(config.timezone());
+@@ -115,6 +141,12 @@
+ 
+ // static
+ void TimeZoneController::Init() {
++#if BUILDFLAG(IS_ANDROID)
++  const auto& config = AgentBrowserAndroidTimezoneConfig::Get();
++  CHECK(!config.startup_invalid());
++  if (config.requested())
++    instance();  // Apply before any early return or Window/Worker context.
++#endif
+   if (base::CommandLine::ForCurrentProcess()->HasSwitch(
+           blink::switches::kTopChromeWebUI) &&
+       base::FeatureList::IsEnabled(features::kWebUIBypassMojoConnections)) {
+@@ -198,6 +230,9 @@
+ 
+ // static
+ void TimeZoneController::ClearTimeZoneOverride() {
++#if BUILDFLAG(IS_ANDROID)
++  CHECK(!AgentBrowserAndroidTimezoneConfig::Get().timezone_only());
++#endif
+   base::AutoLock locker(instance().lock_);
+ 
+   DCHECK(HasTimeZoneOverride());
+@@ -213,6 +248,9 @@
+ 
+ // static
+ void TimeZoneController::ChangeTimeZoneOverride(const String& timezone_id) {
++#if BUILDFLAG(IS_ANDROID)
++  CHECK(!AgentBrowserAndroidTimezoneConfig::Get().timezone_only());
++#endif
+   DCHECK(!timezone_id.empty());
+ 
+   base::AutoLock locker(instance().lock_);

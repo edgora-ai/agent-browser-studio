@@ -1,0 +1,57 @@
+diff --git a/build/config/android/internal_rules.gni b/build/config/android/internal_rules.gni
+--- a/build/config/android/internal_rules.gni
++++ b/build/config/android/internal_rules.gni
+@@ -2117,6 +2117,9 @@
+   #   version_code: (optional)
+   #
+   #   version_name: (optional)
++  #
++  #   debuggable: (optional) Whether to force android:debuggable="true".
++  #     False preserves the manifest. Defaults to debuggable_apks.
+   #
+ 
+   #
+@@ -2340,9 +2343,12 @@
+       ]
+     }
+ 
+-    # Useful to have android:debuggable in the manifest even for Release
+-    # builds. Just omit it for official builds.
+-    if (debuggable_apks) {
++    # Preserve the build-wide default unless this target explicitly overrides it.
++    _debuggable = debuggable_apks
++    if (defined(invoker.debuggable)) {
++      _debuggable = invoker.debuggable
++    }
++    if (_debuggable) {
+       _args += [ "--debuggable" ]
+     }
+ 
+diff --git a/build/config/android/rules.gni b/build/config/android/rules.gni
+--- a/build/config/android/rules.gni
++++ b/build/config/android/rules.gni
+@@ -2183,6 +2183,8 @@
+   #     ProductConfig.java file will be generated for each package.
+   #   enable_proguard_checks: Turns on -checkdiscard directives and missing
+   #     symbols check in the proguard step (default=true).
++  #   debuggable: Whether to force android:debuggable="true". False preserves
++  #     the manifest. Optional; defaults to the build-wide debuggable_apks.
+   #   annotation_processor_deps: List of java_annotation_processor targets to
+   #     use when compiling the sources given to this target (optional).
+   #   processor_args_javac: List of args to pass to annotation processors when
+@@ -2486,6 +2488,7 @@
+           [
+             "aapt_locale_allowlist",
+             "app_as_shared_lib",
++            "debuggable",
+             "enforce_resource_overlays_in_tests",
+             "expected_android_manifest",
+             "expected_android_manifest_base",
+@@ -3354,6 +3357,7 @@
+             "custom_assertion_handler",
+             "data",
+             "data_deps",
++            "debuggable",
+             "deps",
+             "enable_lint",
+             "enable_proguard_checks",

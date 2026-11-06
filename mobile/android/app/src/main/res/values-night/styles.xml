@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Night twin of AppTheme. Window/bar colors follow the dark canvas so the system bars and
+     launch flash match Ui's dark palette; accent and control colors are resolved in code. -->
+<resources>
+    <style name="AppTheme" parent="android:style/Theme.Material.NoActionBar">
+        <item name="android:fontFamily">sans</item>
+        <item name="android:colorAccent">#818CF8</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:statusBarColor">#0E1016</item>
+        <item name="android:navigationBarColor">#0E1016</item>
+        <item name="android:windowLightNavigationBar">false</item>
+        <item name="android:windowActionModeOverlay">true</item>
+        <item name="android:forceDarkAllowed">false</item>
+        <item name="android:windowBackground">#0E1016</item>
+    </style>
+</resources>

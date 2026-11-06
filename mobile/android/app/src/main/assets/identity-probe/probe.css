@@ -1,0 +1,31 @@
+:root {
+  color-scheme: light dark;
+  --paper: #f4f2ea;
+  --ink: #222b2b;
+  --muted: #505c5b;
+  --line: #afb7b0;
+  --signal: #8d321d;
+  --panel: #fffef8;
+  font-family: "Noto Serif CJK SC", "Source Han Serif SC", serif;
+  background: var(--paper);
+  color: var(--ink);
+}
+* { box-sizing: border-box; }
+body { margin: 0; padding: 28px 20px 36px; }
+main { max-width: 760px; margin: 0 auto; }
+header { border-top: 5px solid var(--ink); padding-top: 16px; }
+.eyebrow { margin: 0 0 20px; font: 12px/1.5 monospace; letter-spacing: 0.15em; color: var(--muted); }
+h1 { margin: 0; font-size: clamp(28px, 7vw, 42px); line-height: 1.25; font-weight: 650; }
+.mode { margin: 12px 0 24px; color: var(--muted); font-size: 14px; }
+.notice { border-left: 3px solid var(--signal); padding: 10px 14px; color: var(--signal); font-weight: 600; line-height: 1.7; }
+.description, footer { font-size: 13px; line-height: 1.9; color: var(--muted); }
+section { margin-top: 28px; border-top: 1px solid var(--line); }
+h2 { margin: 18px 0 10px; font-size: 18px; }
+#status { font-size: 14px; line-height: 1.7; min-height: 2.4em; }
+pre { margin: 0; max-height: 58vh; overflow: auto; padding: 16px; border: 1px solid var(--line); background: var(--panel); font: 12px/1.8 monospace; white-space: pre-wrap; overflow-wrap: anywhere; tab-size: 2; }
+pre:focus-visible { outline: 2px solid var(--signal); outline-offset: 3px; }
+footer { margin-top: 20px; }
+iframe[hidden] { display: none; }
+@media (prefers-color-scheme: dark) {
+  :root { --paper: #191f1f; --ink: #f0f0e8; --muted: #b8c5bf; --line: #62716a; --signal: #f4b49b; --panel: #222a29; }
+}

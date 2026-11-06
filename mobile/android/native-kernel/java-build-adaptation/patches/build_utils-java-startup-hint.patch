@@ -1,0 +1,21 @@
+--- a/build/android/gyp/util/build_utils.py
++++ b/build/android/gyp/util/build_utils.py
+@@ -184,6 +184,18 @@
+   jdk_filter = (r'.*warning.*Cannot use file \S+ because'
+                 r' it is locked by another process')
+   output = FilterLines(output, jdk_filter)
++  # Agent Browser build adaptation: the frozen Android build sets
++  # JAVA_TOOL_OPTIONS=-Xint, which makes every JVM print an un-disablable
++  # startup hint on stderr. The hint is not a warning or an error, so drop
++  # exactly those hint lines. If a hint was present and nothing but empty
++  # lines remains, return an empty string so the residual layout of the hint
++  # does not fail the build. Any other content, and any real warning, error
++  # or nonzero exit, keeps the original failing behavior unchanged.
++  hint_filter = r'^Picked up (JAVA_TOOL_OPTIONS|_JAVA_OPTIONS): .*$'
++  had_hint = re.search(hint_filter, output, re.MULTILINE) is not None
++  output = FilterLines(output, hint_filter)
++  if had_hint and not output.strip():
++    return ''
+   return output
+ 
+ 

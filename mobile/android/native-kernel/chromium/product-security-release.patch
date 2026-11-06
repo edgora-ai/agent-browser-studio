@@ -1,0 +1,88 @@
+diff --git a/content/shell/browser/shell_browser_main_parts.cc b/content/shell/browser/shell_browser_main_parts.cc
+--- a/content/shell/browser/shell_browser_main_parts.cc
++++ b/content/shell/browser/shell_browser_main_parts.cc
+@@ -193,7 +193,11 @@
+   Shell::Initialize(CreateShellPlatformDelegate());
+   net::NetModule::SetResourceProvider(PlatformResourceProvider);
+ #if BUILDFLAG(IS_ANDROID)
+-  if (!IsAgentBrowserProductPreflight())
++  // Neither legacy preflight nor a product profile may expose content_shell's
++  // always-on local debugger, including when the switches are independent.
++  if (!IsAgentBrowserProductPreflight() &&
++      !base::CommandLine::ForCurrentProcess()->HasSwitch(
++          kAgentBrowserProductProfileSwitch))
+ #endif
+     ShellDevToolsManagerDelegate::StartHttpHandler(browser_context_.get());
+   InitializeMessageLoopContext();
+diff --git a/content/shell/browser/shell_permission_manager.cc b/content/shell/browser/shell_permission_manager.cc
+--- a/content/shell/browser/shell_permission_manager.cc
++++ b/content/shell/browser/shell_permission_manager.cc
+@@ -6,6 +6,7 @@
+ 
+ #include "base/command_line.h"
+ #include "base/functional/callback.h"
++#include "build/build_config.h"
+ #include "components/content_settings/core/common/features.h"
+ #include "components/permissions/permission_util.h"
+ #include "content/public/browser/permission_controller.h"
+@@ -17,6 +18,10 @@
+ #include "third_party/blink/public/common/features.h"
+ #include "third_party/blink/public/common/permissions/permission_utils.h"
+ #include "url/origin.h"
++
++#if BUILDFLAG(IS_ANDROID)
++#include "content/shell/android/agent_browser_product/chromium/agent_browser_android_product_policy.h"
++#endif
+ 
+ using blink::PermissionType;
+ 
+@@ -102,6 +107,18 @@
+     content::RenderFrameHost* render_frame_host,
+     const PermissionRequestDescription& request_description,
+     base::OnceCallback<void(const std::vector<PermissionResult>&)> callback) {
++#if BUILDFLAG(IS_ANDROID)
++  // No permission prompt/store exists yet for the product. Do not inherit
++  // content_shell's test-only automatic grants; deny until a reviewed prompt
++  // and per-profile permission persistence are implemented.
++  if (base::CommandLine::ForCurrentProcess()->HasSwitch(
++          kAgentBrowserProductProfileSwitch)) {
++    std::move(callback).Run(std::vector<PermissionResult>(
++        request_description.permissions.size(),
++        PermissionResult(blink::mojom::PermissionStatus::DENIED)));
++    return;
++  }
++#endif
+   if (render_frame_host->IsNestedWithinFencedFrame()) {
+     std::move(callback).Run(std::vector<PermissionResult>(
+         request_description.permissions.size(),
+@@ -136,6 +153,11 @@
+     const GURL& requesting_origin,
+     const GURL& embedding_origin) {
+   base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
++#if BUILDFLAG(IS_ANDROID)
++  if (command_line->HasSwitch(kAgentBrowserProductProfileSwitch)) {
++    return blink::mojom::PermissionStatus::DENIED;
++  }
++#endif
+   const auto permission_type =
+       blink::PermissionDescriptorToPermissionType(permission_descriptor);
+ 
+diff --git a/content/shell/browser/shell_content_browser_client.cc b/content/shell/browser/shell_content_browser_client.cc
+--- a/content/shell/browser/shell_content_browser_client.cc
++++ b/content/shell/browser/shell_content_browser_client.cc
+@@ -713,8 +713,13 @@
+       ->GetBinders()
+       .ExposeInterfacesToRenderFrame(map);
+   map->Add<network_hints::mojom::NetworkHintsHandler>(&BindNetworkHintsHandler);
+-  map->Add<content::rust_test::mojom::RustTestService>(
+-      base::BindRepeating(&BindRustTestServiceReceiver));
++#if BUILDFLAG(IS_ANDROID)
++  // This is a test-only browser interface, not part of the product surface.
++  if (!base::CommandLine::ForCurrentProcess()->HasSwitch(
++          kAgentBrowserProductProfileSwitch))
++#endif
++    map->Add<content::rust_test::mojom::RustTestService>(
++        base::BindRepeating(&BindRustTestServiceReceiver));
+ #if BUILDFLAG(IS_WIN)
+   map->Add<media::mojom::MediaFoundationPreferences>(
+       &BindMediaFoundationPreferences);

@@ -498,3 +498,45 @@ b4bf6e9f21638c71848e72aed5deb6289f953a7a cleanup: remove scroll reconciliation d
   Intel/Rosetta runtime, complete kernel/link, browser/fixture, banner, Ping0,
   installation or package acceptance. Rebuild and real-site acceptance remain
   separate required work; no browser or network was started for this patch.
+
+### `0058` — 2026-10-30 — bounded Canvas pixel access, object-only validation
+
+- Patch: `0058-canvas-bounded-pixel-access.patch`; SHA-256
+  `39ac1d00d6017247088381d0fc0fccceff230a700ddb525fcec41f65fd2904f7`.
+  No prior numbered patch or initial payload is rewritten.
+- The Android ARM64 build actually stopped at `image_data_buffer.o` with eleven
+  `-Wunsafe-buffer-usage` errors. Replace raw row/pixel arithmetic with Skia's
+  bounded writable span and bounded row/pixel subspans. Copy half/float words
+  through aligned `std::array` storage rather than dereferencing reinterpreted,
+  potentially unaligned pointers. Keep the coordinate/seed hash, selected RGB
+  channel, desired LSB, alpha and nonfinite-channel skipping unchanged.
+- The original exact Android Clang action returned 1 with the eleven errors;
+  the patched action returned 0 with no stdout/stderr and produced a 92,992-byte
+  ELF64 AArch64 object (machine 183), SHA-256
+  `c9396decf794f898435229f6670e22371c1a82bcc1c150a5c67026321dec547b`.
+  Both used the same complete compiler flags, inputs and generated module;
+  only `-MF` and `-o` were redirected to new scratch outputs. The original
+  build disk/source/output stayed read-only, with unchanged raw stat/clean
+  state and verified normal unmount/detach/VM stop. Warnings-as-errors and all
+  GN/compiler security settings were retained.
+- A separate host ASan/UBSan executable exercised the exact extracted function
+  against 174 whole-buffer oracle cases, including all three pixel formats,
+  transparent/signed-zero alpha, NaN/Infinity channels, padding, deliberately
+  unaligned storage and idempotency. All passed; a test-only XOR mutant caused
+  22 mismatches. Its Pixmap/span/configuration support types are test shims,
+  not a claim that Blink or Android runtime executed.
+- The first isolated object experiment remains recorded as failed: ANSI color
+  sequences made its plain-text error counter miss the real eleven errors.
+  Exact new-log readback established the counting defect; a separately named
+  experiment handles only SGR decoding for counting and retains raw diagnostics.
+  No compiler output, flag, source, old receipt or failed status was rewritten.
+- Exactly one of the 134 final-source entries changes to
+  `4297afdbc0e0a16f37dbc3e14532e5e62431dd673d7fec51fb1e23c4737bf234`.
+  The rolling source-manifest SHA-256 is
+  `d0b56d0fed7913fd7ee746cf029d62a597a805013801df3dfc2cb5f44c40cee2`.
+  Existing frozen build input/manifests and the original source lower are
+  preserved; continuing that build requires an explicit new source epoch.
+- This is not a full Chromium link/APK, native product, signature/export,
+  installation, Window/Worker, real SkPixmap sizing, fingerprint or Ping0
+  acceptance result. No browser, emulator or public network was started for
+  these compile/function checks. There is no release or source-commit claim.

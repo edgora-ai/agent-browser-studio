@@ -69,3 +69,11 @@ coverage/
 /release-firefox-webrtc-*/
 .tmp-build/
 .tmp-sign/
+
+# Android device/build scratch outputs and local build evidence (never commit)
+/.tmp-apk/
+/.zcode/
+/deployment-artifacts/
+/release-sync-progress-*-preserved/
+/release-storage-profile-filter-*-preserved/
+/mobile/android/native-kernel/build-recovery/

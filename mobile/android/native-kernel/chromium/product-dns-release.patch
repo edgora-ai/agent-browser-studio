@@ -1,0 +1,214 @@
+diff --git a/content/shell/android/agent_browser_product/chromium/agent_browser_android_product_policy.cc b/content/shell/android/agent_browser_product/chromium/agent_browser_android_product_policy.cc
+--- a/content/shell/android/agent_browser_product/chromium/agent_browser_android_product_policy.cc
++++ b/content/shell/android/agent_browser_product/chromium/agent_browser_android_product_policy.cc
+@@ -15,11 +15,13 @@
+ #include "base/strings/string_number_conversions.h"
+ #include "base/strings/string_util.h"
+ #include "net/base/net_errors.h"
++#include "net/base/proxy_chain.h"
+ #include "net/base/proxy_server.h"
+ #include "net/proxy_resolution/proxy_config.h"
+ #include "net/proxy_resolution/proxy_config_with_annotation.h"
+ #include "net/traffic_annotation/network_traffic_annotation.h"
+ #include "net/url_request/redirect_info.h"
++#include "services/network/public/cpp/agent_browser_local_dns_policy.h"
+ #include "services/network/public/cpp/resource_request.h"
+ #include "services/network/public/mojom/network_context.mojom.h"
+ #include "third_party/blink/public/common/agent_browser_android_timezone_config.h"
+@@ -211,9 +213,33 @@
+   CHECK(!params->proxy_config_poller_client.is_valid());
+   CHECK(!params->initial_custom_proxy_config);
+   CHECK(!params->custom_proxy_config_client_receiver.is_valid());
++  CHECK(!params->agent_browser_local_dns_policy);
++
++  // A fixed proxy only covers URL loads. DNS-only callers (including WebRTC
++  // STUN hostname resolution) still use this NetworkContext's HostResolver.
++  // Install the existing native deny policy at that resolver, before cache,
++  // hosts, system DNS and secure-DNS backends. HTTP CONNECT / SOCKS5 target
++  // hostnames continue to be sent to the sole proxy, not resolved locally.
++  const auto& chain = config.proxy_rules().single_proxies.First();
++  CHECK(chain.is_single_proxy());
++  CHECK(!chain.is_direct());
++  auto dns_policy = network::mojom::AgentBrowserLocalDnsPolicy::New();
++  dns_policy->mode =
++      network::mojom::AgentBrowserLocalDnsMode::kProxyLocalDnsDeny;
++  // Only the exact validated proxy host is a bootstrap exception. An IP-literal
++  // proxy requires no external bootstrap DNS. Hostname proxies intentionally
++  // retain that one exception; no origin hostname, wildcard or replacement IP
++  // comes from a command-line mapping rule. Validate in the browser as well as
++  // at the network-service consumer, so unsupported input fails closed early.
++  dns_policy->proxy_bootstrap_host = chain.First().GetHost();
++  CHECK(!network::BuildAgentBrowserHostMappingRules(dns_policy.get()).empty());
++  params->agent_browser_local_dns_policy = std::move(dns_policy);
++
+   params->initial_proxy_config =
+       net::ProxyConfigWithAnnotation(config, kProductProxyTrafficAnnotation);
+   LOG(INFO) << "ABS_ANDROID_PROXY_V1 configured=1";
++  LOG(INFO) << "ABS_ANDROID_DNS_V1 mode=proxy-local-dns-deny "
++               "bootstrap=exact-proxy-host";
+ }
+ 
+ bool IsAgentBrowserProductPreflightUrlAllowed(const GURL& url) {
+diff --git a/content/shell/android/agent_browser_product/chromium/agent_browser_android_product_policy_unittest.cc b/content/shell/android/agent_browser_product/chromium/agent_browser_android_product_policy_unittest.cc
+--- a/content/shell/android/agent_browser_product/chromium/agent_browser_android_product_policy_unittest.cc
++++ b/content/shell/android/agent_browser_product/chromium/agent_browser_android_product_policy_unittest.cc
+@@ -4,17 +4,30 @@
+ #include "content/shell/android/agent_browser_product/chromium/agent_browser_android_product_policy.h"
+ 
+ #include <initializer_list>
++#include <memory>
++#include <optional>
++#include <string>
++#include <utility>
+ 
+ #include "base/command_line.h"
+ #include "base/test/gtest_util.h"
+ #include "base/test/scoped_command_line.h"
++#include "base/test/task_environment.h"
++#include "net/base/host_port_pair.h"
+ #include "net/base/net_errors.h"
++#include "net/base/network_anonymization_key.h"
+ #include "net/base/proxy_chain.h"
+ #include "net/base/proxy_server.h"
++#include "net/base/test_completion_callback.h"
++#include "net/dns/mapped_host_resolver.h"
++#include "net/dns/mock_host_resolver.h"
++#include "net/dns/public/host_resolver_source.h"
++#include "net/dns/public/secure_dns_policy.h"
+ #include "net/log/net_log_with_source.h"
+ #include "net/proxy_resolution/proxy_config.h"
+ #include "net/proxy_resolution/proxy_config_with_annotation.h"
+ #include "net/proxy_resolution/proxy_info.h"
++#include "services/network/public/cpp/agent_browser_local_dns_policy.h"
+ #include "services/network/public/mojom/network_context.mojom.h"
+ #include "testing/gtest/include/gtest/gtest.h"
+ #include "url/gurl.h"
+@@ -237,5 +250,128 @@
+       ConfigureAgentBrowserProductNetworkContextParams(params.get()));
+ }
+ 
++TEST(AgentBrowserProductDnsTest, InstallsDenyWithOnlyExactProxyBootstrap) {
++  base::test::ScopedCommandLine scoped_command;
++  const struct {
++    const char* endpoint;
++    const char* proxy_host;
++    const char* mapped_host;
++  } cases[] = {
++      {"http://192.168.4.100:20080", "192.168.4.100", "192.168.4.100"},
++      {"https://proxy.example:443", "proxy.example", "proxy.example"},
++      {"socks5://proxy.example:1080", "proxy.example", "proxy.example"},
++      {"http://[2001:db8::1]:8080", "[2001:db8::1]", "2001:db8::1"},
++  };
++  for (const auto& test : cases) {
++    SCOPED_TRACE(test.endpoint);
++    *scoped_command.GetProcessCommandLine() = ProxyCommand(test.endpoint);
++    auto params = network::mojom::NetworkContextParams::New();
++    ConfigureAgentBrowserProductNetworkContextParams(params.get());
++    ASSERT_TRUE(params->initial_proxy_config.has_value());
++    ASSERT_TRUE(params->agent_browser_local_dns_policy);
++    const auto& policy = params->agent_browser_local_dns_policy;
++    EXPECT_EQ(network::mojom::AgentBrowserLocalDnsMode::kProxyLocalDnsDeny,
++              policy->mode);
++    ASSERT_TRUE(policy->proxy_bootstrap_host.has_value());
++    EXPECT_EQ(test.proxy_host, *policy->proxy_bootstrap_host);
++    EXPECT_EQ(std::string("MAP * ^NOTFOUND, EXCLUDE localhost, EXCLUDE ") +
++                  "127.0.0.1, EXCLUDE " + test.mapped_host,
++              network::BuildAgentBrowserHostMappingRules(policy.get()));
++  }
++}
++
++TEST(AgentBrowserProductDnsTest, NonProductPolicyIsUnmodified) {
++  base::test::ScopedCommandLine scoped_command;
++  auto* command = scoped_command.GetProcessCommandLine();
++  *command = ProxyCommand("http://192.168.4.100:20080");
++  command->RemoveSwitch(kAgentBrowserProductProfileSwitch);
++  auto params = network::mojom::NetworkContextParams::New();
++  ConfigureAgentBrowserProductNetworkContextParams(params.get());
++  EXPECT_FALSE(params->agent_browser_local_dns_policy);
++  params->agent_browser_local_dns_policy =
++      network::mojom::AgentBrowserLocalDnsPolicy::New();
++  params->agent_browser_local_dns_policy->proxy_bootstrap_host = "stock.example";
++  ConfigureAgentBrowserProductNetworkContextParams(params.get());
++  ASSERT_TRUE(params->agent_browser_local_dns_policy);
++  EXPECT_EQ("stock.example",
++            *params->agent_browser_local_dns_policy->proxy_bootstrap_host);
++}
++
++TEST(AgentBrowserProductDnsTest, ForeignMappingFlagsCannotRelaxProductPolicy) {
++  base::test::ScopedCommandLine scoped_command;
++  auto* command = scoped_command.GetProcessCommandLine();
++  *command = ProxyCommand("http://192.168.4.100:20080");
++  command->AppendSwitchASCII("host-resolver-rules", "MAP * 192.0.2.42");
++  command->AppendSwitchASCII("host-rules", "MAP * 192.0.2.43");
++  command->AppendSwitchASCII(network::kAgentBrowserLocalDnsPolicySwitch, "off");
++  command->AppendSwitchASCII(network::kAgentBrowserProxyBootstrapHostSwitch,
++                             "*.d.ping0.cc");
++  auto params = network::mojom::NetworkContextParams::New();
++  ConfigureAgentBrowserProductNetworkContextParams(params.get());
++  ASSERT_TRUE(params->agent_browser_local_dns_policy);
++  EXPECT_EQ("MAP * ^NOTFOUND, EXCLUDE localhost, EXCLUDE 127.0.0.1, "
++            "EXCLUDE 192.168.4.100",
++            network::BuildAgentBrowserHostMappingRules(
++                params->agent_browser_local_dns_policy.get()));
++}
++
++TEST(AgentBrowserProductDnsTest, DnsOnlyTargetsNeverReachTheResolverBackend) {
++  base::test::TaskEnvironment task_environment;
++  base::test::ScopedCommandLine scoped_command;
++  *scoped_command.GetProcessCommandLine() = ProxyCommand("http://proxy.example:80");
++  auto params = network::mojom::NetworkContextParams::New();
++  ConfigureAgentBrowserProductNetworkContextParams(params.get());
++  ASSERT_TRUE(params->agent_browser_local_dns_policy);
++  auto inner = std::make_unique<net::MockHostResolver>();
++  auto state = inner->state();
++  inner->set_synchronous_mode(true);
++  // A synthetic test backend is never reached for denied targets. This does
++  // not install answers in a product browser or influence a website result.
++  inner->rules()->AddRule("*", "192.0.2.42");
++  net::MappedHostResolver resolver(std::move(inner));
++  resolver.SetRulesFromString(network::BuildAgentBrowserHostMappingRules(
++      params->agent_browser_local_dns_policy.get()));
++  for (auto source : {net::HostResolverSource::ANY,
++                      net::HostResolverSource::SYSTEM}) {
++    for (const char* host : {"r-fresh.d.ping0.cc", "target.example", "target.local",
++                             "sub.proxy.example", "proxy.example.evil"}) {
++      SCOPED_TRACE(host);
++      net::HostResolver::ResolveHostParameters parameters;
++      parameters.source = source;
++      parameters.secure_dns_policy = net::SecureDnsPolicy::kDisable;
++      auto request = resolver.CreateRequest(
++          net::HostPortPair(host, 3478), net::NetworkAnonymizationKey(),
++          net::handles::kInvalidNetworkHandle, net::NetLogWithSource(), parameters);
++      net::TestCompletionCallback result;
++      EXPECT_EQ(net::ERR_NAME_NOT_RESOLVED, request->Start(result.callback()));
++    }
++  }
++  EXPECT_EQ(0u, state->num_resolve());
++  auto bootstrap = resolver.CreateRequest(
++      net::HostPortPair("proxy.example", 80), net::NetworkAnonymizationKey(),
++      net::handles::kInvalidNetworkHandle, net::NetLogWithSource(), std::nullopt);
++  net::TestCompletionCallback result;
++  EXPECT_EQ(net::OK, bootstrap->Start(result.callback()));
++  EXPECT_EQ(1u, state->num_resolve());
++}
++
++TEST(AgentBrowserProductDnsDeathTest, RejectsExistingDnsPolicyOwner) {
++  base::test::ScopedCommandLine scoped_command;
++  *scoped_command.GetProcessCommandLine() = ProxyCommand("http://proxy.example:80");
++  auto params = network::mojom::NetworkContextParams::New();
++  params->agent_browser_local_dns_policy =
++      network::mojom::AgentBrowserLocalDnsPolicy::New();
++  EXPECT_CHECK_DEATH(
++      ConfigureAgentBrowserProductNetworkContextParams(params.get()));
++}
++
++TEST(AgentBrowserProductDnsDeathTest, RejectsWildcardProxyBootstrap) {
++  base::test::ScopedCommandLine scoped_command;
++  *scoped_command.GetProcessCommandLine() = ProxyCommand("http://*.proxy.example:80");
++  auto params = network::mojom::NetworkContextParams::New();
++  EXPECT_CHECK_DEATH(
++      ConfigureAgentBrowserProductNetworkContextParams(params.get()));
++}
++
+ }  // namespace
+ }  // namespace content
