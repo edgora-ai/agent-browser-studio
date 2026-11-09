@@ -7,6 +7,7 @@ import android.view.Gravity;
 import android.view.KeyEvent;
 import android.view.View;
 import android.view.ViewGroup;
+import android.widget.AdapterView;
 import android.widget.ArrayAdapter;
 import android.widget.Button;
 import android.widget.EditText;
@@ -56,14 +57,18 @@ public final class ProxyEditor {
         content.addView(ProfileEditor.hint(activity, "管理的代理不支持用户名/密码认证（内核限制）。"));
 
         LinearLayout nameCard = ProfileEditor.card(activity, content, "名称");
-        EditText name = Ui.field(activity, nameCard, "代理名称（必填，最长 80 字符）", original == null ? "" : original.name);
+        EditText name = ProfileEditor.field(activity, nameCard, "代理名称（必填，最长 80 字符）", original == null ? "" : original.name);
         name.setFilters(new android.text.InputFilter[]{new android.text.InputFilter.LengthFilter(80)});
         TextView nameError = ProfileEditor.errorLine(activity, nameCard);
 
         LinearLayout endpointCard = ProfileEditor.card(activity, content, "端点");
-        endpointCard.addView(Ui.text(activity, "协议", 14));
+        TextView protocolLabel = Ui.text(activity, "协议", 14);
+        endpointCard.addView(protocolLabel);
         Spinner protocol = new Spinner(activity);
-        protocol.setBackground(ProfileEditor.rounded(activity, Ui.SURFACE_SOFT, 14, Ui.STROKE, 1));
+        protocol.setId(View.generateViewId());
+        protocolLabel.setLabelFor(protocol.getId());
+        protocol.setMinimumHeight(Ui.dp(activity, 48));
+        protocol.setBackground(ProfileEditor.rounded(activity, Ui.SURFACE_SOFT, 12, Ui.STROKE, 1));
         protocol.setPadding(Ui.dp(activity, 14), 0, Ui.dp(activity, 14), 0);
         protocol.setContentDescription("协议");
         protocol.setAdapter(new ArrayAdapter<ProxySpec.Scheme>(activity,
@@ -74,7 +79,9 @@ public final class ProxyEditor {
                 view.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 15);
                 view.setTextColor(Ui.INK);
                 view.setGravity(Gravity.CENTER_VERTICAL);
-                view.setPadding(Ui.dp(activity, 16), 0, Ui.dp(activity, 16), 0);
+                view.setPadding(Ui.dp(activity, 16), Ui.dp(activity, 12),
+                        Ui.dp(activity, 16), Ui.dp(activity, 12));
+                view.setMinHeight(Ui.dp(activity, 48));
                 return view;
             }
 
@@ -89,27 +96,27 @@ public final class ProxyEditor {
             }
         });
         if (original != null) protocol.setSelection(PROTOCOLS.indexOf(original.proxy.scheme));
-        endpointCard.addView(protocol, new LinearLayout.LayoutParams(-1, Ui.dp(activity, 48)));
+        endpointCard.addView(protocol, new LinearLayout.LayoutParams(-1, -2));
 
-        EditText paste = Ui.field(activity, endpointCard, "粘贴代理地址（可选：host:port 或 scheme://host:port）", "");
+        EditText paste = ProfileEditor.field(activity, endpointCard, "粘贴代理地址（可选：host:port 或 scheme://host:port）", "");
         Button parse = ProfileEditor.styledButton(activity, "解析并填充", false);
-        endpointCard.addView(parse);
+        endpointCard.addView(parse, ProfileEditor.actionParams(activity));
         TextView pasteError = ProfileEditor.errorLine(activity, endpointCard);
         TextView pasteOk = ProfileEditor.errorLine(activity, endpointCard);
         pasteOk.setTextColor(Ui.SUCCESS);
-        EditText host = Ui.field(activity, endpointCard, "主机（域名或 IP，不含端口与凭据）",
+        EditText host = ProfileEditor.field(activity, endpointCard, "主机（域名或 IP，不含端口与凭据）",
                 original == null ? "" : original.proxy.host);
-        EditText port = Ui.field(activity, endpointCard, "端口（必填 1–65535）",
+        TextView hostError = ProfileEditor.errorLine(activity, endpointCard);
+        EditText port = ProfileEditor.field(activity, endpointCard, "端口（必填 1–65535）",
                 original == null ? "" : Integer.toString(original.proxy.port));
         port.setInputType(InputType.TYPE_CLASS_NUMBER);
         port.setFilters(new android.text.InputFilter[]{
                 android.text.method.DigitsKeyListener.getInstance("0123456789"),
                 new android.text.InputFilter.LengthFilter(5)});
-        TextView hostError = ProfileEditor.errorLine(activity, endpointCard);
         TextView portError = ProfileEditor.errorLine(activity, endpointCard);
         // Honest exit probe: reachable via the proxy only; browser routing stays UNVERIFIED.
         Button testExit = ProfileEditor.styledButton(activity, "测试出口", false);
-        endpointCard.addView(testExit);
+        endpointCard.addView(testExit, ProfileEditor.actionParams(activity));
         TextView testResult = ProfileEditor.errorLine(activity, endpointCard);
         testResult.setTextColor(Ui.MUTED);
         parse.setOnClickListener(button -> { Ui.haptic(button); parseEndpoint(paste, protocol, host, port, pasteError); });
@@ -147,7 +154,34 @@ public final class ProxyEditor {
         Dialog[] holder = new Dialog[1];
         final boolean[] saving = {false};
         final Button[] saveRef = {null};
+        final android.widget.ScrollView[] scrollRef = {null};
         final java.util.concurrent.atomic.AtomicBoolean probing = new java.util.concurrent.atomic.AtomicBoolean();
+        final long[] inputGeneration = {0};
+        final boolean[] hasProbe = {false};
+        final String[] inputSnapshot = {endpointSnapshot(protocol, host, port)};
+        Runnable invalidateProbe = () -> {
+            String current = endpointSnapshot(protocol, host, port);
+            if (current.equals(inputSnapshot[0])) return;
+            inputSnapshot[0] = current;
+            inputGeneration[0]++;
+            if (hasProbe[0]) {
+                testResult.setTextColor(Ui.MUTED);
+                ProfileEditor.setError(testResult, "代理已更改，测试结果已过期，请重新测试。");
+            }
+        };
+        android.text.TextWatcher endpointWatcher = new android.text.TextWatcher() {
+            @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) { }
+            @Override public void onTextChanged(CharSequence s, int start, int before, int count) { }
+            @Override public void afterTextChanged(android.text.Editable s) { invalidateProbe.run(); }
+        };
+        host.addTextChangedListener(endpointWatcher);
+        port.addTextChangedListener(endpointWatcher);
+        protocol.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
+            @Override public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
+                invalidateProbe.run();
+            }
+            @Override public void onNothingSelected(AdapterView<?> parent) { invalidateProbe.run(); }
+        });
         View.OnClickListener testAction = button -> {
             if (!probing.compareAndSet(false, true)) return;
             Ui.haptic(button);
@@ -161,10 +195,23 @@ public final class ProxyEditor {
                 testResult.setTextColor(Ui.WARNING);
                 return;
             }
-            ProxySpec spec = new ProxySpec((ProxySpec.Scheme) protocol.getSelectedItem(), hostValue, portValue, false);
+            final ProxySpec spec;
+            try {
+                spec = new ProxySpec((ProxySpec.Scheme) protocol.getSelectedItem(), hostValue, portValue, false);
+                ProfileEditor.setError(hostError, "");
+            } catch (RuntimeException invalidEndpoint) {
+                probing.set(false);
+                ProfileEditor.setError(hostError, Ui.friendlyError(invalidEndpoint));
+                ProfileEditor.focusError(scrollRef[0], host);
+                return;
+            }
+            invalidateProbe.run();
+            final long requestGeneration = inputGeneration[0];
+            final String requestSnapshot = endpointSnapshot(protocol, host, port);
+            hasProbe[0] = true;
             Ui.setBusy(testExit, true);
-            testResult.setText("正在通过代理探测出口…（最长约 15 秒）");
             testResult.setTextColor(Ui.MUTED);
+            ProfileEditor.setError(testResult, "正在通过代理探测出口…（最长约 15 秒）");
             PROBE_EXECUTOR.execute(() -> {
                 String message;
                 int color;
@@ -193,8 +240,11 @@ public final class ProxyEditor {
                     if (activity.isFinishing() || activity.isDestroyed()
                             || holder[0] == null || !holder[0].isShowing()) return;
                     Ui.setBusy(testExit, false);
-                    testResult.setText(line);
+                    invalidateProbe.run();
+                    if (requestGeneration != inputGeneration[0]
+                            || !requestSnapshot.equals(endpointSnapshot(protocol, host, port))) return;
                     testResult.setTextColor(lineColor);
+                    ProfileEditor.setError(testResult, line);
                 });
             });
         };
@@ -208,27 +258,35 @@ public final class ProxyEditor {
             ProfileEditor.setError(nameError, ""); ProfileEditor.setError(hostError, "");
             ProfileEditor.setError(portError, "");
             ProfileEditor.setError(formError, "");
-            if (!paste.getText().toString().trim().isEmpty()
-                    && !parseEndpoint(paste, protocol, host, port, pasteError)) return;
-            boolean valid = true;
+            boolean pasteValid = paste.getText().toString().trim().isEmpty()
+                    || parseEndpoint(paste, protocol, host, port, pasteError);
+            boolean valid = pasteValid;
+            View firstError = null;
             String nameValue = name.getText().toString().trim();
             if (nameValue.isEmpty() || nameValue.length() > 80) {
                 ProfileEditor.setError(nameError, "名称必填且不超过 80 字符");
                 valid = false;
+                firstError = name;
             }
+            if (!pasteValid && firstError == null) firstError = paste;
             String hostValue = host.getText().toString().trim();
             if (hostValue.isEmpty() || hostValue.matches(".*\\s.*") || hostValue.contains("/")
                     || hostValue.contains("@") || hostValue.contains("://")) {
                 ProfileEditor.setError(hostError, "主机不能为空，且不含路径、空格或凭据");
                 valid = false;
+                if (firstError == null) firstError = host;
             }
             int portValue = 0;
             try { portValue = Integer.parseInt(port.getText().toString().trim()); } catch (NumberFormatException ignored) { }
             if (portValue < 1 || portValue > 65535) {
                 ProfileEditor.setError(portError, "端口需为 1–65535 的数字");
                 valid = false;
+                if (firstError == null) firstError = port;
             }
-            if (!valid) return;
+            if (!valid) {
+                ProfileEditor.focusError(scrollRef[0], firstError);
+                return;
+            }
             saving[0] = true;
             if (saveRef[0] != null) Ui.setBusy(saveRef[0], true);
             try {
@@ -251,6 +309,7 @@ public final class ProxyEditor {
         Dialog dialog = chrome.dialog;
         holder[0] = dialog;
         saveRef[0] = chrome.save;
+        scrollRef[0] = chrome.scroll;
         if (original != null) {
             name.setSelectAllOnFocus(false);
             host.setSelectAllOnFocus(false);
@@ -305,6 +364,11 @@ public final class ProxyEditor {
                     : "请输入完整的 HTTP / HTTPS / SOCKS5 主机与端口，不含路径或凭据。原端点未改动。");
             return false;
         }
+    }
+
+    private static String endpointSnapshot(Spinner protocol, EditText host, EditText port) {
+        return protocol.getSelectedItemPosition() + "\n" + host.getText().toString()
+                + "\n" + port.getText().toString();
     }
 
     private static boolean changed(EditText field, String baseline) {

@@ -6,10 +6,8 @@ import android.content.Context;
 import android.content.res.ColorStateList;
 import android.graphics.Canvas;
 import android.graphics.Color;
-import android.graphics.LinearGradient;
 import android.graphics.Paint;
 import android.graphics.Path;
-import android.graphics.Shader;
 import android.graphics.Typeface;
 import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.Drawable;
@@ -21,7 +19,6 @@ import android.text.TextWatcher;
 import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.HapticFeedbackConstants;
-import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.Window;
@@ -33,6 +30,7 @@ import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
+import java.util.List;
 import com.ahoo.abs.android.data.StorageException;
 import com.ahoo.abs.core.ValidationException;
 
@@ -40,9 +38,8 @@ import com.ahoo.abs.core.ValidationException;
  * Native design system shared by the manager and editors. Everything is built from framework
  * views and hand-drawn vector glyphs; intentionally no WebView, AndroidX or XML resources.
  *
- * <p>Visual language: airy canvas, white surfaces with hairline strokes, one indigo→violet
- * accent, medium-weight sans titles and 220 ms decelerate motion. Interactive controls use a
- * bounded ripple, a subtle press-scale and a haptic tick when they change state.
+ * <p>视觉语言：浅色画布、黑白灰表面与细边框、中等字重标题，以及 220 ms 减速动效。
+ * 交互控件保留有界涟漪、轻微按压缩放和状态切换触觉反馈。
  */
 public final class Ui {
     // ── Palette ────────────────────────────────────────────────────────────────────────────
@@ -63,15 +60,16 @@ public final class Ui {
     public static int SUCCESS;
     public static int WARNING;
     public static int DANGER;
+    public static int ON_DANGER;
     public static int SURFACE_SOFT;
     /** True when the palette was resolved for night mode; for the few fixed-surface cases. */
     public static boolean DARK;
     /** Top of the home gradient; equals the theme window background of the active mode. */
     public static int SURFACE_TOP;
 
-    public static final int RADIUS_CARD = 20;
-    public static final int RADIUS_FIELD = 14;
-    public static final int RADIUS_BUTTON = 16;
+    public static final int RADIUS_CARD = 16;
+    public static final int RADIUS_FIELD = 12;
+    public static final int RADIUS_BUTTON = 14;
 
     private static final Typeface MEDIUM = Typeface.create("sans-serif-medium", Typeface.NORMAL);
     private static final Typeface REGULAR = Typeface.create("sans-serif", Typeface.NORMAL);
@@ -79,48 +77,50 @@ public final class Ui {
 
     private Ui() { }
 
-    /** Resolve the palette from the current uiMode; light values stay the r8 design language. */
+    /** 按当前 uiMode 解析中性灰度配色；WHITE 始终表示表面色，而非反差文字色。 */
     public static void initPalette(Context context) {
         int mask = context.getResources().getConfiguration().uiMode
                 & android.content.res.Configuration.UI_MODE_NIGHT_MASK;
         if (mask == android.content.res.Configuration.UI_MODE_NIGHT_YES) {
             DARK = true;
-            BG = 0xFF0E1016;
-            BG_DEEP = 0xFF161923;
-            INK = 0xFFE6E9F2;
-            INK_SOFT = 0xFFC3C9D6;
-            MUTED = 0xFF8B94A7;
-            FAINT = 0xFF5A6478;
-            ACCENT = 0xFF818CF8;
-            ACCENT_DEEP = 0xFFA5B4FC;
-            ACCENT_2 = 0xFFA78BFA;
-            ACCENT_SOFT = 0xFF23264A;
-            STROKE = 0xFF232838;
-            WHITE = 0xFF171B26;
-            SUCCESS = 0xFF34D399;
-            WARNING = 0xFFFBBF24;
-            DANGER = 0xFFF87171;
-            SURFACE_SOFT = 0xFF1E2230;
-            SURFACE_TOP = 0xFF141824;
+            BG = 0xFF141414;
+            BG_DEEP = 0xFF202020;
+            INK = 0xFFF3F3F3;
+            INK_SOFT = 0xFFC2C2C2;
+            MUTED = 0xFFADADAD;
+            FAINT = 0xFFADADAD;
+            ACCENT = 0xFFF3F3F3;
+            ACCENT_DEEP = 0xFFEFEFEF;
+            ACCENT_2 = 0xFFF3F3F3;
+            ACCENT_SOFT = 0xFF303030;
+            STROKE = 0xFF3A3A3A;
+            WHITE = 0xFF202020;
+            SUCCESS = 0xFF63D7BE;
+            WARNING = 0xFFF2C578;
+            DANGER = 0xFFFFB4B9;
+            ON_DANGER = 0xFF4A1016;
+            SURFACE_SOFT = 0xFF292929;
+            SURFACE_TOP = BG;
         } else {
             DARK = false;
-            BG = 0xFFF4F5F9;
-            BG_DEEP = 0xFFEDEFF6;
-            INK = 0xFF0F172A;
-            INK_SOFT = 0xFF334155;
-            MUTED = 0xFF64748B;
-            FAINT = 0xFF94A3B8;
-            ACCENT = 0xFF4F46E5;
-            ACCENT_DEEP = 0xFF4338CA;
-            ACCENT_2 = 0xFF7C3AED;
-            ACCENT_SOFT = 0xFFEDEFFF;
-            STROKE = 0xFFE7E9F0;
+            BG = 0xFFF7F7F7;
+            BG_DEEP = 0xFFEFEFEF;
+            INK = 0xFF202020;
+            INK_SOFT = 0xFF595959;
+            MUTED = 0xFF6A6A6A;
+            FAINT = 0xFF6A6A6A;
+            ACCENT = 0xFF1C1C1C;
+            ACCENT_DEEP = 0xFF111111;
+            ACCENT_2 = 0xFF1C1C1C;
+            ACCENT_SOFT = 0xFFECECEC;
+            STROKE = 0xFFE7E7E7;
             WHITE = 0xFFFFFFFF;
-            SUCCESS = 0xFF059669;
-            WARNING = 0xFFD97706;
-            DANGER = 0xFFDC2626;
-            SURFACE_SOFT = 0xFFF7F8FC;
-            SURFACE_TOP = 0xFFF7F8FC;
+            SUCCESS = 0xFF087C68;
+            WARNING = 0xFF8A5700;
+            DANGER = 0xFFC93F48;
+            ON_DANGER = 0xFFFFFFFF;
+            SURFACE_SOFT = 0xFFF0F0F0;
+            SURFACE_TOP = BG;
         }
     }
 
@@ -153,12 +153,12 @@ public final class Ui {
         return drawable;
     }
 
-    /** White card with a hairline stroke, soft ambient elevation and generous padding. */
+    /** Quiet WorkBuddy-like surface: hairline border, no heavy shadow, compact padding. */
     public static LinearLayout card(Context context) {
         LinearLayout view = column(context);
         view.setBackground(shape(context, WHITE, RADIUS_CARD, true));
-        view.setElevation(dp(context, 1.5f));
-        int pad = dp(context, 18);
+        view.setElevation(0);
+        int pad = dp(context, 16);
         view.setPadding(pad, pad, pad, pad);
         return view;
     }
@@ -213,9 +213,9 @@ public final class Ui {
         }
 
         @Override protected void onMeasure(int widthSpec, int heightSpec) {
-            int maxWidth = MeasureSpec.getSize(widthSpec);
+            int maxWidth = MeasureSpec.getSize(widthSpec) - getPaddingLeft() - getPaddingRight();
             int x = 0;
-            int y = 0;
+            int y = getPaddingTop();
             int rowHeight = 0;
             for (View child : children) {
                 if (child.getVisibility() == View.GONE) continue;
@@ -235,7 +235,7 @@ public final class Ui {
                 x += left + width + right;
                 rowHeight = Math.max(rowHeight, child.getMeasuredHeight() + top);
             }
-            setMeasuredDimension(resolveSize(maxWidth, widthSpec),
+            setMeasuredDimension(resolveSize(getPaddingLeft() + maxWidth + getPaddingRight(), widthSpec),
                     resolveSize(y + rowHeight + getPaddingBottom(), heightSpec));
         }
 
@@ -273,8 +273,8 @@ public final class Ui {
     public static LinearLayout root(Activity activity) {
         initPalette(activity);
         LinearLayout root = column(activity);
-        root.setBackground(gradient(activity, 0, SURFACE_TOP, BG));
-        int side = dp(activity, 20);
+        root.setBackgroundColor(BG);
+        int side = dp(activity, 16);
         // Keep the system-bar icons readable in both modes (API 35 ignores bar colors; the
         // night theme handles windowBackground, this keeps pre-35 devices consistent).
         View decor = activity.getWindow().getDecorView();
@@ -292,13 +292,14 @@ public final class Ui {
             int left;
             int right;
             if (Build.VERSION.SDK_INT >= 30) {
-                android.graphics.Insets bars = insets.getInsets(WindowInsets.Type.systemBars());
+                android.graphics.Insets bars = insets.getInsets(WindowInsets.Type.systemBars() | WindowInsets.Type.displayCutout()
+                        | WindowInsets.Type.ime());
                 top = bars.top; bottom = bars.bottom; left = bars.left; right = bars.right;
             } else {
                 top = insets.getSystemWindowInsetTop(); bottom = insets.getSystemWindowInsetBottom();
                 left = insets.getSystemWindowInsetLeft(); right = insets.getSystemWindowInsetRight();
             }
-            view.setPadding(side + left, dp(activity, 10) + top, side + right, dp(activity, 10) + bottom);
+            view.setPadding(side + left, dp(activity, 8) + top, side + right, dp(activity, 8) + bottom);
             return insets;
         });
         activity.setContentView(root);
@@ -313,7 +314,7 @@ public final class Ui {
         view.setTextSize(TypedValue.COMPLEX_UNIT_SP, sizeSp);
         view.setTextColor(color);
         view.setTypeface(face);
-        view.setIncludeFontPadding(false);
+        view.setIncludeFontPadding(true);
         return view;
     }
 
@@ -325,35 +326,35 @@ public final class Ui {
     }
 
     public static TextView display(Context context, String value) {
-        TextView view = styled(context, value, 25, INK, MEDIUM);
+        TextView view = styled(context, value, 22, INK, MEDIUM);
         view.setLetterSpacing(-0.02f);
         return view;
     }
 
     public static TextView title(Context context, String value) {
-        TextView view = styled(context, value, 17.5f, INK, MEDIUM);
+        TextView view = styled(context, value, 17, INK, MEDIUM);
         view.setLetterSpacing(-0.01f);
         return view;
     }
 
     public static TextView heading(Context context, String value) {
-        return styled(context, value, 15, INK, MEDIUM);
+        return styled(context, value, 16, INK, MEDIUM);
     }
 
     public static TextView body(Context context, String value) {
-        TextView view = styled(context, value, 14.5f, INK_SOFT, REGULAR);
+        TextView view = styled(context, value, 16, INK_SOFT, REGULAR);
         view.setLineSpacing(dp(context, 3), 1.0f);
         return view;
     }
 
     public static TextView caption(Context context, String value) {
-        TextView view = styled(context, value, 12.5f, MUTED, REGULAR);
+        TextView view = styled(context, value, 12, MUTED, REGULAR);
         view.setLineSpacing(dp(context, 2), 1.0f);
         return view;
     }
 
     public static TextView label(Context context, String value) {
-        // MUTED, not FAINT: section labels are informative text and must clear 4.5:1.
+        // 分区标签使用次级灰色，避免与主要内容争夺视觉层级。
         TextView view = styled(context, value, 12, MUTED, MEDIUM);
         view.setLetterSpacing(0.06f);
         view.setAllCaps(true);
@@ -374,20 +375,13 @@ public final class Ui {
         view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP);
     }
 
-    /** Subtle press-scale (0.97) with decelerate motion; the view keeps its own click listener. */
+    /** Keep glyphs/text stable on press; the component background supplies native ripple. */
     public static void pressable(View view) {
-        view.setOnTouchListener((v, event) -> {
-            if (event.getActionMasked() == MotionEvent.ACTION_DOWN) {
-                v.animate().scaleX(0.97f).scaleY(0.97f).setDuration(90).setInterpolator(EASE).start();
-            } else if (event.getActionMasked() == MotionEvent.ACTION_CANCEL
-                    || event.getActionMasked() == MotionEvent.ACTION_UP) {
-                v.animate().scaleX(1f).scaleY(1f).setDuration(180).setInterpolator(EASE).start();
-            }
-            return false;
-        });
+        view.setFocusable(true);
     }
 
     public static void animateIn(View view) {
+        if (Build.VERSION.SDK_INT >= 26 && !android.animation.ValueAnimator.areAnimatorsEnabled()) return;
         view.setAlpha(0f);
         view.setTranslationY(dp(view.getContext(), 10));
         view.animate().alpha(1f).translationY(0f).setDuration(240).setInterpolator(EASE).start();
@@ -417,7 +411,7 @@ public final class Ui {
         int padH = dp(activity, 20);
         int padV = dp(activity, 13);
         capsule.setPadding(padH, padV, padH, padV);
-        capsule.setBackground(shape(activity, 0xEE111827, 999));
+        capsule.setBackground(shape(activity, 0xEE222222, 16));
         capsule.setTag("abs-snackbar");
         FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(-2, -2);
         params.gravity = Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL;
@@ -451,7 +445,7 @@ public final class Ui {
 
     // ── Vector glyphs ──────────────────────────────────────────────────────────────────────
     public enum Glyph { BACK, CLOSE, SEARCH, PLUS, TABS, MENU, HISTORY, GLOBE, SHIELD, CHECK,
-        CHEVRON, REFRESH, LOCK, PROFILE, PROXY, SPARK, TRASH, COPY, INFO }
+        CHEVRON, REFRESH, LOCK, PROFILE, PROXY, SPARK, TRASH, COPY, INFO, FOLDER }
 
     /** Crisp hand-drawn vector icon; no font glyph or emoji dependency. */
     public static final class IconView extends View {
@@ -466,7 +460,7 @@ public final class Ui {
             this.color = color;
             paint.setColor(color);
             paint.setStyle(Paint.Style.STROKE);
-            paint.setStrokeWidth(dp(context, 1.9f));
+            paint.setStrokeWidth(context.getResources().getDisplayMetrics().density * 1.75f);
             paint.setStrokeCap(Paint.Cap.ROUND);
             paint.setStrokeJoin(Paint.Join.ROUND);
         }
@@ -604,6 +598,23 @@ public final class Ui {
                     path.lineTo(s * 0.75f, s * 0.4f);
                     canvas.drawPath(path, paint);
                     break;
+                case FOLDER:
+                    path.moveTo(-s * 0.9f, -s * 0.45f);
+                    path.lineTo(-s * 0.9f, -s * 0.65f);
+                    path.quadTo(-s * 0.9f, -s * 0.8f, -s * 0.75f, -s * 0.8f);
+                    path.lineTo(-s * 0.25f, -s * 0.8f);
+                    path.lineTo(0, -s * 0.45f);
+                    path.lineTo(s * 0.75f, -s * 0.45f);
+                    path.quadTo(s * 0.9f, -s * 0.45f, s * 0.9f, -s * 0.3f);
+                    path.lineTo(s * 0.9f, s * 0.65f);
+                    path.quadTo(s * 0.9f, s * 0.8f, s * 0.75f, s * 0.8f);
+                    path.lineTo(-s * 0.75f, s * 0.8f);
+                    path.quadTo(-s * 0.9f, s * 0.8f, -s * 0.9f, s * 0.65f);
+                    path.close();
+                    path.moveTo(-s * 0.9f, -s * 0.25f);
+                    path.lineTo(s * 0.9f, -s * 0.25f);
+                    canvas.drawPath(path, paint);
+                    break;
                 case INFO:
                 default:
                     canvas.drawCircle(0, 0, s * 0.92f, paint);
@@ -624,16 +635,18 @@ public final class Ui {
         return view;
     }
 
-    /** Circular ripple icon button with an accessible description. */
+    /** 带无障碍说明的圆角图标按钮，默认触控尺寸为 48dp。 */
     public static FrameLayout iconButton(Context context, Glyph glyph, String description, int color,
             View.OnClickListener action) {
         FrameLayout button = new FrameLayout(context);
-        int size = dp(context, 44);
+        int size = dp(context, 48);
+        button.setMinimumWidth(size);
+        button.setMinimumHeight(size);
         button.setLayoutParams(new LinearLayout.LayoutParams(size, size));
-        button.setBackground(new RippleDrawable(ColorStateList.valueOf(0x1A0F172A),
-                null, shape(context, WHITE, 22)));
+        button.setBackground(new RippleDrawable(ColorStateList.valueOf(DARK ? 0x22FFFFFF : 0x14000000),
+                null, shape(context, WHITE, RADIUS_BUTTON)));
         IconView view = new IconView(context, glyph, color);
-        int iconSize = dp(context, 20);
+        int iconSize = dp(context, 22);
         FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(iconSize, iconSize);
         params.gravity = Gravity.CENTER;
         button.addView(view, params);
@@ -645,21 +658,28 @@ public final class Ui {
 
     // ── Cards, chips, avatars ──────────────────────────────────────────────────────────────
     public static TextView chip(Context context, String label, boolean selected, View.OnClickListener action) {
-        TextView chip = styled(context, label, 11.5f, selected ? WHITE : MUTED, MEDIUM);
-        int padH = dp(context, 10);
-        chip.setPadding(padH, dp(context, 5), padH, dp(context, 5));
-        Drawable background = selected ? gradient(context, 999, ACCENT, ACCENT_2)
-                : shape(context, SURFACE_SOFT, 999, true);
-        chip.setBackground(new RippleDrawable(ColorStateList.valueOf(0x22FFFFFF), background, null));
-        if (action != null) chip.setOnClickListener(action);
+        int foreground = selected ? (DARK ? 0xFF171717 : 0xFFFFFFFF) : MUTED;
+        TextView chip = styled(context, label, 11, foreground, MEDIUM);
+        int padH = dp(context, 9);
+        chip.setPadding(padH, dp(context, 4), padH, dp(context, 4));
+        chip.setGravity(Gravity.CENTER);
+        Drawable background = selected ? shape(context, ACCENT, 16)
+                : shape(context, SURFACE_SOFT, 16);
+        int ripple = selected ? (DARK ? 0x22171717 : 0x22FFFFFF)
+                : (DARK ? 0x22FFFFFF : 0x14000000);
+        chip.setBackground(new RippleDrawable(ColorStateList.valueOf(ripple), background, null));
+        if (action != null) {
+            chip.setMinHeight(dp(context, 48));
+            chip.setOnClickListener(action);
+        }
         return chip;
     }
 
     public static LinearLayout avatar(Context context, String initial, int color, int sizeDp) {
         LinearLayout holder = new LinearLayout(context);
         holder.setGravity(Gravity.CENTER);
-        holder.setBackground(shape(context, (color & 0x00FFFFFF) | 0x1F000000, sizeDp / 2));
-        holder.addView(styled(context, initial, 15, color, MEDIUM));
+        holder.setBackground(shape(context, (color & 0x00FFFFFF) | 0x18000000, Math.round(sizeDp * 0.32f)));
+        holder.addView(styled(context, initial, 14, color, MEDIUM));
         holder.setLayoutParams(new LinearLayout.LayoutParams(dp(context, sizeDp), dp(context, sizeDp)));
         return holder;
     }
@@ -670,46 +690,50 @@ public final class Ui {
     }
 
     public static Button primary(Context context, String label, View.OnClickListener action) {
-        Button view = baseButton(context, label, action,
-                new RippleDrawable(ColorStateList.valueOf(0x33FFFFFF),
-                        gradient(context, RADIUS_BUTTON, ACCENT, ACCENT_2), null), WHITE);
-        view.setElevation(dp(context, 2f));
-        return view;
+        return baseButton(context, label, action,
+                new RippleDrawable(ColorStateList.valueOf(DARK ? 0x22171717 : 0x2EFFFFFF),
+                        shape(context, ACCENT, RADIUS_BUTTON), null), DARK ? 0xFF171717 : 0xFFFFFFFF);
     }
 
     public static Button tonal(Context context, String label, View.OnClickListener action) {
         return baseButton(context, label, action,
-                new RippleDrawable(ColorStateList.valueOf(0x220F172A), shape(context, ACCENT_SOFT, RADIUS_BUTTON), null),
+                new RippleDrawable(ColorStateList.valueOf(DARK ? 0x22FFFFFF : 0x14000000),
+                        shape(context, ACCENT_SOFT, RADIUS_BUTTON), null),
                 ACCENT_DEEP);
     }
 
     public static Button ghost(Context context, String label, View.OnClickListener action) {
         return baseButton(context, label, action,
-                new RippleDrawable(ColorStateList.valueOf(0x140F172A), null, null), ACCENT);
+                new RippleDrawable(ColorStateList.valueOf(DARK ? 0x22FFFFFF : 0x14000000),
+                        null, null), INK_SOFT);
     }
 
     public static Button danger(Context context, String label, View.OnClickListener action) {
         return baseButton(context, label, action,
-                new RippleDrawable(ColorStateList.valueOf(0x22FFFFFF), shape(context, DANGER, RADIUS_BUTTON), null),
-                WHITE);
+                new RippleDrawable(ColorStateList.valueOf(DARK ? 0x22171717 : 0x22FFFFFF),
+                        shape(context, DANGER, RADIUS_BUTTON), null),
+                ON_DANGER);
     }
 
     private static Button baseButton(Context context, String label, View.OnClickListener action,
             Drawable background, int textColor) {
         Button view = new Button(context);
         view.setText(label);
-        view.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14.5f);
+        view.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
         view.setAllCaps(false);
         view.setTypeface(MEDIUM);
-        view.setLetterSpacing(0.01f);
+        view.setLetterSpacing(0);
+        view.setGravity(Gravity.CENTER);
+        view.setSingleLine(false);
+        view.setEllipsize(null);
         view.setTextColor(new ColorStateList(new int[][]{new int[]{-android.R.attr.state_enabled}, new int[]{}},
-                new int[]{0xFF98A2B3, textColor}));
-        view.setMinHeight(dp(context, 50));
-        view.setMinimumHeight(dp(context, 50));
+                new int[]{(textColor & 0x00FFFFFF) | 0x99000000, textColor}));
+        view.setMinHeight(dp(context, 48));
+        view.setMinimumHeight(dp(context, 48));
         view.setMinWidth(0);
         view.setMinimumWidth(0);
-        int padH = dp(context, 18);
-        view.setPadding(padH, dp(context, 10), padH, dp(context, 10));
+        int padH = dp(context, 16);
+        view.setPadding(padH, dp(context, 9), padH, dp(context, 9));
         view.setStateListAnimator(null);
         view.setElevation(0);
         view.setBackground(background);
@@ -729,30 +753,32 @@ public final class Ui {
     /** Field with an explicit IME action; `action` (nullable) runs when the keyboard commits. */
     public static EditText field(Context context, LinearLayout parent, String label, String value,
             int imeAction, android.widget.TextView.OnEditorActionListener action) {
-        TextView heading = styled(context, label, 12.5f, MUTED, MEDIUM);
-        heading.setLetterSpacing(0.02f);
+        TextView heading = styled(context, label, 12, MUTED, MEDIUM);
+        heading.setLetterSpacing(0.01f);
         LinearLayout.LayoutParams title = new LinearLayout.LayoutParams(-1, -2);
-        title.topMargin = dp(context, 14);
+        title.topMargin = dp(context, 12);
         parent.addView(heading, title);
         EditText input = new EditText(context);
         input.setSingleLine(true);
         input.setText(value);
-        input.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15.5f);
+        input.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
         input.setTextColor(INK);
         input.setHintTextColor(FAINT);
         input.setTypeface(REGULAR);
-        input.setMinHeight(dp(context, 52));
-        input.setPadding(dp(context, 16), dp(context, 12), dp(context, 16), dp(context, 12));
-        input.setBackground(new RippleDrawable(ColorStateList.valueOf(0x0F0F172A),
-                shape(context, SURFACE_SOFT, RADIUS_FIELD, true), null));
+        input.setMinHeight(dp(context, 48));
+        input.setPadding(dp(context, 14), dp(context, 10), dp(context, 14), dp(context, 10));
+        input.setBackground(new RippleDrawable(ColorStateList.valueOf(DARK ? 0x0FFFFFFF : 0x0F000000),
+                shape(context, WHITE, RADIUS_FIELD, true), null));
         input.setSelectAllOnFocus(true);
+        input.setId(View.generateViewId());
+        heading.setLabelFor(input.getId());
         input.setContentDescription(label);
         if (imeAction != 0) {
             input.setImeOptions(imeAction);
             if (action != null) input.setOnEditorActionListener(action);
         }
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-1, -2);
-        params.topMargin = dp(context, 7);
+        params.topMargin = dp(context, 6);
         parent.addView(input, params);
         return input;
     }
@@ -760,30 +786,31 @@ public final class Ui {
     public static EditText searchField(Context context) {
         EditText input = new EditText(context);
         input.setSingleLine(true);
-        input.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14.5f);
+        input.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
         input.setTextColor(INK);
         input.setHintTextColor(FAINT);
         input.setBackground(null);
-        input.setPadding(0, 0, 0, 0);
+        input.setMinHeight(dp(context, 48));
+        input.setPadding(0, dp(context, 10), 0, dp(context, 10));
         input.setContentDescription("搜索环境或代理");
         return input;
     }
 
     public static LinearLayout searchSurface(Context context, EditText input) {
         LinearLayout surface = row(context);
-        surface.setBackground(shape(context, WHITE, RADIUS_FIELD, true));
-        surface.setElevation(dp(context, 1f));
-        surface.setPadding(dp(context, 14), 0, dp(context, 14), 0);
-        IconView leading = new IconView(context, Glyph.SEARCH, FAINT);
+        surface.setBackground(shape(context, SURFACE_SOFT, RADIUS_FIELD));
+        surface.setElevation(0);
+        surface.setPadding(dp(context, 12), 0, dp(context, 10), 0);
+        IconView leading = new IconView(context, Glyph.SEARCH, MUTED);
         leading.setLayoutParams(new LinearLayout.LayoutParams(dp(context, 18), dp(context, 18)));
         surface.addView(leading);
-        LinearLayout.LayoutParams inputParams = new LinearLayout.LayoutParams(0, dp(context, 50), 1f);
+        LinearLayout.LayoutParams inputParams = new LinearLayout.LayoutParams(0, -2, 1f);
         inputParams.leftMargin = dp(context, 10);
         surface.addView(input, inputParams);
-        FrameLayout clear = iconButton(context, Glyph.CLOSE, "清空搜索", FAINT,
+        FrameLayout clear = iconButton(context, Glyph.CLOSE, "清空搜索", MUTED,
                 v -> input.setText(""));
         clear.setVisibility(View.GONE);
-        surface.addView(clear, new LinearLayout.LayoutParams(dp(context, 34), dp(context, 34)));
+        surface.addView(clear, new LinearLayout.LayoutParams(dp(context, 48), dp(context, 48)));
         input.addTextChangedListener(new TextWatcher() {
             @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) { }
             @Override public void onTextChanged(CharSequence s, int start, int before, int count) {
@@ -800,73 +827,95 @@ public final class Ui {
     public static FrameLayout segmented(Context context, String[] labels, int[] counts, int selected,
             SegmentListener listener) {
         FrameLayout holder = new FrameLayout(context);
-        holder.setBackground(shape(context, BG_DEEP, 16));
-        int pad = dp(context, 4);
-        holder.setPadding(pad, pad, pad, pad);
+        holder.setBackgroundColor(Color.TRANSPARENT);
         final View indicator = new View(context);
-        indicator.setBackground(gradient(context, 13, ACCENT, ACCENT_2));
-        indicator.setElevation(dp(context, 1.5f));
-        holder.addView(indicator, new FrameLayout.LayoutParams(0, dp(context, 42)));
+        indicator.setBackground(shape(context, SURFACE_SOFT, 14));
+        indicator.setElevation(0);
+        holder.addView(indicator, new FrameLayout.LayoutParams(0, 0, Gravity.TOP | Gravity.LEFT));
         LinearLayout tabs = row(context);
-        tabs.setElevation(dp(context, 2f));
-        holder.addView(tabs, new FrameLayout.LayoutParams(-1, dp(context, 42)));
+        tabs.setMinimumHeight(dp(context, 48));
+        holder.addView(tabs, new FrameLayout.LayoutParams(-1, -2));
         final TextView[] views = new TextView[labels.length];
         for (int i = 0; i < labels.length; i++) {
             final int index = i;
-            String text = labels[i] + (counts != null && counts[i] >= 0 ? "  " + counts[i] : "");
-            TextView tab = styled(context, text, 13.5f, i == selected ? WHITE : MUTED, MEDIUM);
+            String text = labels[i] + (counts != null && i < counts.length && counts[i] >= 0
+                    ? "  " + counts[i] : "");
+            TextView tab = styled(context, text, 15, i == selected ? INK : MUTED, MEDIUM);
             tab.setTag(labels[i]);
+            tab.setSelected(i == selected);
             tab.setGravity(Gravity.CENTER);
-            tab.setSingleLine(true);
-            tab.setEllipsize(android.text.TextUtils.TruncateAt.END);
-            tab.setPadding(dp(context, 6), 0, dp(context, 6), 0);
-            tab.setLayoutParams(new LinearLayout.LayoutParams(0, -1, 1f));
+            tab.setSingleLine(false);
+            tab.setIncludeFontPadding(true);
+            tab.setEllipsize(null);
+            tab.setMinHeight(dp(context, 48));
+            tab.setPadding(dp(context, 6), dp(context, 8), dp(context, 6), dp(context, 8));
+            tab.setLayoutParams(new LinearLayout.LayoutParams(0, -2, 1f));
             tab.setOnClickListener(v -> {
                 haptic(v);
                 listener.onSegment(index);
             });
             pressable(tab);
             views[i] = tab;
+            tab.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> {
+                if (l != ol || t != ot || r != or || b != ob) positionSegmentIndicator(holder, false);
+            });
             tabs.addView(tab);
         }
-        final int initial = selected;
-        Runnable layout = () -> {
-            int width = (holder.getWidth() - pad * 2) / labels.length;
-            if (width <= 0) return;
-            FrameLayout.LayoutParams params = (FrameLayout.LayoutParams) indicator.getLayoutParams();
-            params.width = width;
-            indicator.setLayoutParams(params);
-            indicator.setTranslationX(pad + width * initial);
-        };
-        holder.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> layout.run());
-        holder.post(layout);
-        holder.setTag(new Object[]{indicator, views});
+        // 保存当前选择，重布局时不能退回构造时的初始项。
+        holder.setTag(new Object[]{indicator, views, new int[]{selected}});
+        holder.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> {
+            if (l != ol || t != ot || r != or || b != ob) positionSegmentIndicator(holder, false);
+        });
+        tabs.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> {
+            if (l != ol || t != ot || r != or || b != ob) positionSegmentIndicator(holder, false);
+        });
+        holder.post(() -> positionSegmentIndicator(holder, false));
         return holder;
+    }
+
+    private static void positionSegmentIndicator(FrameLayout segmented, boolean animate) {
+        Object[] state = (Object[]) segmented.getTag();
+        View indicator = (View) state[0];
+        TextView[] views = (TextView[]) state[1];
+        int index = ((int[]) state[2])[0];
+        if (index < 0 || index >= views.length) return;
+        TextView tab = views[index];
+        if (tab.getWidth() <= 0 || tab.getHeight() <= 0) return;
+        View tabs = (View) tab.getParent();
+        FrameLayout.LayoutParams params = (FrameLayout.LayoutParams) indicator.getLayoutParams();
+        if (params.width != tab.getWidth() || params.height != tab.getHeight()) {
+            params.width = tab.getWidth();
+            params.height = tab.getHeight();
+            indicator.setLayoutParams(params);
+        }
+        // 以实际子项边界定位，兼容字号变化、宽度余数和 RTL，避免重复叠加容器 padding。
+        float x = tabs.getLeft() + tab.getLeft() - segmented.getPaddingLeft();
+        float y = tabs.getTop() + tab.getTop() - segmented.getPaddingTop();
+        indicator.animate().cancel();
+        indicator.setTranslationY(y);
+        if (animate) {
+            indicator.animate().translationX(x).setDuration(220).setInterpolator(EASE).start();
+        } else {
+            indicator.setTranslationX(x);
+        }
     }
 
     public static void selectSegment(FrameLayout segmented, int index, int[] counts) {
         Object tag = segmented.getTag();
         if (!(tag instanceof Object[])) return;
         Object[] state = (Object[]) tag;
-        View indicator = (View) state[0];
         TextView[] views = (TextView[]) state[1];
         if (index < 0 || index >= views.length) return;
-        int pad = segmented.getPaddingLeft();
-        int width = (segmented.getWidth() - pad * 2) / views.length;
-        if (width > 0) {
-            FrameLayout.LayoutParams params = (FrameLayout.LayoutParams) indicator.getLayoutParams();
-            params.width = width;
-            indicator.setLayoutParams(params);
-            indicator.animate().translationX(pad + width * index)
-                    .setDuration(220).setInterpolator(EASE).start();
-        }
+        ((int[]) state[2])[0] = index;
         for (int i = 0; i < views.length; i++) {
-            views[i].setTextColor(i == index ? WHITE : MUTED);
+            views[i].setSelected(i == index);
+            views[i].setTextColor(i == index ? INK : MUTED);
             if (counts != null && i < counts.length) {
                 String base = String.valueOf(views[i].getTag());
                 views[i].setText(counts[i] >= 0 ? base + "  " + counts[i] : base);
             }
         }
+        positionSegmentIndicator(segmented, true);
     }
 
     // ── Sheet (bottom-anchored dialog) ─────────────────────────────────────────────────────
@@ -888,10 +937,23 @@ public final class Ui {
                 window.setDimAmount(0.32f);
                 window.addFlags(android.view.WindowManager.LayoutParams.FLAG_DIM_BEHIND);
             }
-            LinearLayout panel = column(activity);
+            LinearLayout panel = new LinearLayout(activity) {
+                @Override protected void onMeasure(int widthSpec, int heightSpec) {
+                    android.graphics.Rect visible = new android.graphics.Rect();
+                    activity.getWindow().getDecorView().getWindowVisibleDisplayFrame(visible);
+                    int available = visible.height() > 0 ? visible.height()
+                            : activity.getResources().getDisplayMetrics().heightPixels;
+                    int limit = Math.max(1, (int) (available * 0.9f));
+                    if (MeasureSpec.getMode(heightSpec) != MeasureSpec.UNSPECIFIED) {
+                        limit = Math.min(limit, MeasureSpec.getSize(heightSpec));
+                    }
+                    super.onMeasure(widthSpec, MeasureSpec.makeMeasureSpec(limit, MeasureSpec.AT_MOST));
+                }
+            };
+            panel.setOrientation(LinearLayout.VERTICAL);
             GradientDrawable background = new GradientDrawable();
             background.setColor(WHITE);
-            float radius = Ui.dp(activity, 28);
+            float radius = Ui.dp(activity, 24);
             background.setCornerRadii(new float[]{radius, radius, radius, radius, 0, 0, 0, 0});
             panel.setBackground(background);
             int padH = Ui.dp(activity, 20);
@@ -900,7 +962,7 @@ public final class Ui {
             View handle = new View(activity);
             GradientDrawable handleBackground = new GradientDrawable();
             // Derived from the mode: a fixed light gray is invisible on the night panel.
-            handleBackground.setColor(DARK ? 0xFF3A4152 : 0xFFD8DCE6);
+            handleBackground.setColor(DARK ? 0xFF484848 : 0xFFD8D8D8);
             handleBackground.setCornerRadius(Ui.dp(activity, 3));
             handle.setBackground(handleBackground);
             LinearLayout.LayoutParams handleParams = new LinearLayout.LayoutParams(
@@ -908,37 +970,33 @@ public final class Ui {
             handleParams.gravity = Gravity.CENTER_HORIZONTAL;
             panel.addView(handle, handleParams);
 
-            LinearLayout header = column(activity);
-            LinearLayout.LayoutParams headerParams = new LinearLayout.LayoutParams(-1, -2);
-            headerParams.topMargin = Ui.dp(activity, 16);
-            panel.addView(header, headerParams);
+            body = column(activity);
+            // Titles may contain full object names: scroll them too, never displace decisions.
             if (title != null) {
                 TextView heading = styled(activity, title, 20, INK, MEDIUM);
-                heading.setLetterSpacing(-0.02f);
-                header.addView(heading);
+                body.addView(heading, new LinearLayout.LayoutParams(-1, -2));
             }
             if (subtitle != null && !subtitle.isEmpty()) {
-                TextView sub = caption(activity, subtitle);
+                TextView sub = Ui.body(activity, subtitle);
                 LinearLayout.LayoutParams subParams = new LinearLayout.LayoutParams(-1, -2);
-                subParams.topMargin = Ui.dp(activity, 6);
-                header.addView(sub, subParams);
+                subParams.topMargin = Ui.dp(activity, 8);
+                body.addView(sub, subParams);
             }
-
-            body = column(activity);
-            LinearLayout.LayoutParams bodyParams = new LinearLayout.LayoutParams(-1, -2);
+            ScrollView scroll = new ScrollView(activity);
+            scroll.setClipToPadding(false);
+            scroll.addView(body, new FrameLayout.LayoutParams(-1, -2));
+            // Only the body can shrink/scroll; the decision actions remain outside it.
+            LinearLayout.LayoutParams bodyParams = new LinearLayout.LayoutParams(-1, -2, 1f);
             bodyParams.topMargin = Ui.dp(activity, 16);
-            panel.addView(body, bodyParams);
+            panel.addView(scroll, bodyParams);
             footer = row(activity);
             LinearLayout.LayoutParams footerParams = new LinearLayout.LayoutParams(-1, -2);
             footerParams.topMargin = Ui.dp(activity, 18);
             panel.addView(footer, footerParams);
 
-            ScrollView scroll = new ScrollView(activity);
-            scroll.setFillViewport(true);
-            scroll.addView(panel);
             FrameLayout shell = new FrameLayout(activity);
             shell.setPadding(Ui.dp(activity, 8), Ui.dp(activity, 16), Ui.dp(activity, 8), 0);
-            shell.addView(scroll, new FrameLayout.LayoutParams(-1, -2));
+            shell.addView(panel, new FrameLayout.LayoutParams(-1, -2));
             dialog.setContentView(shell);
             dialog.setCancelable(true);
             dialog.setCanceledOnTouchOutside(true);
@@ -966,24 +1024,44 @@ public final class Ui {
         }
 
         public Sheet actions(String secondary, Runnable onSecondary, String primary, Runnable onPrimary) {
+            return buildActions(secondary, onSecondary, primary, onPrimary, false);
+        }
+
+        public Sheet dangerActions(String secondary, Runnable onSecondary, String primary, Runnable onPrimary) {
+            return buildActions(secondary, onSecondary, primary, onPrimary, true);
+        }
+
+        /** Callbacks own dismissal; validation/async work may deliberately keep the sheet open. */
+        private Sheet buildActions(String secondary, Runnable onSecondary, String primary,
+                Runnable onPrimary, boolean destructive) {
             footer.removeAllViews();
+            boolean stacked = activity.getResources().getConfiguration().screenWidthDp < 360
+                    || activity.getResources().getConfiguration().fontScale >= 1.3f;
+            footer.setOrientation(stacked ? LinearLayout.VERTICAL : LinearLayout.HORIZONTAL);
             if (secondary != null) {
-                Button cancel = ghost(activity, secondary, v -> {
+                Button cancel = button(activity, secondary, v -> {
                     if (onSecondary != null) onSecondary.run();
                     else dialog.dismiss();
                 });
-                footer.addView(cancel, new LinearLayout.LayoutParams(0, dp(activity, 50), 1f));
+                footer.addView(cancel, new LinearLayout.LayoutParams(stacked ? -1 : 0, -2,
+                        stacked ? 0f : 1f));
             }
             if (primary != null) {
-                Button save = primary(activity, primary, v -> {
+                View.OnClickListener action = v -> {
                     if (onPrimary != null) onPrimary.run();
                     else dialog.dismiss();
-                });
-                LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(0, dp(activity, 50),
-                        secondary == null ? 1f : 1.25f);
-                if (secondary != null) params.leftMargin = dp(activity, 10);
+                };
+                Button save = destructive ? danger(activity, primary, action)
+                        : primary(activity, primary, action);
+                LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(stacked ? -1 : 0,
+                        -2, stacked ? 0f : 1f);
+                if (secondary != null) {
+                    if (stacked) params.topMargin = dp(activity, 8);
+                    else params.setMarginStart(dp(activity, 10));
+                }
                 footer.addView(save, params);
             }
+            footer.setVisibility(secondary == null && primary == null ? View.GONE : View.VISIBLE);
             return this;
         }
 
@@ -995,9 +1073,12 @@ public final class Ui {
             if (window != null) {
                 window.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
                 window.setGravity(Gravity.BOTTOM);
+                window.setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
                 View decor = window.getDecorView();
-                decor.setTranslationY(Ui.dp(activity, 320));
-                decor.animate().translationY(0f).setDuration(260).setInterpolator(EASE).start();
+                if (Build.VERSION.SDK_INT < 26 || android.animation.ValueAnimator.areAnimatorsEnabled()) {
+                    decor.setTranslationY(Ui.dp(activity, 24));
+                    decor.animate().translationY(0f).setDuration(200).setInterpolator(EASE).start();
+                }
             }
         }
     }
@@ -1006,13 +1087,13 @@ public final class Ui {
     public static LinearLayout emptyState(Context context, String title, String body) {
         LinearLayout card = card(context);
         card.setGravity(Gravity.CENTER_HORIZONTAL);
-        int pad = dp(context, 26);
+        int pad = dp(context, 22);
         card.setPadding(pad, pad, pad, pad);
         Illustration art = new Illustration(context);
-        LinearLayout.LayoutParams artParams = new LinearLayout.LayoutParams(dp(context, 96), dp(context, 96));
+        LinearLayout.LayoutParams artParams = new LinearLayout.LayoutParams(dp(context, 76), dp(context, 76));
         artParams.gravity = Gravity.CENTER_HORIZONTAL;
         card.addView(art, artParams);
-        TextView heading = styled(context, title, 18.5f, INK, MEDIUM);
+        TextView heading = styled(context, title, 17, INK, MEDIUM);
         heading.setGravity(Gravity.CENTER);
         LinearLayout.LayoutParams headingParams = new LinearLayout.LayoutParams(-1, -2);
         headingParams.topMargin = dp(context, 16);
@@ -1040,16 +1121,17 @@ public final class Ui {
             float cx = w / 2f;
             float cy = h / 2f;
             paint.setStyle(Paint.Style.FILL);
-            paint.setColor(0x0F4F46E5);
+            paint.setColor(SURFACE_SOFT);
             canvas.drawCircle(cx, cy, w * 0.48f, paint);
-            paint.setColor(0x1A4F46E5);
+            paint.setColor(ACCENT_SOFT);
             canvas.drawCircle(cx, cy, w * 0.36f, paint);
-            paint.setShader(new LinearGradient(0, 0, w, h, ACCENT, ACCENT_2, Shader.TileMode.CLAMP));
+            paint.setColor(ACCENT);
             canvas.drawCircle(cx, cy, w * 0.22f, paint);
-            paint.setShader(null);
-            paint.setColor(WHITE);
+            paint.setColor(DARK ? 0xFF171717 : 0xFFFFFFFF);
             paint.setStyle(Paint.Style.STROKE);
-            paint.setStrokeWidth(dp(getContext(), 2f));
+            paint.setStrokeWidth(getContext().getResources().getDisplayMetrics().density * 1.75f);
+            paint.setStrokeCap(Paint.Cap.ROUND);
+            paint.setStrokeJoin(Paint.Join.ROUND);
             Path path = new Path();
             path.moveTo(cx - w * 0.09f, cy);
             path.lineTo(cx - w * 0.02f, cy + w * 0.07f);

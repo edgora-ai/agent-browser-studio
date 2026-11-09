@@ -27,16 +27,21 @@ import java.util.Locale;
  */
 final class NewTabPage extends FrameLayout {
     // Palette resolved from the activity's night mode (NativeBrowserActivity.resolvePalette).
-    private final int PAGE;
-    private final int PAGE_TOP;
-    private final int CARD;
-    private final int INK;
-    private final int MUTED;
-    private final int ACCENT;
-    private final int ACCENT_SOFT;
-    private final int STROKE;
-    private static final int[] TILE_HUES = {0xFF4F46E5, 0xFF0D9488, 0xFFDB2777, 0xFFD97706,
-            0xFF0284C7, 0xFF7C3AED, 0xFF059669, 0xFF64748B};
+    private int PAGE;
+    private int PAGE_TOP;
+    private int CARD;
+    private int INK;
+    private int MUTED;
+    private int ACCENT;
+    private int ACCENT_SOFT;
+    private int STROKE;
+    private int RIPPLE;
+    private final NativeBrowserActivity.PaletteBindings staticPaletteBindings =
+            new NativeBrowserActivity.PaletteBindings();
+    private final NativeBrowserActivity.PaletteBindings tilePaletteBindings =
+            new NativeBrowserActivity.PaletteBindings();
+    private final NativeBrowserActivity.FontBindings staticFonts = new NativeBrowserActivity.FontBindings();
+    private final NativeBrowserActivity.FontBindings tileFonts = new NativeBrowserActivity.FontBindings();
     private static final int MAX_TILES = 9;
 
     /** Actions the activity performs on behalf of the new-tab page. */
@@ -57,17 +62,15 @@ final class NewTabPage extends FrameLayout {
 
     NewTabPage(Context context, BrowserHistoryStore store, String profileName, Listener listener) {
         super(context);
-        PAGE = NativeBrowserActivity.C_CANVAS; PAGE_TOP = NativeBrowserActivity.C_TILE_TOP;
-        CARD = NativeBrowserActivity.C_SURFACE; INK = NativeBrowserActivity.C_INK;
-        MUTED = NativeBrowserActivity.C_MUTED; ACCENT = NativeBrowserActivity.C_ACCENT;
-        ACCENT_SOFT = NativeBrowserActivity.C_ACCENT_SOFT; STROKE = NativeBrowserActivity.C_STROKE;
+        readPalette();
 
         this.store = store;
         this.listener = listener;
         search = new EditText(context);
-        GradientDrawable pageBackground = new GradientDrawable(
-                GradientDrawable.Orientation.TOP_BOTTOM, new int[]{PAGE_TOP, PAGE});
+        GradientDrawable pageBackground = new GradientDrawable();
+        pageBackground.setOrientation(GradientDrawable.Orientation.TOP_BOTTOM);
         setBackground(pageBackground);
+        staticPaletteBindings.add(() -> pageBackground.setColors(new int[]{PAGE_TOP, PAGE}));
         setClickable(true);
         setDescendantFocusability(FOCUS_BEFORE_DESCENDANTS);
         setFocusableInTouchMode(true);
@@ -95,29 +98,56 @@ final class NewTabPage extends FrameLayout {
 
         TextView footer = new TextView(context);
         footer.setText("长按站点可移除 · 历史记录仅保存在本设备的当前环境，不会上传");
-        footer.setTextSize(11);
-        footer.setTextColor(MUTED);
+        staticFonts.bind(footer, 11);
+        staticPaletteBindings.add(() -> footer.setTextColor(MUTED));
         footer.setGravity(Gravity.CENTER);
         column.addView(footer, new LinearLayout.LayoutParams(-1, -2));
 
         setVisibility(View.GONE);
     }
 
+    private void readPalette() {
+        PAGE = NativeBrowserActivity.C_CANVAS; PAGE_TOP = NativeBrowserActivity.C_TILE_TOP;
+        CARD = NativeBrowserActivity.C_SURFACE; INK = NativeBrowserActivity.C_INK;
+        MUTED = NativeBrowserActivity.C_MUTED; ACCENT = NativeBrowserActivity.C_ACCENT;
+        ACCENT_SOFT = NativeBrowserActivity.C_ACCENT_SOFT; STROKE = NativeBrowserActivity.C_STROKE;
+        RIPPLE = NativeBrowserActivity.C_RIPPLE;
+    }
+
+    /** Recolors the existing surface and dialogs without rebuilding content or input. */
+    void applyPalette() {
+        readPalette();
+        staticPaletteBindings.apply();
+        tilePaletteBindings.apply();
+        if (removalDialog != null) BrowserDialogs.applyPalette(removalDialog);
+    }
+
+    /** Rebind existing text without rebuilding tiles or changing the search draft. */
+    void applyFontScale() {
+        if (quiescing) return;
+        staticFonts.apply();
+        tileFonts.apply();
+        if (removalDialog != null) BrowserDialogs.applyFontScale(removalDialog);
+    }
+
     private LinearLayout buildIdentityRow(Context context, String profileName) {
         String name = profileName == null || profileName.trim().isEmpty() ? "默认环境" : profileName.trim();
+        // Keep identity and navigation on independent lines at every font size.
+        LinearLayout header = new LinearLayout(context);
+        header.setOrientation(LinearLayout.VERTICAL);
         LinearLayout row = new LinearLayout(context);
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(Gravity.CENTER_VERTICAL);
 
         TextView avatar = new TextView(context);
         avatar.setText(new String(Character.toChars(name.codePointAt(0))).toUpperCase(Locale.ROOT));
-        avatar.setTextSize(17);
+        staticFonts.bind(avatar, 17);
         avatar.setTypeface(Typeface.DEFAULT_BOLD);
-        avatar.setTextColor(ACCENT);
+        staticPaletteBindings.add(() -> avatar.setTextColor(ACCENT));
         avatar.setGravity(Gravity.CENTER);
         GradientDrawable disc = new GradientDrawable();
         disc.setShape(GradientDrawable.OVAL);
-        disc.setColor((ACCENT & 0x00FFFFFF) | 0x1A000000);
+        staticPaletteBindings.add(() -> disc.setColor((ACCENT & 0x00FFFFFF) | 0x1A000000));
         avatar.setBackground(disc);
         row.addView(avatar, new LinearLayout.LayoutParams(dp(44), dp(44)));
 
@@ -125,16 +155,16 @@ final class NewTabPage extends FrameLayout {
         column.setOrientation(LinearLayout.VERTICAL);
         TextView title = new TextView(context);
         title.setText(name);
-        title.setTextSize(17);
+        staticFonts.bind(title, 17);
         title.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
-        title.setTextColor(INK);
+        staticPaletteBindings.add(() -> title.setTextColor(INK));
         title.setSingleLine(true);
         title.setEllipsize(android.text.TextUtils.TruncateAt.END);
         column.addView(title, new LinearLayout.LayoutParams(-2, -2));
         TextView hint = new TextView(context);
         hint.setText("历史记录按环境隔离");
-        hint.setTextSize(12.5f);
-        hint.setTextColor(MUTED);
+        staticFonts.bind(hint, 12.5f);
+        staticPaletteBindings.add(() -> hint.setTextColor(MUTED));
         column.addView(hint, new LinearLayout.LayoutParams(-2, -2));
         LinearLayout.LayoutParams columnLayout = new LinearLayout.LayoutParams(0, -2, 1);
         columnLayout.setMargins(dp(12), 0, dp(8), 0);
@@ -142,37 +172,48 @@ final class NewTabPage extends FrameLayout {
 
         TextView historyButton = new TextView(context);
         historyButton.setText("历史记录");
-        historyButton.setTextSize(12.5f);
+        staticFonts.bind(historyButton, 12.5f);
         historyButton.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
-        historyButton.setTextColor(ACCENT);
+        staticPaletteBindings.add(() -> historyButton.setTextColor(ACCENT));
         historyButton.setGravity(Gravity.CENTER);
         historyButton.setMinimumWidth(dp(48));
         historyButton.setMinimumHeight(dp(40));
-        historyButton.setBackground(rounded(ACCENT_SOFT, 20));
+        GradientDrawable historyButtonBackground = rounded(ACCENT_SOFT, 20);
+        historyButton.setBackground(historyButtonBackground);
+        staticPaletteBindings.add(() -> historyButtonBackground.setColor(ACCENT_SOFT));
         historyButton.setPadding(dp(14), 0, dp(14), 0);
         historyButton.setOnClickListener(view -> {
             view.performHapticFeedback(android.view.HapticFeedbackConstants.KEYBOARD_TAP);
             if (!quiescing) listener.onNtpOpenHistory();
         });
-        row.addView(historyButton, new LinearLayout.LayoutParams(-2, -2));
-        return row;
+        header.addView(row, new LinearLayout.LayoutParams(-1, -2));
+        LinearLayout.LayoutParams historyLayout = new LinearLayout.LayoutParams(-2, -2);
+        historyLayout.setMargins(0, dp(8), 0, 0);
+        header.addView(historyButton, historyLayout);
+        return header;
     }
 
     private LinearLayout buildSearchCard(Context context) {
         LinearLayout card = new LinearLayout(context);
         card.setOrientation(LinearLayout.HORIZONTAL);
         card.setGravity(Gravity.CENTER_VERTICAL);
-        card.setBackground(stroked(CARD, 23));
+        GradientDrawable cardBackground = stroked(CARD, 23);
+        card.setBackground(cardBackground);
+        staticPaletteBindings.add(() -> {
+            cardBackground.setColor(CARD);
+            cardBackground.setStroke(dp(1), STROKE);
+        });
         card.setElevation(dp(1.5f));
         card.setPadding(dp(10), dp(8), dp(10), dp(8));
         LinearLayout.LayoutParams cardLayout = new LinearLayout.LayoutParams(-1, -2);
         cardLayout.setMargins(0, dp(20), 0, 0);
         card.setLayoutParams(cardLayout);
 
-        search.setHint("搜索或输入网址");
-        search.setHintTextColor(MUTED);
-        search.setTextColor(INK);
-        search.setTextSize(15.5f);
+        search.setHint("搜索");
+        search.setContentDescription("搜索或输入网址");
+        staticPaletteBindings.add(() -> search.setHintTextColor(MUTED));
+        staticPaletteBindings.add(() -> search.setTextColor(INK));
+        staticFonts.bind(search, 15.5f);
         search.setSingleLine(true);
         search.setBackground(null);
         search.setImeOptions(EditorInfo.IME_ACTION_GO);
@@ -190,13 +231,15 @@ final class NewTabPage extends FrameLayout {
 
         TextView go = new TextView(context);
         go.setText("前往");
-        go.setTextSize(13.5f);
+        staticFonts.bind(go, 13.5f);
         go.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
-        go.setTextColor(ACCENT);
+        staticPaletteBindings.add(() -> go.setTextColor(ACCENT));
         go.setGravity(Gravity.CENTER);
         go.setMinimumWidth(dp(56));
         go.setMinimumHeight(dp(40));
-        go.setBackground(rounded(ACCENT_SOFT, 20));
+        GradientDrawable goBackground = rounded(ACCENT_SOFT, 20);
+        go.setBackground(goBackground);
+        staticPaletteBindings.add(() -> goBackground.setColor(ACCENT_SOFT));
         go.setPadding(dp(14), 0, dp(14), 0);
         go.setOnClickListener(view -> {
             view.performHapticFeedback(android.view.HapticFeedbackConstants.KEYBOARD_TAP);
@@ -216,15 +259,15 @@ final class NewTabPage extends FrameLayout {
 
         TextView section = new TextView(context);
         section.setText("最近访问");
-        section.setTextSize(17);
+        staticFonts.bind(section, 17);
         section.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
-        section.setTextColor(INK);
+        staticPaletteBindings.add(() -> section.setTextColor(INK));
         row.addView(section, new LinearLayout.LayoutParams(0, -2, 1));
 
         TextView all = new TextView(context);
         all.setText("全部 ›");
-        all.setTextSize(12.5f);
-        all.setTextColor(MUTED);
+        staticFonts.bind(all, 12.5f);
+        staticPaletteBindings.add(() -> all.setTextColor(MUTED));
         all.setMinimumWidth(dp(48));
         all.setMinimumHeight(dp(40));
         all.setGravity(Gravity.CENTER);
@@ -240,27 +283,32 @@ final class NewTabPage extends FrameLayout {
         LinearLayout card = new LinearLayout(context);
         card.setOrientation(LinearLayout.VERTICAL);
         card.setGravity(Gravity.CENTER);
-        card.setBackground(stroked(CARD, 20));
+        GradientDrawable cardBackground = stroked(CARD, 20);
+        card.setBackground(cardBackground);
+        staticPaletteBindings.add(() -> {
+            cardBackground.setColor(CARD);
+            cardBackground.setStroke(dp(1), STROKE);
+        });
         card.setElevation(dp(1.5f));
         card.setPadding(dp(22), dp(30), dp(22), dp(30));
 
         TextView badge = new TextView(context);
         badge.setText("空");
-        badge.setTextSize(20);
+        staticFonts.bind(badge, 20);
         badge.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
-        badge.setTextColor(ACCENT);
+        staticPaletteBindings.add(() -> badge.setTextColor(ACCENT));
         badge.setGravity(Gravity.CENTER);
         GradientDrawable disc = new GradientDrawable();
         disc.setShape(GradientDrawable.OVAL);
-        disc.setColor(ACCENT_SOFT);
+        staticPaletteBindings.add(() -> disc.setColor(ACCENT_SOFT));
         badge.setBackground(disc);
         card.addView(badge, new LinearLayout.LayoutParams(dp(56), dp(56)));
 
         TextView title = new TextView(context);
         title.setText("还没有浏览记录");
-        title.setTextSize(16);
+        staticFonts.bind(title, 16);
         title.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
-        title.setTextColor(INK);
+        staticPaletteBindings.add(() -> title.setTextColor(INK));
         title.setGravity(Gravity.CENTER);
         LinearLayout.LayoutParams titleLayout = new LinearLayout.LayoutParams(-2, -2);
         titleLayout.setMargins(0, dp(14), 0, 0);
@@ -268,8 +316,8 @@ final class NewTabPage extends FrameLayout {
 
         TextView body = new TextView(context);
         body.setText("正常浏览网页后，最近访问的站点\n会以卡片形式显示在这里");
-        body.setTextSize(12.5f);
-        body.setTextColor(MUTED);
+        staticFonts.bind(body, 12.5f);
+        staticPaletteBindings.add(() -> body.setTextColor(MUTED));
         body.setLineSpacing(dp(3), 1f);
         body.setGravity(Gravity.CENTER);
         LinearLayout.LayoutParams bodyLayout = new LinearLayout.LayoutParams(-2, -2);
@@ -295,6 +343,8 @@ final class NewTabPage extends FrameLayout {
         boolean empty = ranked.isEmpty();
         sectionRow.setVisibility(empty ? View.GONE : View.VISIBLE);
         emptyCard.setVisibility(empty ? View.VISIBLE : View.GONE);
+        tilePaletteBindings.clear();
+        tileFonts.clear();
         tiles.removeAllViews();
         if (empty) return;
         int shown = Math.min(ranked.size(), MAX_TILES);
@@ -324,10 +374,21 @@ final class NewTabPage extends FrameLayout {
         LinearLayout tile = new LinearLayout(context);
         tile.setOrientation(LinearLayout.VERTICAL);
         tile.setGravity(Gravity.CENTER_HORIZONTAL);
-        tile.setBackground(stroked(CARD, 18));
+        GradientDrawable tileBackground = stroked(CARD, 18);
+        tile.setBackground(tileBackground);
+        tilePaletteBindings.add(() -> {
+            tileBackground.setColor(CARD);
+            tileBackground.setStroke(dp(1), STROKE);
+        });
         tile.setElevation(dp(1.5f));
-        tile.setForeground(new android.graphics.drawable.RippleDrawable(
-                android.content.res.ColorStateList.valueOf(NativeBrowserActivity.C_RIPPLE), null, rounded(CARD, 18)));
+        GradientDrawable rippleMask = rounded(CARD, 18);
+        android.graphics.drawable.RippleDrawable ripple = new android.graphics.drawable.RippleDrawable(
+                android.content.res.ColorStateList.valueOf(RIPPLE), null, rippleMask);
+        tile.setForeground(ripple);
+        tilePaletteBindings.add(() -> {
+            ripple.setColor(android.content.res.ColorStateList.valueOf(RIPPLE));
+            rippleMask.setColor(CARD);
+        });
         tile.setPadding(dp(10), dp(14), dp(10), dp(14));
         LinearLayout.LayoutParams tileLayout = new LinearLayout.LayoutParams(0, -2, 1);
         tileLayout.setMargins(dp(5), 0, dp(5), 0);
@@ -342,21 +403,22 @@ final class NewTabPage extends FrameLayout {
             return true;
         });
 
-        int hue = TILE_HUES[Math.floorMod(host.hashCode(), TILE_HUES.length)];
         TextView avatar = new TextView(context);
         avatar.setText(firstLetter(host));
-        avatar.setTextSize(16);
+        tileFonts.bind(avatar, 16);
         avatar.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
-        avatar.setTextColor(hue);
+        tilePaletteBindings.add(() -> avatar.setTextColor(ACCENT));
         avatar.setGravity(Gravity.CENTER);
-        avatar.setBackground(rounded((hue & 0x00FFFFFF) | 0x1F000000, 14));
+        GradientDrawable avatarBackground = rounded(ACCENT_SOFT, 14);
+        avatar.setBackground(avatarBackground);
+        tilePaletteBindings.add(() -> avatarBackground.setColor(ACCENT_SOFT));
         tile.addView(avatar, new LinearLayout.LayoutParams(dp(42), dp(42)));
 
         TextView name = new TextView(context);
         name.setText(host);
-        name.setTextSize(12.5f);
+        tileFonts.bind(name, 12.5f);
         name.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
-        name.setTextColor(INK);
+        tilePaletteBindings.add(() -> name.setTextColor(INK));
         name.setSingleLine(true);
         name.setEllipsize(android.text.TextUtils.TruncateAt.END);
         name.setGravity(Gravity.CENTER);
@@ -366,9 +428,9 @@ final class NewTabPage extends FrameLayout {
 
         TextView meta = new TextView(context);
         meta.setText(relativeTimeFor(visit.lastVisitMillis) + " · " + visit.visitCount + " 次");
-        meta.setTextSize(10.5f);
-        meta.setTextColor(MUTED);
-        meta.setSingleLine(true);
+        tileFonts.bind(meta, 10.5f);
+        tilePaletteBindings.add(() -> meta.setTextColor(MUTED));
+        meta.setSingleLine(false);
         meta.setGravity(Gravity.CENTER);
         tile.addView(meta, new LinearLayout.LayoutParams(-1, -2));
         return tile;
