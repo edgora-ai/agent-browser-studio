@@ -1,0 +1,61 @@
+From: Agent Browser contributors
+Subject: [PATCH] Apply the frozen product language to the ICU default per process
+
+The Android product profile freezes one BCP 47 primary language tag in the same
+verified argv as its timezone, but that tag only reached navigator.language and
+Accept-Language; the ICU default locale (Intl date/number/currency formatting)
+kept following the device system locale. Apply the frozen tag in
+ShellMainDelegate::PreSandboxStartup, which runs in every process strictly
+before any isolate or Blink context exists, so Intl formatting follows the
+profile language like navigator.language does. Only the primary tag is applied;
+anything malformed keeps the inherited locale and is logged as applied=0.
+
+This is not a fingerprint value: it is the same profile-supplied language the
+product already exposes to the page, applied at the engine default layer.
+Runtime acceptance (real-page Intl samples) remains a separate requirement.
+
+diff --git a/content/shell/app/shell_main_delegate.cc b/content/shell/app/shell_main_delegate.cc
+--- a/content/shell/app/shell_main_delegate.cc
++++ b/content/shell/app/shell_main_delegate.cc
+@@ -17,3 +17,4 @@
+ #include "base/files/file.h"
+ #include "base/files/file_path.h"
++#include "base/i18n/rtl.h"
+ #include "base/logging.h"
+@@ -23,2 +24,3 @@
+ #include "base/process/current_process.h"
++#include "base/process/process_handle.h"
+ #include "base/strings/string_number_conversions.h"
+@@ -297,4 +299,32 @@
+ // TODO(crbug.com/40188745): Implement crash reporter integration for Fuchsia.
++#if BUILDFLAG(IS_ANDROID)
++  // The product profile freezes one BCP 47 primary language tag in the same
++  // verified argv as its timezone. Apply it to the ICU default here, in every
++  // process and strictly before any isolate or Blink context exists, so Intl
++  // date, number and currency formatting follow the profile language exactly
++  // like navigator.language and Accept-Language do. The switch names mirror
++  // the Java-side frozen argv; this layer has no blink constant for them.
++  const base::CommandLine& abs_product_command =
++      *base::CommandLine::ForCurrentProcess();
++  if (abs_product_command.HasSwitch("agent-browser-product-profile")) {
++    std::string abs_product_lang =
++        abs_product_command.GetSwitchValueASCII("lang");
++    const size_t abs_comma = abs_product_lang.find(',');
++    if (abs_comma != std::string::npos)
++      abs_product_lang.resize(abs_comma);
++    if (!abs_product_lang.empty() && abs_product_lang.size() <= 35u &&
++        abs_product_lang.find_first_not_of(
++            "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-") ==
++            std::string::npos) {
++      base::i18n::SetICUDefaultLocale(abs_product_lang);
++      LOG(INFO) << "ABS_ANDROID_LOCALE_V1 applied=1 lang=" << abs_product_lang
++                << " pid=" << base::GetCurrentProcId();
++    } else {
++      LOG(INFO) << "ABS_ANDROID_LOCALE_V1 applied=0 pid="
++                << base::GetCurrentProcId();
++    }
++  }
++#endif
+ #if !BUILDFLAG(IS_FUCHSIA)
+   if (base::CommandLine::ForCurrentProcess()->HasSwitch(
+           switches::kEnableCrashReporter)) {

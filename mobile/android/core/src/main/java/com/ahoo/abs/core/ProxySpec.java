@@ -27,4 +27,17 @@ public final class ProxySpec {
     public String proxyRule() {
         return scheme.name().toLowerCase(Locale.ROOT) + "://" + authority();
     }
+
+    /**
+     * Resolver rules that short-circuit every local resolution to the proxy exit.
+     * The product is proxy-mandatory: proxied requests carry the hostname in
+     * CONNECT, so nothing needs the system resolver, and mapped answers keep DNS
+     * prefetch and preconnect hints from leaking destination hostnames to the
+     * local ISP resolver. The proxy endpoint itself and loopback stay excluded so
+     * the configured proxy can still be reached; an IPv6 literal keeps brackets.
+     */
+    public String hostResolverRules() {
+        return "MAP * ~NOTFOUND,EXCLUDE " + HostSyntax.bracket(host)
+                + ",EXCLUDE 127.0.0.1,EXCLUDE localhost";
+    }
 }

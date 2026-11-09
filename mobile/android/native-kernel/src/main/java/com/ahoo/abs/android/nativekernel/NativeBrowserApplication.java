@@ -134,6 +134,7 @@ public final class NativeBrowserApplication extends Application implements Brows
         String[] arguments = new String[]{timezone[0], timezone[1], timezone[2],
                 "--agent-browser-product-profile",
                 "--proxy-server=" + launch.profile.proxy.proxyRule(), "--proxy-bypass-list=<-loopback>",
+                "--host-resolver-rules=" + launch.profile.proxy.hostResolverRules(),
                 "--disable-quic", "--use-mobile-user-agent",
                 "--disable-features=ReduceAcceptLanguage,ReduceAcceptLanguageHTTP",
                 "--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
@@ -156,6 +157,7 @@ public final class NativeBrowserApplication extends Application implements Brows
                 || !frozen.encoded().equals(command.getSwitchValue(NativeTimezoneLaunchConfig.CONFIG_SWITCH))
                 || !launch.profile.proxy.proxyRule().equals(command.getSwitchValue("proxy-server"))
                 || !"<-loopback>".equals(command.getSwitchValue("proxy-bypass-list"))
+                || !launch.profile.proxy.hostResolverRules().equals(command.getSwitchValue("host-resolver-rules"))
                 || !command.hasSwitch("disable-quic")
                 || !command.hasSwitch("use-mobile-user-agent")
                 || !"ReduceAcceptLanguage,ReduceAcceptLanguageHTTP".equals(command.getSwitchValue("disable-features"))

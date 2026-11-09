@@ -31,7 +31,8 @@ public final class NativeBrowserUiSourceContractTest {
             "mobile/android/native-kernel/src/main/java/com/ahoo/abs/android/nativekernel";
     private static final List<String> FILES = List.of(
             "NativeBrowserActivity.java", "TabSwitcherView.java", "NewTabPage.java",
-            "BrowserHistoryStore.java", "HistoryPanel.java", "NativeBrowserRuntime.java", "BrowserDialogs.java");
+            "BrowserHistoryStore.java", "HistoryPanel.java", "NativeBrowserRuntime.java", "BrowserDialogs.java",
+            "NativeBrowserApplication.java");
     private static final Map<String, String> sources = new HashMap<>();
     private static final Map<String, String> methods = new HashMap<>();
     private static final Map<String, String> methodDeclarations = new HashMap<>();
@@ -61,6 +62,7 @@ public final class NativeBrowserUiSourceContractTest {
         realPreviewOwnership();
         popupAndHistorySemantics();
         overlaySafetyAndWarnings();
+        frozenProxyOnlyResolverChain();
         System.out.println(checks + " UI source-contract checks, " + failures + " failures");
         if (failures != 0) throw new AssertionError("Native browser UI source regressions: " + failures);
     }
@@ -81,7 +83,8 @@ public final class NativeBrowserUiSourceContractTest {
                 "mobile/android/app/src/main/java/com/ahoo/abs/android/MainActivity.java",
                 "mobile/android/app/src/main/java/com/ahoo/abs/android/ProfileEditor.java",
                 "mobile/android/app/src/main/java/com/ahoo/abs/android/ProxyEditor.java",
-                "mobile/android/app/src/main/java/com/ahoo/abs/android/process/LaunchCoordinator.java")) {
+                "mobile/android/app/src/main/java/com/ahoo/abs/android/process/LaunchCoordinator.java",
+                "mobile/android/core/src/main/java/com/ahoo/abs/core/ProxySpec.java")) {
             Path path = root.resolve(relative);
             sources.put(path.getFileName().toString(), Files.readString(path, StandardCharsets.UTF_8));
             paths.add(path);
@@ -668,6 +671,30 @@ public final class NativeBrowserUiSourceContractTest {
         String source = sources.get(name);
         if (source == null) throw new IllegalArgumentException("Source not parsed: " + name);
         return source;
+    }
+
+    /**
+     * The product is proxy-mandatory, so the only legitimate resolver is the proxy
+     * exit: the frozen argv must short-circuit every local resolution path (including
+     * DNS prefetch and preconnect hints) so destination hostnames cannot leak to the
+     * local ISP resolver, while the proxy endpoint itself stays reachable.
+     */
+    private static void frozenProxyOnlyResolverChain() {
+        String freeze = method("NativeBrowserApplication", "freezeCommandLine");
+        has(freeze, "\"--host-resolver-rules=\" + launch.profile.proxy.hostResolverRules()",
+                "frozen argv must carry proxy-exit-only resolver rules");
+        has(freeze, "verifyFrozenCommandLine();",
+                "frozen argv is verified before native library load");
+        String verify = method("NativeBrowserApplication", "verifyFrozenCommandLine");
+        has(verify, "launch.profile.proxy.hostResolverRules()",
+                "verification reads the same resolver rules builder as the freeze");
+        has(verify, "\"host-resolver-rules\"",
+                "resolver rules belong to the verified frozen switch set");
+        String spec = method("ProxySpec", "hostResolverRules");
+        has(spec, "MAP * ~NOTFOUND", "mapped names never reach the system resolver");
+        has(spec, "EXCLUDE 127.0.0.1", "loopback proxy endpoints stay reachable");
+        has(spec, "EXCLUDE localhost", "localhost proxy endpoints stay reachable");
+        has(spec, "HostSyntax.bracket(host)", "IPv6 proxy hosts keep resolver-rule brackets");
     }
 
     private static String method(String owner, String name) {
