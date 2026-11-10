@@ -269,6 +269,13 @@ public final class NativeBrowserFocusHostTest {
                 }
                 static final class Activity extends BaseActivity {
                     static final int MAX_TABS = 10;
+                                        // Lifecycle fake-host stub: the real bridge needs Android runtime
+                                        // permissions, which this host deliberately does not exercise.
+                                        static final class MediaPermissionBridge {
+                                            static void setHost(Object activity) { }
+                                            static void clearHost(Object activity) { }
+                                            static void onHostResult(String[] permissions, int[] results) { }
+                                        }
                     static final String INPUT_METHOD_SERVICE = "ime";
                     final Handler main = new Handler();
                     final ViewGroup root = new ViewGroup(this, "ROOT"), browserFrame = new ViewGroup(this, "FRAME");

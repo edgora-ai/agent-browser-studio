@@ -1806,11 +1806,18 @@ public final class NativeBrowserActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
+        MediaPermissionBridge.setHost(this);
         if (closed || quiescing) return;
         resumed = true;
         lastBackExitHint = 0;
         requestChromeRefresh();
         requestActivePreview(manager == null ? null : manager.getActiveShell());
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        MediaPermissionBridge.onHostResult(permissions, grantResults);
     }
 
     @Override
@@ -1839,6 +1846,7 @@ public final class NativeBrowserActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        MediaPermissionBridge.clearHost(this);
         try { closeNativeView(); }
         finally {
             if (runtime != null) runtime.detach(this);

@@ -6,6 +6,7 @@
 
 #include <memory>
 
+#include "base/functional/callback.h"
 #include "services/network/public/mojom/network_context.mojom-forward.h"
 
 class GURL;
@@ -47,6 +48,16 @@ void ConfigureAgentBrowserProductNetworkContextParams(
 // Browser-initiated navigation/worker-script defense only, not complete egress confinement.
 std::unique_ptr<blink::URLLoaderThrottle>
 CreateAgentBrowserProductPreflightThrottle();
+
+// Routes one web media-capture permission request through the Android runtime
+// permission dialog (RECORD_AUDIO/CAMERA) via MediaPermissionBridge. Runs the
+// callback once with the per-type grant results; never persists per-origin
+// decisions, so every web request pays one OS round trip. Must be called on
+// the browser UI thread; the callback runs there too.
+void AgentBrowserRequestAndroidMediaPermissions(
+    bool audio,
+    bool video,
+    base::OnceCallback<void(bool audio_granted, bool video_granted)> callback);
 
 }  // namespace content
 

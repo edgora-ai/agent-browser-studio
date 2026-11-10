@@ -1,0 +1,123 @@
+From: Agent Browser contributors
+Subject: [PATCH] Android product media capture: runtime permission bridge
+
+The product deliberately denied all capture permissions ("deny until a
+reviewed prompt ... is implemented"). This patch implements that prompt path
+for microphone and camera:
+
+- shell_permission_manager.cc routes AUDIO_CAPTURE/VIDEO_CAPTURE requests in
+  product mode through content::AgentBrowserRequestAndroidMediaPermissions,
+  which pays one Android runtime-permission round trip per web request via
+  the MediaPermissionBridge JNI pair. Every other permission type stays
+  denied until a per-profile permission store exists.
+- GetPermissionStatus returns ASK for capture types in product mode so the
+  getUserMedia request path prompts instead of failing as previously denied.
+- BUILD.gn gains a generate_jni target for the bridge's Java class so the
+  browser side can call the static request entry point and receive the
+  asynchronous result.
+
+Native compilation, a real-device runtime grant/deny round trip and camera
+or microphone capture acceptance remain separate requirements; source policy
+tests do not establish runtime success.
+
+--- a/content/shell/android/BUILD.gn
++++ b/content/shell/android/BUILD.gn
+@@ -27,6 +27,13 @@
+   ]
+ }
+ 
++generate_jni("agent_browser_product_jni_headers") {
++  testonly = true
++  sources = [
++    "agent_browser_product/java/com/ahoo/abs/android/nativekernel/MediaPermissionBridge.java",
++  ]
++}
++
+ template("content_shell_library") {
+   shared_library_with_jni(target_name) {
+     testonly = true
+@@ -64,6 +71,7 @@
+ 
+ content_shell_library("libagent_browser_product") {
+   deps = [
++    ":agent_browser_product_jni_headers",
+     ":content_shell_jni_headers",
+     "//components/crash/content/browser",
+     "//content/shell:pak",
+--- a/content/shell/browser/shell_permission_manager.cc
++++ b/content/shell/browser/shell_permission_manager.cc
+@@ -6,6 +6,7 @@
+ 
+ #include "base/command_line.h"
+ #include "base/functional/callback.h"
++#include "base/task/bind_post_task.h"
+ #include "build/build_config.h"
+ #include "components/content_settings/core/common/features.h"
+ #include "components/permissions/permission_util.h"
+@@ -113,6 +114,51 @@
+   // and per-profile permission persistence are implemented.
+   if (base::CommandLine::ForCurrentProcess()->HasSwitch(
+           kAgentBrowserProductProfileSwitch)) {
++    // Capture permissions pay one Android runtime round trip through the
++    // reviewed bridge; every other type stays denied until a per-profile
++    // permission store exists.
++    bool audio = false;
++    bool video = false;
++    bool has_capture = false;
++    std::vector<blink::PermissionType> requested_types;
++    requested_types.reserve(request_description.permissions.size());
++    for (const auto& permission : request_description.permissions) {
++      const auto permission_type =
++          blink::PermissionDescriptorToPermissionType(permission);
++      requested_types.push_back(permission_type);
++      if (permission_type == blink::PermissionType::AUDIO_CAPTURE) {
++        has_capture = true;
++        audio = true;
++      } else if (permission_type == blink::PermissionType::VIDEO_CAPTURE) {
++        has_capture = true;
++        video = true;
++      }
++    }
++    if (has_capture) {
++      auto bridged_callback = base::BindPostTaskToCurrentDefault(base::BindOnce(
++          [](std::vector<blink::PermissionType> requested_types,
++             base::OnceCallback<
++                 void(const std::vector<PermissionResult>&)> callback,
++             bool audio_granted, bool video_granted) {
++            std::vector<PermissionResult> resolved;
++            resolved.reserve(requested_types.size());
++            for (const auto& permission_type : requested_types) {
++              const bool granted =
++                  (permission_type == blink::PermissionType::AUDIO_CAPTURE &&
++                   audio_granted) ||
++                  (permission_type == blink::PermissionType::VIDEO_CAPTURE &&
++                   video_granted);
++              resolved.emplace_back(
++                  granted ? blink::mojom::PermissionStatus::GRANTED
++                          : blink::mojom::PermissionStatus::DENIED);
++            }
++            std::move(callback).Run(resolved);
++          },
++          std::move(requested_types), std::move(callback)));
++      content::AgentBrowserRequestAndroidMediaPermissions(
++          audio, video, std::move(bridged_callback));
++      return;
++    }
+     std::move(callback).Run(std::vector<PermissionResult>(
+         request_description.permissions.size(),
+         PermissionResult(blink::mojom::PermissionStatus::DENIED)));
+@@ -155,6 +201,14 @@
+   base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
+ #if BUILDFLAG(IS_ANDROID)
+   if (command_line->HasSwitch(kAgentBrowserProductProfileSwitch)) {
++    const auto product_permission_type =
++        blink::PermissionDescriptorToPermissionType(permission_descriptor);
++    if (product_permission_type == blink::PermissionType::AUDIO_CAPTURE ||
++        product_permission_type == blink::PermissionType::VIDEO_CAPTURE) {
++      // ASK keeps the getUserMedia request path prompting through the runtime
++      // bridge instead of failing as previously denied.
++      return blink::mojom::PermissionStatus::ASK;
++    }
+     return blink::mojom::PermissionStatus::DENIED;
+   }
+ #endif

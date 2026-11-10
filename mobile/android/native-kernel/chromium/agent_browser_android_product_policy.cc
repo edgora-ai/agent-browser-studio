@@ -9,11 +9,18 @@
 #include <string_view>
 #include <utility>
 
+#include "base/android/jni_android.h"
 #include "base/check.h"
 #include "base/command_line.h"
+#include "base/containers/flat_map.h"
 #include "base/logging.h"
+#include "base/no_destructor.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
+#include "base/synchronization/lock.h"
+#include "base/task/current_thread.h"
+#include "content/public/browser/browser_thread.h"
+#include "content/shell/android/agent_browser_product_jni_headers/MediaPermissionBridge_jni.h"
 #include "net/base/net_errors.h"
 #include "net/base/proxy_server.h"
 #include "net/proxy_resolution/proxy_config.h"
@@ -224,6 +231,66 @@ std::unique_ptr<blink::URLLoaderThrottle>
 CreateAgentBrowserProductPreflightThrottle() {
   CHECK(IsAgentBrowserProductPreflight());
   return std::make_unique<ProductPreflightThrottle>();
+}
+
+namespace {
+
+struct PendingMediaPermission {
+  base::OnceCallback<void(bool, bool)> callback;
+  bool audio = false;
+  bool video = false;
+};
+
+base::Lock& MediaPermissionLock() {
+  static base::NoDestructor<base::Lock> lock;
+  return *lock;
+}
+
+long g_next_media_permission_id = 1;
+base::flat_map<long, PendingMediaPermission>& PendingMediaPermissions() {
+  static base::NoDestructor<base::flat_map<long, PendingMediaPermission>> map;
+  return *map;
+}
+
+}  // namespace
+
+void AgentBrowserRequestAndroidMediaPermissions(
+    bool audio,
+    bool video,
+    base::OnceCallback<void(bool audio_granted, bool video_granted)> callback) {
+  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  long callback_id = 0;
+  {
+    base::AutoLock lock(MediaPermissionLock());
+    callback_id = g_next_media_permission_id++;
+    PendingMediaPermissions()[callback_id] = {std::move(callback), audio, video};
+  }
+  JNIEnv* env = base::android::AttachCurrentThread();
+  Java_MediaPermissionBridge_request(env, static_cast<jlong>(callback_id),
+                                    audio, video);
+}
+
+static void JNI_MediaPermissionBridge_OnPermissionResult(
+    JNIEnv* env,
+    jlong callback_id,
+    jboolean audio_granted,
+    jboolean video_granted) {
+  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  base::OnceCallback<void(bool, bool)> callback;
+  bool requested_audio = false;
+  bool requested_video = false;
+  {
+    base::AutoLock lock(MediaPermissionLock());
+    auto it = PendingMediaPermissions().find(static_cast<long>(callback_id));
+    if (it == PendingMediaPermissions().end()) return;
+    requested_audio = it->second.audio;
+    requested_video = it->second.video;
+    callback = std::move(it->second.callback);
+    PendingMediaPermissions().erase(it);
+  }
+  // A grant can only cover a type the web request actually asked for.
+  std::move(callback).Run(requested_audio && audio_granted,
+                          requested_video && video_granted);
 }
 
 }  // namespace content

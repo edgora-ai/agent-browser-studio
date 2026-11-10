@@ -82,7 +82,9 @@ def collect_inputs(android=ANDROID):
                 if within_package in EXCLUDED_WEBVIEW:
                     continue
             selected.append((source, "java/" + relative, "java"))
-    for relative in ("drawable/ic_launcher.xml", "values/strings.xml", "values/styles.xml",
+    for relative in ("drawable/ic_launcher.xml", "drawable/ic_launcher_background.xml",
+                     "drawable/ic_launcher_foreground.xml", "drawable-anydpi-v26/ic_launcher.xml",
+                     "values/strings.xml", "values/styles.xml",
                      "values-night/styles.xml", "xml/data_extraction_rules.xml"):
         selected.append((android / "app/src/main/res" / relative, "res/" + relative, "resource"))
     selected.extend([
