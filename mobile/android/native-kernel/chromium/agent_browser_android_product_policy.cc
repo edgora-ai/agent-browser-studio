@@ -15,12 +15,13 @@
 #include "base/containers/flat_map.h"
 #include "base/logging.h"
 #include "base/no_destructor.h"
+#include "base/synchronization/lock.h"
+#include "base/task/bind_post_task.h"
+#include "base/time/time.h"
+#include "content/public/browser/browser_thread.h"
+#include "jni_headers/content/shell/agent_browser_product_jni_headers/MediaPermissionBridge_jni.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
-#include "base/synchronization/lock.h"
-#include "base/task/current_thread.h"
-#include "content/public/browser/browser_thread.h"
-#include "content/shell/android/agent_browser_product_jni_headers/MediaPermissionBridge_jni.h"
 #include "net/base/net_errors.h"
 #include "net/base/proxy_server.h"
 #include "net/proxy_resolution/proxy_config.h"
@@ -235,10 +236,17 @@ CreateAgentBrowserProductPreflightThrottle() {
 
 namespace {
 
-struct PendingMediaPermission {
-  base::OnceCallback<void(bool, bool)> callback;
+// Bounded wait while the user answers the system permission dialog. The OS
+// permission store is the single source of truth; the native side re-reads it
+// over JNI instead of keeping a Java-to-native callback channel.
+constexpr base::TimeDelta kMediaPermissionPollInterval = base::Milliseconds(500);
+constexpr int kMediaPermissionPollMaxAttempts = 240;  // 120s ceiling
+
+struct MediaPermissionWait {
   bool audio = false;
   bool video = false;
+  int attempts_left = 0;
+  base::OnceCallback<void(bool, bool)> callback;
 };
 
 base::Lock& MediaPermissionLock() {
@@ -247,9 +255,40 @@ base::Lock& MediaPermissionLock() {
 }
 
 long g_next_media_permission_id = 1;
-base::flat_map<long, PendingMediaPermission>& PendingMediaPermissions() {
-  static base::NoDestructor<base::flat_map<long, PendingMediaPermission>> map;
+
+base::flat_map<long, MediaPermissionWait>& PendingMediaPermissions() {
+  static base::NoDestructor<base::flat_map<long, MediaPermissionWait>> map;
   return *map;
+}
+
+bool OsCaptureGrantedViaJava(bool audio, bool video) {
+  JNIEnv* env = base::android::AttachCurrentThread();
+  return Java_MediaPermissionBridge_isCaptureGranted(env, audio, video);
+}
+
+void PollMediaPermissionResult(long callback_id) {
+  bool granted_now = false;
+  bool attempts_left = false;
+  base::OnceCallback<void(bool, bool)> callback;
+  {
+    base::AutoLock lock(MediaPermissionLock());
+    auto it = PendingMediaPermissions().find(callback_id);
+    if (it == PendingMediaPermissions().end()) return;
+    granted_now = OsCaptureGrantedViaJava(it->second.audio, it->second.video);
+    it->second.attempts_left -= 1;
+    attempts_left = it->second.attempts_left > 0;
+    if (granted_now || !attempts_left) {
+      callback = std::move(it->second.callback);
+      PendingMediaPermissions().erase(it);
+    }
+  }
+  if (!callback) {
+    base::SequencedTaskRunner::GetCurrentDefault()->PostDelayedTask(
+        FROM_HERE, base::BindOnce(&PollMediaPermissionResult, callback_id),
+        kMediaPermissionPollInterval);
+    return;
+  }
+  std::move(callback).Run(granted_now, granted_now);
 }
 
 }  // namespace
@@ -260,37 +299,32 @@ void AgentBrowserRequestAndroidMediaPermissions(
     base::OnceCallback<void(bool audio_granted, bool video_granted)> callback) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   long callback_id = 0;
+  bool granted_now = OsCaptureGrantedViaJava(audio, video);
   {
     base::AutoLock lock(MediaPermissionLock());
     callback_id = g_next_media_permission_id++;
-    PendingMediaPermissions()[callback_id] = {std::move(callback), audio, video};
+    PendingMediaPermissions()[callback_id] = {audio, video,
+                                              kMediaPermissionPollMaxAttempts,
+                                              std::move(callback)};
   }
-  JNIEnv* env = base::android::AttachCurrentThread();
-  Java_MediaPermissionBridge_request(env, static_cast<jlong>(callback_id),
-                                    audio, video);
-}
-
-static void JNI_MediaPermissionBridge_OnPermissionResult(
-    JNIEnv* env,
-    jlong callback_id,
-    jboolean audio_granted,
-    jboolean video_granted) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  base::OnceCallback<void(bool, bool)> callback;
-  bool requested_audio = false;
-  bool requested_video = false;
-  {
+  if (granted_now) {
     base::AutoLock lock(MediaPermissionLock());
-    auto it = PendingMediaPermissions().find(static_cast<long>(callback_id));
-    if (it == PendingMediaPermissions().end()) return;
-    requested_audio = it->second.audio;
-    requested_video = it->second.video;
-    callback = std::move(it->second.callback);
-    PendingMediaPermissions().erase(it);
+    auto it = PendingMediaPermissions().find(callback_id);
+    if (it != PendingMediaPermissions().end()) {
+      base::OnceCallback<void(bool, bool)> pending_callback =
+          std::move(it->second.callback);
+      PendingMediaPermissions().erase(it);
+      std::move(pending_callback).Run(true, true);
+      return;
+    }
   }
-  // A grant can only cover a type the web request actually asked for.
-  std::move(callback).Run(requested_audio && audio_granted,
-                          requested_video && video_granted);
+  // Surface the system dialog once; the bounded poll below completes the
+  // request when (and only when) the user grants it.
+  JNIEnv* env = base::android::AttachCurrentThread();
+  Java_MediaPermissionBridge_firePermissionDialog(env, audio, video);
+  base::SequencedTaskRunner::GetCurrentDefault()->PostDelayedTask(
+      FROM_HERE, base::BindOnce(&PollMediaPermissionResult, callback_id),
+      kMediaPermissionPollInterval);
 }
 
 }  // namespace content

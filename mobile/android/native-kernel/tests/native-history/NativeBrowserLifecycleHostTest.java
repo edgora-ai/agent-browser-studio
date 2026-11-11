@@ -234,6 +234,13 @@ public final class NativeBrowserLifecycleHostTest {
                     protected void onNewIntent(Intent intent) { }
                     protected void onDestroy() { destroyed = true; }
                 }
+                // Lifecycle fake-host stub: the real bridge needs Android runtime
+                // permissions, which this host deliberately does not exercise.
+                static final class MediaPermissionBridge {
+                    static void setHost(Activity activity) { }
+                    static void clearHost(Activity activity) { }
+                    static void onHostResult(String[] permissions, int[] results) { }
+                }
                 static final class NativeBrowserActivity extends Activity {
                     @ACTIVITY@
                     Throwable closeFailure, quietFailure;
