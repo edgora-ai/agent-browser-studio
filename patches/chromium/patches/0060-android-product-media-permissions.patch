@@ -1,49 +1,63 @@
 From: Agent Browser contributors
-Subject: [PATCH] Android product media capture: runtime permission bridge
+Subject: [PATCH] Android product media capture: runtime permission bridge (rev2)
+
+rev2: generate_jni lives in content/shell/BUILD.gn (same file as
+content_shell_lib) with the android rules import added, so the browser-side
+policy translation unit can include the generated bridge header from both
+libraries without a cross-file dependency cycle. First revision placed the
+target in the android BUILD.gn, which content_shell_lib cannot depend on.
 
 The product deliberately denied all capture permissions ("deny until a
 reviewed prompt ... is implemented"). This patch implements that prompt path
-for microphone and camera:
+for microphone and camera via the MediaPermissionBridge JNI pair; every other
+permission type stays denied until a per-profile permission store exists.
 
-- shell_permission_manager.cc routes AUDIO_CAPTURE/VIDEO_CAPTURE requests in
-  product mode through content::AgentBrowserRequestAndroidMediaPermissions,
-  which pays one Android runtime-permission round trip per web request via
-  the MediaPermissionBridge JNI pair. Every other permission type stays
-  denied until a per-profile permission store exists.
-- GetPermissionStatus returns ASK for capture types in product mode so the
-  getUserMedia request path prompts instead of failing as previously denied.
-- BUILD.gn gains a generate_jni target for the bridge's Java class so the
-  browser side can call the static request entry point and receive the
-  asynchronous result.
-
-Native compilation, a real-device runtime grant/deny round trip and camera
-or microphone capture acceptance remain separate requirements; source policy
-tests do not establish runtime success.
-
---- a/content/shell/android/BUILD.gn
-+++ b/content/shell/android/BUILD.gn
-@@ -27,6 +27,13 @@
-   ]
- }
+--- a/content/shell/BUILD.gn
++++ b/content/shell/BUILD.gn
+@@ -3,6 +3,7 @@
+ # found in the LICENSE file.
  
-+generate_jni("agent_browser_product_jni_headers") {
-+  testonly = true
-+  sources = [
-+    "agent_browser_product/java/com/ahoo/abs/android/nativekernel/MediaPermissionBridge.java",
-+  ]
+ import("//build/config/cast.gni")
++import("//build/config/android/rules.gni")
+ import("//build/config/ozone.gni")
+ import("//build/config/sanitizers/sanitizers.gni")
+ import("//build/config/ui.gni")
+@@ -172,6 +173,15 @@
+     "protocol/browser.h",
+     "protocol/protocol.h",
+   ]
 +}
 +
- template("content_shell_library") {
-   shared_library_with_jni(target_name) {
-     testonly = true
-@@ -64,6 +71,7 @@
++if (is_android) {
++  generate_jni("agent_browser_product_jni_headers") {
++    testonly = true
++    sources = [
++      "android/agent_browser_product/java/com/ahoo/abs/android/nativekernel/MediaPermissionBridge.java",
++    ]
++  }
+ }
+ 
+ static_library("content_shell_lib") {
+@@ -324,6 +334,7 @@
+     "//services/network:network_service",
+   ]
+   deps = [
++    ":agent_browser_product_jni_headers",
+     ":content_browsertests_mojom",
+     ":protocol_sources",
+     ":resources",
+--- a/content/shell/android/BUILD.gn
++++ b/content/shell/android/BUILD.gn
+@@ -64,7 +64,8 @@
  
  content_shell_library("libagent_browser_product") {
    deps = [
-+    ":agent_browser_product_jni_headers",
-     ":content_shell_jni_headers",
+-    ":content_shell_jni_headers",
++    "//content/shell:agent_browser_product_jni_headers",
++    ":content_shell_jni_headers,"
      "//components/crash/content/browser",
      "//content/shell:pak",
+     "//media",
 --- a/content/shell/browser/shell_permission_manager.cc
 +++ b/content/shell/browser/shell_permission_manager.cc
 @@ -6,6 +6,7 @@
