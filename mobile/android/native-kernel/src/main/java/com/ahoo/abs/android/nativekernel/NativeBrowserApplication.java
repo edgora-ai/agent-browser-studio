@@ -18,6 +18,7 @@ import com.ahoo.abs.core.NativeTimezoneLaunchConfig;
 import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.List;
 import java.util.Locale;
 import java.util.UUID;
@@ -78,7 +79,7 @@ public final class NativeBrowserApplication extends Application implements Brows
             }
         } catch (IOException | RuntimeException failure) {
             startupFailure = "BOOTSTRAP_" + failure.getClass().getSimpleName();
-            Log.e("AbsNativeBootstrap", "NATIVE_BOOTSTRAP_ATTACH_FAILED");
+            Log.e("AbsNativeBootstrap", "NATIVE_BOOTSTRAP_ATTACH_FAILED detail=" + String.valueOf(failure));
         }
         super.attachBaseContext(configured);
         if (startupFailure != null) return;
@@ -127,6 +128,28 @@ public final class NativeBrowserApplication extends Application implements Brows
                 ? LibraryProcessType.PROCESS_BROWSER : LibraryProcessType.PROCESS_CHILD);
     }
 
+    /** Deterministic per-profile seed: stable across restarts, distinct per profile. */
+    static long stableProfileSeed(String directorySuffix) {
+        long h = 0xcbf29ce484222325L;
+        for (int i = 0; i < directorySuffix.length(); i++) {
+            h ^= directorySuffix.charAt(i);
+            h *= 0x100000001b3L;
+        }
+        return h & 0x7fffffffffffffffL;
+    }
+
+    /** Canvas/audio noise payload for the engine fingerprint differentiation. */
+    static String fingerprintConfigPayload(String directorySuffix) {
+        long seed = stableProfileSeed(directorySuffix);
+        long canvasSeed = (seed ^ 0x9e3779b97f4a7c15L) & 0x7fffffffffffffffL;
+        long audioSeed = (seed + 0x51ed270bL) & 0x7fffffffffffffffL;
+        String json = "{\"schemaVersion\":1,\"seed\":" + seed
+                + ",\"canvas\":{\"enabled\":true,\"seed\":" + canvasSeed + "}"
+                + ",\"audio\":{\"enabled\":true,\"seed\":" + audioSeed + ",\"amplitude\":0.0001}}";
+        return Base64.getUrlEncoder().withoutPadding()
+                .encodeToString(json.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+    }
+
     private void freezeCommandLine() {
         if (CommandLine.isInitialized()) throw new IllegalStateException("NATIVE_COMMAND_LINE_ALREADY_INITIALIZED");
         String[] timezone = frozen.commandLine();
@@ -135,6 +158,7 @@ public final class NativeBrowserApplication extends Application implements Brows
                 "--agent-browser-product-profile",
                 "--proxy-server=" + launch.profile.proxy.proxyRule(), "--proxy-bypass-list=<-loopback>",
                 "--host-resolver-rules=" + launch.profile.proxy.hostResolverRules(),
+                "--agent-browser-noise-seeds=" + fingerprintConfigPayload(launch.directorySuffix()),
                 "--disable-quic", "--use-mobile-user-agent",
                 "--disable-features=ReduceAcceptLanguage,ReduceAcceptLanguageHTTP",
                 "--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
@@ -151,6 +175,24 @@ public final class NativeBrowserApplication extends Application implements Brows
             throw new IllegalStateException("NATIVE_FROZEN_CONFIG_MISSING");
         }
         CommandLine command = CommandLine.getInstance();
+        Log.i("AbsNativeBootstrap", "fp_debug recomputed=" + fingerprintConfigPayload(launch.directorySuffix())
+                + " frozen=" + command.getSwitchValue("agent-browser-noise-seeds"));
+        Log.i("AbsNativeBootstrap", "tz_debug required=" + command.hasSwitch(NativeTimezoneLaunchConfig.REQUIRED_SWITCH)
+                + " frozenMatch=" + frozen.encoded().equals(command.getSwitchValue(NativeTimezoneLaunchConfig.CONFIG_SWITCH))
+                + " profileSwitch=" + command.hasSwitch("agent-browser-product-profile")
+                + " preflight=" + command.hasSwitch("agent-browser-product-preflight")
+                + " forbiddenHit=" + (command.hasSwitch("roxy-fingerprint-config") || command.hasSwitch("js-flags")
+                    || command.hasSwitch("user-data-dir") || command.hasSwitch("content-shell-user-data-dir")
+                    || command.hasSwitch("no-sandbox") || command.hasSwitch("disable-web-security")
+                    || command.hasSwitch("ignore-certificate-errors") || command.hasSwitch("run-web-tests")
+                    || command.hasSwitch("remote-debugging-port") || command.hasSwitch("remote-debugging-pipe")
+                    || command.hasSwitch("remote-debugging-socket-name")));
+        Log.i("AbsNativeBootstrap", "clause_debug proxy=[" + command.getSwitchValue("proxy-server") + "] want=[" 
+                + launch.profile.proxy.proxyRule() + "] bypass=[" + command.getSwitchValue("proxy-bypass-list")
+                + "] hrr=[" + command.getSwitchValue("host-resolver-rules") + "] lang=[" + command.getSwitchValue("lang")
+                + "] accept=[" + command.getSwitchValue("accept-lang") + "] feat=[" + command.getSwitchValue("disable-features")
+                + "] webrtc=[" + command.getSwitchValue("force-webrtc-ip-handling-policy") + "] quic=" + command.hasSwitch("disable-quic")
+                + " mobile=" + command.hasSwitch("use-mobile-user-agent"));
         if (!command.hasSwitch("agent-browser-product-profile")
                 || command.hasSwitch("agent-browser-product-preflight")
                 || !command.hasSwitch(NativeTimezoneLaunchConfig.REQUIRED_SWITCH)
@@ -158,6 +200,7 @@ public final class NativeBrowserApplication extends Application implements Brows
                 || !launch.profile.proxy.proxyRule().equals(command.getSwitchValue("proxy-server"))
                 || !"<-loopback>".equals(command.getSwitchValue("proxy-bypass-list"))
                 || !launch.profile.proxy.hostResolverRules().equals(command.getSwitchValue("host-resolver-rules"))
+                || !fingerprintConfigPayload(launch.directorySuffix()).equals(command.getSwitchValue("agent-browser-noise-seeds"))
                 || !command.hasSwitch("disable-quic")
                 || !command.hasSwitch("use-mobile-user-agent")
                 || !"ReduceAcceptLanguage,ReduceAcceptLanguageHTTP".equals(command.getSwitchValue("disable-features"))

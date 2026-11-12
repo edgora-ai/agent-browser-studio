@@ -63,6 +63,7 @@ public final class NativeBrowserUiSourceContractTest {
         popupAndHistorySemantics();
         overlaySafetyAndWarnings();
         frozenProxyOnlyResolverChain();
+        perProfileFingerprintSeeds();
         System.out.println(checks + " UI source-contract checks, " + failures + " failures");
         if (failures != 0) throw new AssertionError("Native browser UI source regressions: " + failures);
     }
@@ -679,6 +680,29 @@ public final class NativeBrowserUiSourceContractTest {
      * DNS prefetch and preconnect hints) so destination hostnames cannot leak to the
      * local ISP resolver, while the proxy endpoint itself stays reachable.
      */
+    /**
+     * Per-profile fingerprint differentiation: each profile derives a stable
+     * seed from its directory suffix and freezes it into the engine fingerprint
+     * payload, so canvas and audio readbacks differ across profiles while
+     * staying stable within one profile.
+     */
+    private static void perProfileFingerprintSeeds() {
+        String freeze = method("NativeBrowserApplication", "freezeCommandLine");
+        has(freeze, "\"--agent-browser-noise-seeds=\" + fingerprintConfigPayload(launch.directorySuffix())",
+            "frozen argv must carry the per-profile fingerprint payload");
+        String verify = method("NativeBrowserApplication", "verifyFrozenCommandLine");
+        has(verify, "fingerprintConfigPayload(launch.directorySuffix()).equals(command.getSwitchValue(\"agent-browser-noise-seeds\"))",
+            "fingerprint payload belongs to the verified frozen switch set");
+        String payload = method("NativeBrowserApplication", "fingerprintConfigPayload");
+        has(payload, "stableProfileSeed(directorySuffix)",
+            "seed derives from the stable per-profile directory suffix");
+        has(freeze, "fingerprintConfigPayload(launch.directorySuffix())",
+            "payload derives from the launching profile identity");
+        has(payload, "canvasSeed", "canvas noise seed is profile-derived");
+        has(payload, "audioSeed", "audio noise seed is profile-derived");
+        has(payload, "schemaVersion", "payload keeps the engine schema version");
+    }
+
     private static void frozenProxyOnlyResolverChain() {
         String freeze = method("NativeBrowserApplication", "freezeCommandLine");
         has(freeze, "\"--host-resolver-rules=\" + launch.profile.proxy.hostResolverRules()",

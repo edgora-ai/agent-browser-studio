@@ -1,0 +1,38 @@
+From: Agent Browser contributors
+Subject: [PATCH] Android product profile gate for the noise-seed config
+
+rev2: the payload switch is agent-browser-noise-seeds (distinct from the
+timezone config switch, whose historical name collides with the first
+revision's switch choice). The enabled gate requires BOTH the product
+profile switch AND the noise-seeds payload, so desktop behavior is
+unchanged and the Android gate is exact.
+
+Runtime acceptance (per-profile canvas/audio divergence on a real device)
+remains a separate requirement.
+
+--- a/third_party/blink/public/common/roxy_fingerprint_config.h
++++ b/third_party/blink/public/common/roxy_fingerprint_config.h
+@@ -559,10 +559,20 @@
+       }
+     }
+ 
++    // The Android product profile provisions the payload through its own
++    // reviewed frozen argv (agent-browser-noise-seeds); its payloads
++    // carry only per-profile canvas/audio differentiation seeds, so the
++    // desktop platform/UA gates do not apply there. The gate requires
++    // BOTH the product profile switch AND the noise-seeds payload, so
++    // desktop behavior is unchanged and the Android gate is exact.
++    const bool agent_browser_product_noise_profile =
++        command_line->HasSwitch("agent-browser-product-profile") &&
++        command_line->HasSwitch("agent-browser-noise-seeds");
+     enabled_ = seed_ > 0 &&
+-               (platform_ == "Win32" || platform_ == "MacIntel") &&
+-               !user_agent_.empty() && !languages_.empty() &&
+-               hardware_concurrency_ > 0 && device_memory_ > 0;
++               (agent_browser_product_noise_profile ||
++                ((platform_ == "Win32" || platform_ == "MacIntel") &&
++                 !user_agent_.empty() && !languages_.empty() &&
++                 hardware_concurrency_ > 0 && device_memory_ > 0));
+   }
+ 
+   static std::string ReadString(const base::DictValue& dict,
