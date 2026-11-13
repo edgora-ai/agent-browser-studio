@@ -143,9 +143,11 @@ public final class NativeBrowserApplication extends Application implements Brows
         long seed = stableProfileSeed(directorySuffix);
         long canvasSeed = (seed ^ 0x9e3779b97f4a7c15L) & 0x7fffffffffffffffL;
         long audioSeed = (seed + 0x51ed270bL) & 0x7fffffffffffffffL;
-        String json = "{\"schemaVersion\":1,\"seed\":" + seed
-                + ",\"canvas\":{\"enabled\":true,\"seed\":" + canvasSeed + "}"
-                + ",\"audio\":{\"enabled\":true,\"seed\":" + audioSeed + ",\"amplitude\":0.0001}}";
+        // Seeds are decimal strings: the engine parses them with exact
+        // uint64 conversion, because JSON numbers lose precision above 2^53.
+        String json = "{\"schemaVersion\":1,\"seed\":\"" + seed + "\""
+                + ",\"canvas\":{\"enabled\":true,\"seed\":\"" + canvasSeed + "\"}"
+                + ",\"audio\":{\"enabled\":true,\"seed\":\"" + audioSeed + "\",\"amplitude\":0.0001}}";
         return Base64.getUrlEncoder().withoutPadding()
                 .encodeToString(json.getBytes(java.nio.charset.StandardCharsets.UTF_8));
     }
