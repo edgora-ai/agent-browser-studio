@@ -689,20 +689,22 @@ public final class NativeBrowserUiSourceContractTest {
      */
     private static void perProfileFingerprintSeeds() {
         String freeze = method("NativeBrowserApplication", "freezeCommandLine");
-        has(freeze, "fingerprintConfigPayload(\n                loadOrCreateFingerprintSeed(launch.directorySuffix(), this))",
+        has(freeze, "fingerprintConfigPayload(loadOrCreateFingerprintSeed(launch.directorySuffix(), seedContext))",
             "frozen argv must carry the per-profile fingerprint payload");
-        String verify = method("NativeBrowserApplication", "verifyFrozenCommandLine");
-        has(verify, "loadOrCreateFingerprintSeed(launch.directorySuffix(), getApplicationContext())",
+        String verify = method("NativeBrowserApplication", "verifyFrozenCommandLineFor");
+        has(verify, "readPersistedFingerprintSeed(launch.directorySuffix(), seedContext)",
             "fingerprint payload belongs to the verified frozen switch set");
         String load = method("NativeBrowserApplication", "loadOrCreateFingerprintSeed");
         has(load, "new java.security.SecureRandom().nextBytes(fresh)",
             "seed is minted by a CSPRNG, not derived from the env name");
         has(load, "fingerprintSeedFile(directorySuffix, context)",
             "seed persists per environment under the app files dir");
-        has(load, "stored.length == 8", "persisted seed round-trips exactly");
         String file = method("NativeBrowserApplication", "fingerprintSeedFile");
         has(file, "context.getFilesDir()", "seed storage is app-private");
+        has(file, "fingerprint-seeds", "seed storage lives under a dedicated dir");
         has(file, "directorySuffix + \".seed\"", "seed file is keyed by the env suffix");
+        String verifySeed = method("NativeBrowserApplication", "readPersistedFingerprintSeed");
+        has(verifySeed, "stored.length != 8", "persisted seed round-trips exactly");
         String payload = method("NativeBrowserApplication", "fingerprintConfigPayload");
         has(payload, "canvasSeed", "canvas noise seed is profile-derived");
         has(payload, "audioSeed", "audio noise seed is profile-derived");
@@ -713,9 +715,9 @@ public final class NativeBrowserUiSourceContractTest {
         String freeze = method("NativeBrowserApplication", "freezeCommandLine");
         has(freeze, "\"--host-resolver-rules=\" + launch.profile.proxy.hostResolverRules()",
                 "frozen argv must carry proxy-exit-only resolver rules");
-        has(freeze, "verifyFrozenCommandLine();",
+        has(freeze, "verifyFrozenCommandLineFor(seedContext);",
                 "frozen argv is verified before native library load");
-        String verify = method("NativeBrowserApplication", "verifyFrozenCommandLine");
+        String verify = method("NativeBrowserApplication", "verifyFrozenCommandLineFor");
         has(verify, "launch.profile.proxy.hostResolverRules()",
                 "verification reads the same resolver rules builder as the freeze");
         has(verify, "\"host-resolver-rules\"",

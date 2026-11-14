@@ -67,7 +67,7 @@ public final class NativeBrowserApplication extends Application implements Brows
             try (BootstrapStore bootstrap = new BootstrapStore(base)) {
                 launch = bootstrap.claim(incarnation);
                 frozen = NativeTimezoneLaunchConfig.fromLaunch(launch, incarnation, System.currentTimeMillis());
-                freezeCommandLine();
+                freezeCommandLine(base);
                 List<Locale> locales = new ArrayList<>();
                 for (String tag : launch.profile.languageTags) locales.add(Locale.forLanguageTag(tag));
                 LocaleList list = new LocaleList(locales.toArray(new Locale[0]));
@@ -133,6 +133,11 @@ public final class NativeBrowserApplication extends Application implements Brows
      *  environment. Predictable suffix-derived seeds are gone: an attacker
      *  who can guess the env name can no longer reproduce the noise. */
     static java.io.File fingerprintSeedFile(String directorySuffix, Context context) {
+        // attachBaseContext hands us the framework's already-valid base Context:
+        // this Application has not been attached yet, but the ContextImpl is
+        // fully usable (BootstrapStore and ProcessLifecycle already do file IO
+        // through it in the same block).
+        if (context == null) throw new IllegalStateException("FINGERPRINT_SEED_CONTEXT_MISSING");
         java.io.File dir = new java.io.File(context.getFilesDir(), "fingerprint-seeds");
         if (!dir.isDirectory() && !dir.mkdirs()) {
             throw new IllegalStateException("FINGERPRINT_SEED_DIR_UNAVAILABLE");
@@ -140,6 +145,8 @@ public final class NativeBrowserApplication extends Application implements Brows
         return new java.io.File(dir, directorySuffix + ".seed");
     }
 
+    /** Read-or-create the per-env seed. Safe from attachBaseContext when the
+     *  framework's base Context is passed. */
     static long loadOrCreateFingerprintSeed(String directorySuffix, Context context) {
         java.io.File file = fingerprintSeedFile(directorySuffix, context);
         try {
@@ -162,16 +169,61 @@ public final class NativeBrowserApplication extends Application implements Brows
         }
         seed &= 0x7fffffffffffffffL;
         // re-encode from the masked value so the stored bytes round-trip exactly
+        long value = seed;
         for (int i = 7; i >= 0; i--) {
-            fresh[i] = (byte) (seed & 0xffL);
-            seed >>>= 8;
+            fresh[i] = (byte) (value & 0xffL);
+            value >>>= 8;
         }
+        persistSeedAtomically(file, fresh);
+        return seed;
+    }
+
+    /** Temp file + rename, so a crash mid-write can never leave a half seed
+     *  behind (a corrupt 8-byte file would otherwise brick the bootstrap). */
+    private static void persistSeedAtomically(java.io.File file, byte[] bytes) {
+        java.nio.file.Path target = file.toPath();
+        java.nio.file.Path temporary = null;
         try {
-            java.nio.file.Files.write(file.toPath(), fresh);
+            temporary = java.nio.file.Files.createTempFile(target.getParent(), ".seed-", ".tmp");
+            java.nio.file.Files.write(temporary, bytes);
+            try {
+                java.nio.file.Files.move(temporary, target,
+                        java.nio.file.StandardCopyOption.ATOMIC_MOVE,
+                        java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+            } catch (java.nio.file.AtomicMoveNotSupportedException fallback) {
+                java.nio.file.Files.move(temporary, target,
+                        java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+            }
         } catch (java.io.IOException failure) {
             throw new IllegalStateException("FINGERPRINT_SEED_PERSIST_FAILED", failure);
+        } finally {
+            if (temporary != null) {
+                try {
+                    java.nio.file.Files.deleteIfExists(temporary);
+                } catch (java.io.IOException ignored) {
+                    // best effort cleanup of the staging file
+                }
+            }
         }
-        return seed;
+    }
+
+    /** Read-only seed access for the bootstrap verification: freeze has just
+     *  persisted the file, so a missing file means the frozen argv drifted. */
+    static long readPersistedFingerprintSeed(String directorySuffix, Context context) {
+        java.io.File file = fingerprintSeedFile(directorySuffix, context);
+        try {
+            byte[] stored = java.nio.file.Files.readAllBytes(file.toPath());
+            if (stored.length != 8) {
+                throw new IllegalStateException("FINGERPRINT_SEED_CORRUPT");
+            }
+            long seed = 0L;
+            for (byte b : stored) {
+                seed = (seed << 8) | (b & 0xffL);
+            }
+            return seed & 0x7fffffffffffffffL;
+        } catch (java.io.IOException missing) {
+            throw new IllegalStateException("FINGERPRINT_SEED_MISSING", missing);
+        }
     }
 
     /** Canvas/audio noise payload for the engine fingerprint differentiation. */
@@ -187,7 +239,9 @@ public final class NativeBrowserApplication extends Application implements Brows
                 .encodeToString(json.getBytes(java.nio.charset.StandardCharsets.UTF_8));
     }
 
-    private void freezeCommandLine() {
+    private void freezeCommandLine(Context seedContext) {
+        // Runs inside attachBaseContext: this Application is not attached yet,
+        // so seed access must use the framework's base Context parameter.
         if (CommandLine.isInitialized()) throw new IllegalStateException("NATIVE_COMMAND_LINE_ALREADY_INITIALIZED");
         String[] timezone = frozen.commandLine();
         // Route A: ordinary browsing is enabled; the preflight-only switch is no longer forced.
@@ -196,19 +250,25 @@ public final class NativeBrowserApplication extends Application implements Brows
                 "--proxy-server=" + launch.profile.proxy.proxyRule(), "--proxy-bypass-list=<-loopback>",
                 "--host-resolver-rules=" + launch.profile.proxy.hostResolverRules(),
                 "--agent-browser-noise-seeds=" + fingerprintConfigPayload(
-                loadOrCreateFingerprintSeed(launch.directorySuffix(), this)),
+                loadOrCreateFingerprintSeed(launch.directorySuffix(), seedContext)),
                 "--disable-quic", "--use-mobile-user-agent",
                 "--disable-features=ReduceAcceptLanguage,ReduceAcceptLanguageHTTP",
                 "--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
                 "--lang=" + launch.profile.languageTags.get(0),
                 "--accept-lang=" + String.join(",", launch.profile.languageTags)};
         CommandLine.init(arguments);
-        verifyFrozenCommandLine();
+        verifyFrozenCommandLineFor(seedContext);
         Log.i("AbsNativeBootstrap", "ABS_ANDROID_TIMEZONE_V1 frozen=1 input_sha256="
                 + frozen.inputSha256() + " pid=" + android.os.Process.myPid());
     }
 
     public void verifyFrozenCommandLine() {
+        verifyFrozenCommandLineFor(this);
+    }
+
+    /** Verification needs the same Context source as the freeze: the base
+     *  Context during attachBaseContext, `this` once attached. */
+    private void verifyFrozenCommandLineFor(Context seedContext) {
         if (frozen == null || !CommandLine.isInitialized()) {
             throw new IllegalStateException("NATIVE_FROZEN_CONFIG_MISSING");
         }
@@ -221,7 +281,7 @@ public final class NativeBrowserApplication extends Application implements Brows
                 || !"<-loopback>".equals(command.getSwitchValue("proxy-bypass-list"))
                 || !launch.profile.proxy.hostResolverRules().equals(command.getSwitchValue("host-resolver-rules"))
                 || !fingerprintConfigPayload(
-                loadOrCreateFingerprintSeed(launch.directorySuffix(), getApplicationContext()))
+                readPersistedFingerprintSeed(launch.directorySuffix(), seedContext))
                 .equals(command.getSwitchValue("agent-browser-noise-seeds"))
                 || !command.hasSwitch("disable-quic")
                 || !command.hasSwitch("use-mobile-user-agent")
