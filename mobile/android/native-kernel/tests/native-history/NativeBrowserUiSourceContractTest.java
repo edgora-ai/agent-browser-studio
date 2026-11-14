@@ -681,23 +681,29 @@ public final class NativeBrowserUiSourceContractTest {
      * local ISP resolver, while the proxy endpoint itself stays reachable.
      */
     /**
-     * Per-profile fingerprint differentiation: each profile derives a stable
-     * seed from its directory suffix and freezes it into the engine fingerprint
-     * payload, so canvas and audio readbacks differ across profiles while
-     * staying stable within one profile.
+     * Per-profile fingerprint differentiation: each profile carries a CSPRNG
+     * seed generated once and persisted in the app files dir, then frozen into
+     * the engine fingerprint payload, so canvas and audio readbacks differ
+     * across profiles, stay stable within one profile, and cannot be predicted
+     * from the environment name.
      */
     private static void perProfileFingerprintSeeds() {
         String freeze = method("NativeBrowserApplication", "freezeCommandLine");
-        has(freeze, "\"--agent-browser-noise-seeds=\" + fingerprintConfigPayload(launch.directorySuffix())",
+        has(freeze, "fingerprintConfigPayload(\n                loadOrCreateFingerprintSeed(launch.directorySuffix(), this))",
             "frozen argv must carry the per-profile fingerprint payload");
         String verify = method("NativeBrowserApplication", "verifyFrozenCommandLine");
-        has(verify, "fingerprintConfigPayload(launch.directorySuffix()).equals(command.getSwitchValue(\"agent-browser-noise-seeds\"))",
+        has(verify, "loadOrCreateFingerprintSeed(launch.directorySuffix(), getApplicationContext())",
             "fingerprint payload belongs to the verified frozen switch set");
+        String load = method("NativeBrowserApplication", "loadOrCreateFingerprintSeed");
+        has(load, "new java.security.SecureRandom().nextBytes(fresh)",
+            "seed is minted by a CSPRNG, not derived from the env name");
+        has(load, "fingerprintSeedFile(directorySuffix, context)",
+            "seed persists per environment under the app files dir");
+        has(load, "stored.length == 8", "persisted seed round-trips exactly");
+        String file = method("NativeBrowserApplication", "fingerprintSeedFile");
+        has(file, "context.getFilesDir()", "seed storage is app-private");
+        has(file, "directorySuffix + \".seed\"", "seed file is keyed by the env suffix");
         String payload = method("NativeBrowserApplication", "fingerprintConfigPayload");
-        has(payload, "stableProfileSeed(directorySuffix)",
-            "seed derives from the stable per-profile directory suffix");
-        has(freeze, "fingerprintConfigPayload(launch.directorySuffix())",
-            "payload derives from the launching profile identity");
         has(payload, "canvasSeed", "canvas noise seed is profile-derived");
         has(payload, "audioSeed", "audio noise seed is profile-derived");
         has(payload, "schemaVersion", "payload keeps the engine schema version");

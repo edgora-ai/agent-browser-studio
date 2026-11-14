@@ -1,0 +1,38 @@
+From: Agent Browser contributors
+Subject: [PATCH] Android product audio: clamp capture_time to now (0065)
+
+Device-verified failure on r13u (OnePlus PKG110): a real microphone test
+site crashed the renderer three times in a row with
+  FATAL media/audio/audio_input_device.cc:491 DCHECK failed:
+  now_time >= capture_time (~4us of clock skew)
+The browser-side audio clock drifts a few microseconds ahead of the renderer
+clock, so buffers captured right after capture start can carry a capture_time
+slightly in the future. Official release builds compile this DCHECK out and
+report a harmless negative delay; this build runs with DCHECKs enabled.
+
+Fix: define now_time first and clamp capture_time with std::min, keeping the
+reported delay monotonic without crashing. Semantics are otherwise
+unchanged.
+
+--- a/media/audio/audio_input_device.cc
++++ b/media/audio/audio_input_device.cc
+@@ -485,10 +485,16 @@
+   // Deliver captured data to the client in floating point format and update
+   // the audio delay measurement.
+   // TODO(olka, tommi): Take advantage of |capture_time| in the renderer.
++  const base::TimeTicks now_time = base::TimeTicks::Now();
++  // The browser-side audio clock can drift a few microseconds ahead of the
++  // renderer clock, so the first buffers after capture start may carry a
++  // capture_time slightly in the future. Official release builds compile the
++  // DCHECK out and report a harmless negative delay; clamp the capture time
++  // instead so the reported delay stays monotonic without crashing the
++  // renderer (device-verified: a real mic test site hit ~4us of skew).
+   const base::TimeTicks capture_time =
+-      base::TimeTicks() + base::Microseconds(buffer->params.capture_time_us);
+-  const base::TimeTicks now_time = base::TimeTicks::Now();
+-  DCHECK_GE(now_time, capture_time);
++      std::min(base::TimeTicks() + base::Microseconds(buffer->params.capture_time_us),
++               now_time);
+ 
+   AudioGlitchInfo glitch_info{
+       .duration = base::Microseconds(buffer->params.glitch_duration_us),

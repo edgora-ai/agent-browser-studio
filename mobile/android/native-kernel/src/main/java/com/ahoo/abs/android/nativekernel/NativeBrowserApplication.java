@@ -128,19 +128,54 @@ public final class NativeBrowserApplication extends Application implements Brows
                 ? LibraryProcessType.PROCESS_BROWSER : LibraryProcessType.PROCESS_CHILD);
     }
 
-    /** Deterministic per-profile seed: stable across restarts, distinct per profile. */
-    static long stableProfileSeed(String directorySuffix) {
-        long h = 0xcbf29ce484222325L;
-        for (int i = 0; i < directorySuffix.length(); i++) {
-            h ^= directorySuffix.charAt(i);
-            h *= 0x100000001b3L;
+    /** Per-env random seed, generated once with a CSPRNG and persisted under
+     *  the app's files dir so it is stable across restarts and distinct per
+     *  environment. Predictable suffix-derived seeds are gone: an attacker
+     *  who can guess the env name can no longer reproduce the noise. */
+    static java.io.File fingerprintSeedFile(String directorySuffix, Context context) {
+        java.io.File dir = new java.io.File(context.getFilesDir(), "fingerprint-seeds");
+        if (!dir.isDirectory() && !dir.mkdirs()) {
+            throw new IllegalStateException("FINGERPRINT_SEED_DIR_UNAVAILABLE");
         }
-        return h & 0x7fffffffffffffffL;
+        return new java.io.File(dir, directorySuffix + ".seed");
+    }
+
+    static long loadOrCreateFingerprintSeed(String directorySuffix, Context context) {
+        java.io.File file = fingerprintSeedFile(directorySuffix, context);
+        try {
+            byte[] stored = java.nio.file.Files.readAllBytes(file.toPath());
+            if (stored.length == 8) {
+                long seed = 0L;
+                for (byte b : stored) {
+                    seed = (seed << 8) | (b & 0xffL);
+                }
+                return seed & 0x7fffffffffffffffL;
+            }
+        } catch (java.io.IOException missing) {
+            // first launch of this environment: fall through and mint a seed
+        }
+        byte[] fresh = new byte[8];
+        new java.security.SecureRandom().nextBytes(fresh);
+        long seed = 0L;
+        for (byte b : fresh) {
+            seed = (seed << 8) | (b & 0xffL);
+        }
+        seed &= 0x7fffffffffffffffL;
+        // re-encode from the masked value so the stored bytes round-trip exactly
+        for (int i = 7; i >= 0; i--) {
+            fresh[i] = (byte) (seed & 0xffL);
+            seed >>>= 8;
+        }
+        try {
+            java.nio.file.Files.write(file.toPath(), fresh);
+        } catch (java.io.IOException failure) {
+            throw new IllegalStateException("FINGERPRINT_SEED_PERSIST_FAILED", failure);
+        }
+        return seed;
     }
 
     /** Canvas/audio noise payload for the engine fingerprint differentiation. */
-    static String fingerprintConfigPayload(String directorySuffix) {
-        long seed = stableProfileSeed(directorySuffix);
+    static String fingerprintConfigPayload(long seed) {
         long canvasSeed = (seed ^ 0x9e3779b97f4a7c15L) & 0x7fffffffffffffffL;
         long audioSeed = (seed + 0x51ed270bL) & 0x7fffffffffffffffL;
         // Seeds are decimal strings: the engine parses them with exact
@@ -160,7 +195,8 @@ public final class NativeBrowserApplication extends Application implements Brows
                 "--agent-browser-product-profile",
                 "--proxy-server=" + launch.profile.proxy.proxyRule(), "--proxy-bypass-list=<-loopback>",
                 "--host-resolver-rules=" + launch.profile.proxy.hostResolverRules(),
-                "--agent-browser-noise-seeds=" + fingerprintConfigPayload(launch.directorySuffix()),
+                "--agent-browser-noise-seeds=" + fingerprintConfigPayload(
+                loadOrCreateFingerprintSeed(launch.directorySuffix(), this)),
                 "--disable-quic", "--use-mobile-user-agent",
                 "--disable-features=ReduceAcceptLanguage,ReduceAcceptLanguageHTTP",
                 "--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
@@ -184,7 +220,9 @@ public final class NativeBrowserApplication extends Application implements Brows
                 || !launch.profile.proxy.proxyRule().equals(command.getSwitchValue("proxy-server"))
                 || !"<-loopback>".equals(command.getSwitchValue("proxy-bypass-list"))
                 || !launch.profile.proxy.hostResolverRules().equals(command.getSwitchValue("host-resolver-rules"))
-                || !fingerprintConfigPayload(launch.directorySuffix()).equals(command.getSwitchValue("agent-browser-noise-seeds"))
+                || !fingerprintConfigPayload(
+                loadOrCreateFingerprintSeed(launch.directorySuffix(), getApplicationContext()))
+                .equals(command.getSwitchValue("agent-browser-noise-seeds"))
                 || !command.hasSwitch("disable-quic")
                 || !command.hasSwitch("use-mobile-user-agent")
                 || !"ReduceAcceptLanguage,ReduceAcceptLanguageHTTP".equals(command.getSwitchValue("disable-features"))
