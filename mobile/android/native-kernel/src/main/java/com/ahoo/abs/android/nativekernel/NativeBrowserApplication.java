@@ -177,24 +177,6 @@ public final class NativeBrowserApplication extends Application implements Brows
             throw new IllegalStateException("NATIVE_FROZEN_CONFIG_MISSING");
         }
         CommandLine command = CommandLine.getInstance();
-        Log.i("AbsNativeBootstrap", "fp_debug recomputed=" + fingerprintConfigPayload(launch.directorySuffix())
-                + " frozen=" + command.getSwitchValue("agent-browser-noise-seeds"));
-        Log.i("AbsNativeBootstrap", "tz_debug required=" + command.hasSwitch(NativeTimezoneLaunchConfig.REQUIRED_SWITCH)
-                + " frozenMatch=" + frozen.encoded().equals(command.getSwitchValue(NativeTimezoneLaunchConfig.CONFIG_SWITCH))
-                + " profileSwitch=" + command.hasSwitch("agent-browser-product-profile")
-                + " preflight=" + command.hasSwitch("agent-browser-product-preflight")
-                + " forbiddenHit=" + (command.hasSwitch("roxy-fingerprint-config") || command.hasSwitch("js-flags")
-                    || command.hasSwitch("user-data-dir") || command.hasSwitch("content-shell-user-data-dir")
-                    || command.hasSwitch("no-sandbox") || command.hasSwitch("disable-web-security")
-                    || command.hasSwitch("ignore-certificate-errors") || command.hasSwitch("run-web-tests")
-                    || command.hasSwitch("remote-debugging-port") || command.hasSwitch("remote-debugging-pipe")
-                    || command.hasSwitch("remote-debugging-socket-name")));
-        Log.i("AbsNativeBootstrap", "clause_debug proxy=[" + command.getSwitchValue("proxy-server") + "] want=[" 
-                + launch.profile.proxy.proxyRule() + "] bypass=[" + command.getSwitchValue("proxy-bypass-list")
-                + "] hrr=[" + command.getSwitchValue("host-resolver-rules") + "] lang=[" + command.getSwitchValue("lang")
-                + "] accept=[" + command.getSwitchValue("accept-lang") + "] feat=[" + command.getSwitchValue("disable-features")
-                + "] webrtc=[" + command.getSwitchValue("force-webrtc-ip-handling-policy") + "] quic=" + command.hasSwitch("disable-quic")
-                + " mobile=" + command.hasSwitch("use-mobile-user-agent"));
         if (!command.hasSwitch("agent-browser-product-profile")
                 || command.hasSwitch("agent-browser-product-preflight")
                 || !command.hasSwitch(NativeTimezoneLaunchConfig.REQUIRED_SWITCH)
