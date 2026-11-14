@@ -32,7 +32,7 @@ public final class NativeBrowserUiSourceContractTest {
     private static final List<String> FILES = List.of(
             "NativeBrowserActivity.java", "TabSwitcherView.java", "NewTabPage.java",
             "BrowserHistoryStore.java", "HistoryPanel.java", "NativeBrowserRuntime.java", "BrowserDialogs.java",
-            "NativeBrowserApplication.java");
+            "NativeBrowserApplication.java", "FingerprintSeedStore.java");
     private static final Map<String, String> sources = new HashMap<>();
     private static final Map<String, String> methods = new HashMap<>();
     private static final Map<String, String> methodDeclarations = new HashMap<>();
@@ -698,23 +698,28 @@ public final class NativeBrowserUiSourceContractTest {
         has(verify, "readPersistedFingerprintSeed(launch.directorySuffix(), seedContext)",
             "fingerprint payload belongs to the verified frozen switch set");
         String load = method("NativeBrowserApplication", "loadOrCreateFingerprintSeed");
-        has(load, "new java.security.SecureRandom().nextBytes(fresh)",
-            "seed is minted by a CSPRNG, not derived from the env name");
-        has(load, "fingerprintSeedFile(directorySuffix, context)",
-            "seed persists per environment under the app files dir");
-        has(load, "persistSeedAtomically(file, fresh)",
-            "freeze persists the minted seed before the read-only verify");
+        has(load, "FingerprintSeedStore.loadOrCreate(directorySuffix, context.getFilesDir())",
+            "the Application hands the app-private files dir to the seed store");
         String file = method("NativeBrowserApplication", "fingerprintSeedFile");
         has(file, "context.getFilesDir()", "seed storage is app-private");
-        has(file, "fingerprint-seeds", "seed storage lives under a dedicated dir");
-        has(file, "directorySuffix + \".seed\"", "seed file is keyed by the env suffix");
-        has(file, "setPosixFilePermissions", "seed directory is owner-only");
         lacks(file, "/data/data", "no hardcoded app data path");
-        String persist = method("NativeBrowserApplication", "persistSeedAtomically");
+        String storeSource = source("FingerprintSeedStore.java");
+        String storeLoad = method("FingerprintSeedStore", "loadOrCreate");
+        has(storeLoad, "new SecureRandom().nextBytes(fresh)",
+            "seed is minted by a CSPRNG, not derived from the env name");
+        has(storeLoad, "persistAtomically(file, fresh)",
+            "the minted seed is persisted before the read-only verify");
+        has(storeSource, "SEED_BYTES = 8", "seed is 8 bytes on disk");
+        has(storeSource, "fingerprint-seeds", "seed storage lives under a dedicated dir");
+        String storeFile = method("FingerprintSeedStore", "seedFile");
+        has(storeFile, "directorySuffix + \".seed\"", "seed file is keyed by the env suffix");
+        has(storeFile, "setPosixFilePermissions", "seed directory is owner-only");
+        lacks(storeFile, "/data/data", "no hardcoded app data path");
+        String persist = method("FingerprintSeedStore", "persistAtomically");
         has(persist, "ATOMIC_MOVE", "seed write is atomic");
-        String verifySeed = method("NativeBrowserApplication", "readPersistedFingerprintSeed");
-        has(verifySeed, "stored.length != 8", "persisted seed round-trips exactly");
-        String digest = method("NativeBrowserApplication", "fingerprintSeedDigest");
+        String verifySeed = method("FingerprintSeedStore", "readPersisted");
+        has(verifySeed, "stored.length != SEED_BYTES", "persisted seed round-trips exactly");
+        String digest = method("FingerprintSeedStore", "fingerprint");
         has(digest, "MessageDigest.getInstance(\"SHA-256\")",
             "logs carry a digest, never the raw seed");
         String payload = method("NativeBrowserApplication", "fingerprintConfigPayload");

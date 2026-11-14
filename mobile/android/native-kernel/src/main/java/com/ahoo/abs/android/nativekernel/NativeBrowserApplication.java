@@ -132,104 +132,29 @@ public final class NativeBrowserApplication extends Application implements Brows
      *  the app's files dir so it is stable across restarts and distinct per
      *  environment. Predictable suffix-derived seeds are gone: an attacker
      *  who can guess the env name can no longer reproduce the noise. */
+    /** Per-env random seed, generated once with a CSPRNG and persisted under
+     *  the app's files dir so it is stable across restarts and distinct per
+     *  environment. Predictable suffix-derived seeds are gone: an attacker
+     *  who can guess the env name can no longer reproduce the noise. */
     static java.io.File fingerprintSeedFile(String directorySuffix, Context context) {
         // attachBaseContext hands us the framework's already-valid base Context:
         // this Application has not been attached yet, but the ContextImpl is
         // fully usable (BootstrapStore and ProcessLifecycle already do file IO
         // through it in the same block).
         if (context == null) throw new IllegalStateException("FINGERPRINT_SEED_CONTEXT_MISSING");
-        java.io.File dir = new java.io.File(context.getFilesDir(), "fingerprint-seeds");
-        if (!dir.isDirectory() && !dir.mkdirs()) {
-            throw new IllegalStateException("FINGERPRINT_SEED_DIR_UNAVAILABLE");
-        }
-        try {
-            java.nio.file.Files.setPosixFilePermissions(dir.toPath(),
-                    java.nio.file.attribute.PosixFilePermissions.fromString("rwx------"));
-        } catch (java.io.IOException | UnsupportedOperationException ignored) {
-            // non-POSIX host: the app-private parent still guards the directory
-        }
-        return new java.io.File(dir, directorySuffix + ".seed");
+        return FingerprintSeedStore.seedFile(directorySuffix, context.getFilesDir());
     }
 
     /** Read-or-create the per-env seed. Safe from attachBaseContext when the
      *  framework's base Context is passed. */
     static long loadOrCreateFingerprintSeed(String directorySuffix, Context context) {
-        java.io.File file = fingerprintSeedFile(directorySuffix, context);
-        try {
-            byte[] stored = java.nio.file.Files.readAllBytes(file.toPath());
-            if (stored.length == 8) {
-                long seed = 0L;
-                for (byte b : stored) {
-                    seed = (seed << 8) | (b & 0xffL);
-                }
-                return seed & 0x7fffffffffffffffL;
-            }
-        } catch (java.io.IOException missing) {
-            // first launch of this environment: fall through and mint a seed
-        }
-        byte[] fresh = new byte[8];
-        new java.security.SecureRandom().nextBytes(fresh);
-        long seed = 0L;
-        for (byte b : fresh) {
-            seed = (seed << 8) | (b & 0xffL);
-        }
-        seed &= 0x7fffffffffffffffL;
-        // re-encode from the masked value so the stored bytes round-trip exactly
-        long value = seed;
-        for (int i = 7; i >= 0; i--) {
-            fresh[i] = (byte) (value & 0xffL);
-            value >>>= 8;
-        }
-        persistSeedAtomically(file, fresh);
-        return seed;
-    }
-
-    /** Temp file + rename, so a crash mid-write can never leave a half seed
-     *  behind (a corrupt 8-byte file would otherwise brick the bootstrap). */
-    private static void persistSeedAtomically(java.io.File file, byte[] bytes) {
-        java.nio.file.Path target = file.toPath();
-        java.nio.file.Path temporary = null;
-        try {
-            temporary = java.nio.file.Files.createTempFile(target.getParent(), ".seed-", ".tmp");
-            java.nio.file.Files.write(temporary, bytes);
-            try {
-                java.nio.file.Files.move(temporary, target,
-                        java.nio.file.StandardCopyOption.ATOMIC_MOVE,
-                        java.nio.file.StandardCopyOption.REPLACE_EXISTING);
-            } catch (java.nio.file.AtomicMoveNotSupportedException fallback) {
-                java.nio.file.Files.move(temporary, target,
-                        java.nio.file.StandardCopyOption.REPLACE_EXISTING);
-            }
-        } catch (java.io.IOException failure) {
-            throw new IllegalStateException("FINGERPRINT_SEED_PERSIST_FAILED", failure);
-        } finally {
-            if (temporary != null) {
-                try {
-                    java.nio.file.Files.deleteIfExists(temporary);
-                } catch (java.io.IOException ignored) {
-                    // best effort cleanup of the staging file
-                }
-            }
-        }
+        return FingerprintSeedStore.loadOrCreate(directorySuffix, context.getFilesDir());
     }
 
     /** Read-only seed access for the bootstrap verification: freeze has just
      *  persisted the file, so a missing file means the frozen argv drifted. */
     static long readPersistedFingerprintSeed(String directorySuffix, Context context) {
-        java.io.File file = fingerprintSeedFile(directorySuffix, context);
-        try {
-            byte[] stored = java.nio.file.Files.readAllBytes(file.toPath());
-            if (stored.length != 8) {
-                throw new IllegalStateException("FINGERPRINT_SEED_CORRUPT");
-            }
-            long seed = 0L;
-            for (byte b : stored) {
-                seed = (seed << 8) | (b & 0xffL);
-            }
-            return seed & 0x7fffffffffffffffL;
-        } catch (java.io.IOException missing) {
-            throw new IllegalStateException("FINGERPRINT_SEED_MISSING", missing);
-        }
+        return FingerprintSeedStore.readPersisted(directorySuffix, context.getFilesDir());
     }
 
     /** Canvas/audio noise payload for the engine fingerprint differentiation. */
@@ -248,27 +173,8 @@ public final class NativeBrowserApplication extends Application implements Brows
     /** Hex digest of the seed bytes for logs: lets a release build prove seed
      *  stability across restarts without writing the seed itself anywhere. */
     static String fingerprintSeedDigest(long seed) {
-        byte[] value = new byte[8];
-        long remaining = seed;
-        for (int i = 7; i >= 0; i--) {
-            value[i] = (byte) (remaining & 0xffL);
-            remaining >>>= 8;
-        }
-        try {
-            byte[] digest = java.security.MessageDigest.getInstance("SHA-256").digest(value);
-            char[] hex = new char[16];
-            for (int i = 0; i < 8; i++) {
-                int unsigned = digest[i] & 0xff;
-                hex[i * 2] = HEX_DIGITS[unsigned >>> 4];
-                hex[i * 2 + 1] = HEX_DIGITS[unsigned & 0xf];
-            }
-            return new String(hex);
-        } catch (java.security.NoSuchAlgorithmException impossible) {
-            throw new IllegalStateException("SHA-256_UNAVAILABLE", impossible);
-        }
+        return FingerprintSeedStore.fingerprint(seed);
     }
-
-    private static final char[] HEX_DIGITS = "0123456789abcdef".toCharArray();
 
     private void freezeCommandLine(Context seedContext) {
         // Runs inside attachBaseContext: this Application is not attached yet,
