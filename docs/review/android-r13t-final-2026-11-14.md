@@ -34,6 +34,12 @@
 
 不可自动化/非缺陷项保持如实记录：物理断电；release/可复现构建链（程序级）。
 
+## 2b. r13t 评分补录（同日晚间）
+
+QA 中继允许名单曾把用户打开的一切非测试网站拒掉（ERR_CONNECTION_CLOSED 白页——「来回切换卡片白板」的真凶）。relay2 v3 修复为通用代理：测试域（ping0/cloudflare/ipwho）走用户 mihomo 隧道（127.0.0.1:20080，稳定），其余全部直连。
+
+**r13t 评分（QA-Ping0-NY，真机）：100 分 / 异常 0**（已检 109/总 143，检测仍在收尾时取照）；出口 204.0.23.126（NTT AS2914 洛杉矶、家庭宽带、原生 IP、风控 15%、IPv6 未检出）——与 r13q 逐项一致。截图 `run/phone-r13t-score.png`，回执 `run/closure-receipt-r13t.json`。
+
 ## 3. 证据
 
 - `.tmp-apk/proxy-fix-work/v13t/`：`reviewed-build-inputs.json`（v1/v2 历史全录）、`build_r13t.py`、`remote-patch-receipt-t.json`、`candidate-build-receipt-t.json`、`host/` 三套件日志、`run/closure-receipt-r13t.json`、`run/*.png`。
