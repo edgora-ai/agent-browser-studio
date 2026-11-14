@@ -12,7 +12,7 @@
 3. **ping0 真机 100 分 / 异常 0**（出口 204.0.23.126 NTT AS2914 与既往轮一致，IPv6 未检出）。
 4. **媒体矩阵复核**：avc1/hevc/aac/mp3/opus/vorbis/wav 全 `probably`、wav 播放 PLAYING；gUM 仍 `NotSupportedError`（capture 服务栈缺口未变，独立工程轮）。
 5. **C2-1 崩溃持久性通过**：全进程 SIGKILL（无清理路径）→ 冷启动 → cookie `qa=qa1`、localStorage `qa1` 全部存活。
-6. **C2-2 整机重启**：reboot 已执行、boot_completed=1、transport 重挂 —— **卡在锁屏**（「手机重启后需输入密码」，物理动作只能用户做），解锁后续跑读回验证。
+6. **C2-2 整机重启通过**：reboot → 用户解锁 → 冷启动 → 种子 payload 逐字一致（确定性派生）、cookie `qa=qa1`、localStorage `qa1` 全部存活、canvas=`ee365c40` 与重启前一致（指纹跨重启稳定）、tz=America/New_York 生效。
 
 ## 1. 构建（r13p → r13q 两连发）
 
@@ -48,7 +48,7 @@ seed 全部改为**十进制字符串**：JSON 数值在 base::JSONReader 中 >2
 | 播放 | wav PLAYING t=0.13 ✓ |
 | gUM | NotSupportedError（capture 栈未接线，缺口与 r13n 相同，独立工程轮） |
 | C2-1 | 全进程 SIGKILL → 冷启动 → cookie/localStorage 存活 ✓（详见第 4 节方法学） |
-| C2-2 | reboot 完成、锁屏等待用户输入密码（自动化停步） |
+| C2-2 | 整机重启 → 用户解锁 → 冷启动：cookie/localStorage 存活、种子 payload 逐字一致、canvas=`ee365c40` 与重启前一致、tz 生效 ✓ |
 
 ## 3. 工具链修复（夹具侧，非产品）
 
@@ -72,7 +72,7 @@ seed 全部改为**十进制字符串**：JSON 数值在 base::JSONReader 中 >2
 
 ## 6. 遗留（如实）
 
-1. **C2-2 锁屏续跑**：解锁后需完成——冷启动 → QA-Ping0-NY 读回（expect `qa=qa1`/`ls:qa1`）→ /fp canvas 跨重启稳定（expect `ee365c40`）→ logcat 种子 == 重启前 payload。物理断电项不可自动化。
+1. ~~C2-2 锁屏续跑~~ **已完成**：解锁后全部读回通过（见第 2 节 C2-2 行）。物理断电项不可自动化，保持开放。
 2. **capture 服务栈接线**（gUM NotSupportedError）：权限桥已就绪待接线，独立工程轮。
 3. **噪声振幅隐匿性**（0.0001×1000）与种子派生的密码学强度（FNV-1a 非加密）：审阅项未变。
 4. **audio 探针的时变性**：哈希随读数窗口变化，做跨 profile 判据时以 canvas 为准；audio 判据应比较「同一次加载内」或改用确定性输入。
