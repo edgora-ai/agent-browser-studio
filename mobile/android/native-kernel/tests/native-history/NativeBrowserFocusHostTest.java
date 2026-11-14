@@ -67,7 +67,7 @@ public final class NativeBrowserFocusHostTest {
                 "requestChromeRefresh", "refreshChrome", "syncWebContentsVisibility", "updateNtpVisibility",
                 "loadResolvedUrl", "loadResolvedUrlInternal", "current", "interactive", "validTab", "cancelUiWork",
                 "dispatchTouchEvent", "dispatchKeyEvent", "onWindowFocusChanged", "onPause", "onStop", "onResume",
-                "installShellObserverHooks", "showHistoryPanel", "hideUrlSuggestions", "dismissAddressEditor")) members += required(methods, name) + "\n";
+                "installShellObserverHooks", "showHistoryPanel", "hideUrlSuggestions", "dismissAddressEditor", "onBackPressed")) members += required(methods, name) + "\n";
         require(rootListener != null, "actual root ownership listener exists");
         String posted = required(fields, "chromeRefresh");
         require(posted.indexOf("refreshChrome()") < posted.indexOf("completeNavigationFocus()"), "posted focus follows refresh");
@@ -93,10 +93,13 @@ public final class NativeBrowserFocusHostTest {
         Path ids = output.resolve("org/chromium/content_shell/R.java");
         Files.createDirectories(ids.getParent());
         Files.writeString(ids, "package org.chromium.content_shell; public final class R { public static final class id { public static final int contentview_holder = 1; } }", StandardCharsets.UTF_8);
+        Path clock = output.resolve("android/os/SystemClock.java");
+        Files.createDirectories(clock.getParent());
+        Files.writeString(clock, "package android.os; public final class SystemClock { public static long elapsedRealtime() { return 10000; } }", StandardCharsets.UTF_8);
         try (StandardJavaFileManager files = compiler.getStandardFileManager(null, null, StandardCharsets.UTF_8)) {
             boolean compiled = compiler.getTask(null, files, null,
                     List.of("--release", "17", "-Xlint:all", "-Werror", "-classpath", System.getProperty("java.class.path"), "-d", output.toString()),
-                    null, files.getJavaFileObjects(host, ime, ids)).call();
+                    null, files.getJavaFileObjects(host, ime, ids, clock)).call();
             if (!compiled) throw new AssertionError("Actual source-extracted focus host did not compile");
         }
         try (URLClassLoader loader = new URLClassLoader(new URL[] {output.toUri().toURL()}, NativeBrowserFocusHostTest.class.getClassLoader())) {
@@ -132,6 +135,9 @@ public final class NativeBrowserFocusHostTest {
                 interface FocusListener { void changed(View view, boolean focused); }
                 static class View {
                     static final int VISIBLE = 0, GONE = 8;
+                    static final int IMPORTANT_FOR_ACCESSIBILITY_AUTO = 0, IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS = 4;
+                    int accessibility;
+                    void setImportantForAccessibility(int value) { accessibility = value; }
                     static View focus;
                     final Activity owner;
                     final String name;
@@ -195,7 +201,7 @@ public final class NativeBrowserFocusHostTest {
                 static final class PopupMenu { void dismiss() { } }
                 static final class HistoryStore { void flush() { } }
                 static final class GURL { final String value; GURL(String value) { this.value = value; } String getSpec() { return value; } }
-                static final class NavigationController { boolean canGoBack() { return false; } }
+                static final class NavigationController { boolean canGoBack() { return false; } void goBack() { } }
                 static final class Visibility { static final int VISIBLE = 0, HIDDEN = 1; }
                 static final class WebContents {
                     String url = "https://old.invalid/";
@@ -266,6 +272,7 @@ public final class NativeBrowserFocusHostTest {
                     protected void onPause() { }
                     protected void onStop() { }
                     protected void onResume() { }
+                    public void onBackPressed() { }
                 }
                 static final class Activity extends BaseActivity {
                     static final int MAX_TABS = 10;
@@ -290,12 +297,21 @@ public final class NativeBrowserFocusHostTest {
                     final Runnable previewCapture = () -> { };
                     final android.view.inputmethod.InputMethodManager ime = new android.view.inputmethod.InputMethodManager();
                     ShellManager manager = new ShellManager(this);
+                    Shell chromeShell;
+                    WebContents chromeContents;
                     PopupMenu overflowMenu;
                     long generation = 7, previewEpoch;
+                    int returns, closedTabs;
+                    void returnToList() { returns++; }
+                    void closeTab(Shell shell) { closedTabs++; manager.shells.remove(shell); }
                     boolean resumed = true, uiBuilt = true, closed, quiescing, cleanupComplete, chromeRefreshPosted;
                     boolean ntpRenderDirty, previewRequested;
                     Activity() { @ROOT_LISTENER@ installShellObserverHooks(); address.requestFocus(); events.clear(); }
                     Object getSystemService(String service) { return ime; }
+                    // Recovery has its own source-extracted scheduler/owner host; focus tests
+                    // deliberately stub it rather than simulate Android compositor readiness.
+                    void reconcilePageRestoring() { }
+                    void hidePageRestoring() { }
                     void trackHistory() { }
                     void hideShellToolbar(Shell shell) { }
                     void tint(TextView text, boolean value) { }
@@ -412,8 +428,20 @@ public final class NativeBrowserFocusHostTest {
                             case 10 -> { changed.showHistoryPanel(); changed.historyPanel.dismiss(); }
                             default -> throw new AssertionError(); } };
                         a.navigate("https://owned.invalid/"); a.main.all();
-                        check(s.content.requests == 0 && a.pendingFocusShell == null && a.address.isFocused(), "reentrant native load invalidation cannot publish focus intent " + state);
+                        check(s.content.requests == 0 && a.pendingFocusShell == null, "reentrant native load invalidation cannot publish focus intent " + state);
+                        check(state == 10 ? a.root.isFocused() && !a.address.isFocused() && a.ime.hides == 1
+                                : a.address.isFocused(), "history explicitly settles editing; other invalidations retain it " + state);
                     }
+                    a = new Activity(); a.newTab.visibility = View.VISIBLE;
+                    check(a.urlSuggest == null, "empty-history editor Back fixture has no suggestions");
+                    a.onBackPressed();
+                    check(a.root.isFocused() && !a.address.hasFocus() && a.ime.hides == 1, "first Back settles editor even without suggestions");
+                    check(a.returns == 0 && a.closedTabs == 0 && a.newTab.getVisibility() == View.VISIBLE, "editor Back cannot close NTP or return to manager");
+                    a.onBackPressed(); check(a.returns == 1, "second Back retains genuine NTP navigation behavior");
+                    a = new Activity(); a.showHistoryPanel();
+                    check(a.root.accessibility == View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS, "full-window history removes underlying browser from accessibility");
+                    check(!a.address.hasFocus() && a.ime.hides == 1, "history entry settles address focus and IME");
+                    a.onBackPressed(); check(a.historyPanel.getVisibility() == View.GONE && a.returns == 0, "Back closes history without leaving browser");
                     a = new Activity(); a.manager.active.contents = null; a.navigate("https://owned.invalid/");
                     check(a.manager.active.loads == 0 && a.manager.active.contentAccesses == 0, "uninitialized Shell cannot load or dereference content getter");
                     a = new Activity(); a.requestChromeRefresh(); a.main.all();

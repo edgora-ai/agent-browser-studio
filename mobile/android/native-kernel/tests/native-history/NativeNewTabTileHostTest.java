@@ -1,10 +1,16 @@
 import com.sun.source.tree.ClassTree;
 import com.sun.source.tree.CompilationUnitTree;
+import com.sun.source.tree.MethodInvocationTree;
+import com.sun.source.tree.LiteralTree;
+import com.sun.source.tree.NewClassTree;
+import com.sun.source.tree.VariableTree;
 import com.sun.source.tree.Tree;
 import com.sun.source.util.JavacTask;
 import com.sun.source.util.Trees;
+import com.sun.source.util.TreeScanner;
 import java.io.StringWriter;
 import java.lang.reflect.InvocationTargetException;
+import java.net.URI;
 import java.net.URL;
 import java.net.URLClassLoader;
 import java.nio.charset.StandardCharsets;
@@ -17,6 +23,8 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import javax.tools.JavaCompiler;
+import javax.tools.JavaFileObject;
+import javax.tools.SimpleJavaFileObject;
 import javax.tools.StandardJavaFileManager;
 import javax.tools.ToolProvider;
 
@@ -27,9 +35,10 @@ import javax.tools.ToolProvider;
  * nonlinear font conversion, native rendering, device, lifecycle or visual acceptance evidence.
  * --fixture-control changes only the in-memory metadata singleLine argument while production is
  * frozen; it is explicitly NOT genuine product-fix evidence. Default mode uses unchanged source.
- * Both modes retain rejection of old-singleline, zero-height and no-op mutations, plus short-hint,
- * full-label and separate-header sensitivity controls. Hint/contentDescription are STORED values;
- * the host does not render hints, execute toolbar buildChrome, or prove TalkBack/click/IME behavior.
+ * Both modes reject geometry/font false-greens plus local-editor, fake-card, focus, History target,
+ * empty reachability, palette, ranking and quiescence regressions. Colors, listeners and accessibility
+ * labels are observable fixture state, not native rendering, TalkBack, real touches or IME evidence.
+ * Toolbar ownership is checked against parsed actual Activity source; buildChrome is not executed.
  */
 public final class NativeNewTabTileHostTest {
     private NativeNewTabTileHostTest() { }
@@ -80,17 +89,46 @@ public final class NativeNewTabTileHostTest {
         return source.substring(0, at) + to + source.substring(at + from.length());
     }
 
-    private static String oldHeader(String source) {
-        return replaceOnce(source, """
-                    header.addView(row, new LinearLayout.LayoutParams(-1, -2));
-                    LinearLayout.LayoutParams historyLayout = new LinearLayout.LayoutParams(-2, -2);
-                    historyLayout.setMargins(0, dp(8), 0, 0);
-                    header.addView(historyButton, historyLayout);
-                    return header;
-            """, """
-                    row.addView(historyButton, new LinearLayout.LayoutParams(-2, -2));
-                    return row;
-            """);
+    /** Parses real toolbar ownership, without claiming to execute the Activity on this host. */
+    private static void sharedSearchOwner(JavaCompiler compiler, String activity) throws Exception {
+        JavaFileObject input = new SimpleJavaFileObject(URI.create("string:///NativeBrowserActivity.java"), JavaFileObject.Kind.SOURCE) {
+            @Override public CharSequence getCharContent(boolean ignoreEncodingErrors) { return activity; }
+        };
+        int[] editors = {0}, fields = {0}; boolean[] roles = {false, false, false};
+        JavacTask task = (JavacTask) compiler.getTask(null, null, null,
+                List.of("--release", "17", "-proc:none"), null, List.of(input));
+        for (CompilationUnitTree unit : task.parse()) new TreeScanner<Void, Void>() {
+            @Override public Void visitNewClass(NewClassTree tree, Void unused) {
+                if (tree.getIdentifier().toString().equals("EditText")
+                        || tree.getIdentifier().toString().equals("android.widget.EditText")) editors[0]++;
+                return super.visitNewClass(tree, unused);
+            }
+            @Override public Void visitVariable(VariableTree tree, Void unused) {
+                if (tree.getName().contentEquals("address") && tree.getType().toString().equals("EditText")) fields[0]++;
+                return super.visitVariable(tree, unused);
+            }
+            @Override public Void visitMethodInvocation(MethodInvocationTree tree, Void unused) {
+                String select = tree.getMethodSelect().toString();
+                Object literal = tree.getArguments().size() == 1 && tree.getArguments().get(0) instanceof LiteralTree value ? value.getValue() : null;
+                if (select.equals("address.setHint") && "搜索".equals(literal)) roles[0] = true;
+                if (select.equals("address.setContentDescription") && "搜索或输入网址".equals(literal)) roles[1] = true;
+                if (select.equals("address.setOnEditorActionListener")) roles[2] = true;
+                return super.visitMethodInvocation(tree, unused);
+            }
+        }.scan(unit, null);
+        if (editors[0] != 1 || fields[0] != 1 || !roles[0] || !roles[1] || !roles[2]) {
+            throw new AssertionError("SHARED_SEARCH_OWNER one real toolbar address editor, short hint/full label and submit listener required; editors=" + editors[0] + " addressFields=" + fields[0] + " roles=" + java.util.Arrays.toString(roles));
+        }
+    }
+
+    private static void sourceRejected(JavaCompiler compiler, String label, String source) throws Exception {
+        try { sharedSearchOwner(compiler, source); }
+        catch (AssertionError rejected) {
+            if (!rejected.getMessage().contains("SHARED_SEARCH_OWNER")) throw rejected;
+            System.out.println("EXPECTED_REJECTION " + label + ": " + rejected.getMessage());
+            return;
+        }
+        throw new AssertionError("Toolbar ownership source sensitivity failed: " + label);
     }
 
     private record Result(int checks, Throwable failure) { }
@@ -163,6 +201,12 @@ public final class NativeNewTabTileHostTest {
         String original = Files.readString(source.resolve("NewTabPage.java"));
         String history = Files.readString(source.resolve("BrowserHistory.java"));
         String realBindings = bindings(compiler, source.resolve("NativeBrowserActivity.java"));
+        String activity = Files.readString(source.resolve("NativeBrowserActivity.java"));
+        sharedSearchOwner(compiler, activity);
+        sourceRejected(compiler, "toolbar-old-long-hint", replaceOnce(activity,
+                "address.setHint(\"搜索\");", "address.setHint(\"搜索或输入网址\");"));
+        sourceRejected(compiler, "toolbar-missing-full-label", replaceOnce(activity,
+                "address.setContentDescription(\"搜索或输入网址\");", "/* MUTATION: missing toolbar label */"));
         boolean control = args.length == 3;
         String tested = control ? metadataMode(original, false) : original;
         Files.writeString(output.resolve("source-receipt.txt"),
@@ -173,21 +217,49 @@ public final class NativeNewTabTileHostTest {
         System.out.println("ACTUAL_NTP_SHA256 " + sha(original));
         System.out.println("TESTED_NTP_SHA256 " + sha(tested));
         Result positive = run(compiler, output.resolve("positive"), tested, history, realBindings, false, false);
+        if (positive.failure != null) throw new AssertionError("Genuine/control main geometry oracle FAILED", positive.failure);
         rejected("old-metadata-singleline", run(compiler, output.resolve("old-singleline"), metadataMode(tested, true), history, realBindings, false, false), "META_VISIBLE");
         rejected("zero-text-height", run(compiler, output.resolve("zero-height"), tested, history, realBindings, true, false), "TEXT_NONZERO");
         rejected("no-op-tile-font-rebind", run(compiler, output.resolve("noop-rebind"), tested, history, realBindings, false, true), "FONT_SP");
-        rejected("old-long-search-hint", run(compiler, output.resolve("old-search-hint"),
-                replaceOnce(tested, "search.setHint(\"搜索\");", "search.setHint(\"搜索或输入网址\");"),
-                history, realBindings, false, false), "SEARCH_HINT");
-        rejected("missing-search-label", run(compiler, output.resolve("missing-search-label"),
-                replaceOnce(tested, "search.setContentDescription(\"搜索或输入网址\");", "/* MUTATION: missing accessible label */"),
-                history, realBindings, false, false), "SEARCH_LABEL");
-        rejected("old-shared-horizontal-header", run(compiler, output.resolve("old-shared-header"),
-                oldHeader(tested), history, realBindings, false, false), "HEADER_TREE");
-        if (positive.failure != null) throw new AssertionError("Genuine/control main geometry oracle FAILED", positive.failure);
+        rejected("reintroduced-local-editor", run(compiler, output.resolve("local-editor"),
+                replaceOnce(tested, "column.addView(buildIdentityRow(context, profileName));",
+                        "column.addView(new android.widget.EditText(context));\n        column.addView(buildIdentityRow(context, profileName));"),
+                history, realBindings, false, false), "NO_LOCAL_EDITOR");
+        rejected("replacement-fake-search-card", run(compiler, output.resolve("fake-search-card"),
+                replaceOnce(tested, "column.addView(buildIdentityRow(context, profileName));",
+                        "column.addView(buildIdentityRow(context, profileName));\n        TextView fake = new TextView(context); fake.setText(\"搜索或输入网址\"); column.addView(fake);"),
+                history, realBindings, false, false), "NTP_TREE");
+        rejected("missing-history-label", run(compiler, output.resolve("history-label"),
+                replaceOnce(tested, "all.setContentDescription(\"历史记录\");", "/* MUTATION: missing History label */"),
+                history, realBindings, false, false), "HISTORY_LABEL");
+        rejected("undersized-history-target", run(compiler, output.resolve("history-target"),
+                replaceOnce(tested, "all.setMinimumHeight(dp(48));", "all.setMinimumHeight(dp(40));"),
+                history, realBindings, false, false), "HISTORY_TARGET");
+        rejected("history-hidden-when-empty", run(compiler, output.resolve("history-empty"),
+                replaceOnce(tested, "emptyState.setVisibility(empty ? View.VISIBLE : View.GONE);",
+                        "emptyState.setVisibility(empty ? View.VISIBLE : View.GONE);\n        ((LinearLayout) emptyState.getParent()).getChildAt(1).setVisibility(empty ? View.GONE : View.VISIBLE);"),
+                history, realBindings, false, false), "HISTORY_REACHABLE");
+        rejected("ntp-steals-toolbar-focus", run(compiler, output.resolve("focus-owner"),
+                replaceOnce(tested, "setClickable(true);", "setClickable(true); requestFocus();"),
+                history, realBindings, false, false), "FOCUS_OWNER");
+        rejected("no-op-static-palette", run(compiler, output.resolve("static-palette"),
+                replaceOnce(tested, "staticPaletteBindings.apply();", "/* MUTATION: stale static palette */"),
+                history, realBindings, false, false), "PALETTE_STATIC");
+        rejected("no-op-tile-palette", run(compiler, output.resolve("tile-palette"),
+                replaceOnce(tested, "tilePaletteBindings.apply();", "/* MUTATION: stale tile palette */"),
+                history, realBindings, false, false), "PALETTE_TILE");
+        rejected("removed-nine-tile-cap", run(compiler, output.resolve("max-nine"),
+                replaceOnce(tested, "Math.min(ranked.size(), MAX_TILES)", "ranked.size()"),
+                history, realBindings, false, false), "RANKED_CAP");
+        rejected("retired-tile-font-bindings", run(compiler, output.resolve("retired-bindings"),
+                replaceOnce(tested, "tileFonts.clear();", "/* MUTATION: retain stale tile bindings */"),
+                history, realBindings, false, false), "RETIRED_BINDINGS");
+        rejected("quiescent-refresh-requeries", run(compiler, output.resolve("quiescent-refresh"),
+                replaceOnce(tested, "void refresh() {\n        if (quiescing) return;", "void refresh() {"),
+                history, realBindings, false, false), "QUIESCENT_QUERY");
         if (!Files.readString(source.resolve("NewTabPage.java")).equals(original)) throw new AssertionError("Production source changed during run: unstable receipt");
-        System.out.println("PASS " + positive.checks + " geometry/state assertions; 90 cases / 450 constrained layout states; 18 empty-editor cases / 90 additional states; 6 mutations rejected");
-        System.out.println("EVIDENCE_LIMIT synthetic JDK host only; hints/labels are stored, not rendered; toolbar buildChrome not executed; no Android shaping/conversion/rendering/device/visual/TalkBack/click/IME claim");
+        System.out.println("PASS " + positive.checks + " geometry/state assertions; 108 cases / 540 constrained layout states; 24 empty-profile cases / 120 additional states; 16 mutations rejected");
+        System.out.println("EVIDENCE_LIMIT synthetic JDK host only; labels/colors/listeners/scroll are fixture state; actual toolbar source parsed, buildChrome not executed; no Android shaping/conversion/rendering/device/visual/TalkBack/real-touch/IME claim");
     }
 
     private static final String ACTIVITY = """
@@ -219,18 +291,29 @@ public final class NativeNewTabTileHostTest {
             public class Context {
                 private final android.content.res.Resources resources = new android.content.res.Resources();
                 public android.view.View focused;
+                public int focusWrites, focusConfigWrites, keyboardRequests, haptics;
                 public android.content.res.Resources getResources() { return resources; }
-                public Object getSystemService(String name) { return null; }
+                public Object getSystemService(String name) { keyboardRequests++; return null; }
             }
             """),
         Map.entry("android/content/DialogInterface", "package android.content; public interface DialogInterface { interface OnDismissListener { void onDismiss(DialogInterface dialog); } }"),
-        Map.entry("android/content/res/ColorStateList", "package android.content.res; public final class ColorStateList { public static ColorStateList valueOf(int color) { return new ColorStateList(); } }"),
+        Map.entry("android/content/res/ColorStateList", "package android.content.res; public final class ColorStateList { public final int color; private ColorStateList(int value) { color = value; } public static ColorStateList valueOf(int color) { return new ColorStateList(color); } }"),
         Map.entry("android/app/Activity", "package android.app; public class Activity extends android.content.Context { public static final String INPUT_METHOD_SERVICE = \"input_method\"; }"),
         Map.entry("android/app/Dialog", """
             package android.app;
             public class Dialog implements android.content.DialogInterface {
-                public void dismiss() { throw new AssertionError("Unexpected dialog action"); }
-                public void setOnDismissListener(android.content.DialogInterface.OnDismissListener listener) { }
+                private android.content.DialogInterface.OnDismissListener listener;
+                public boolean showing = true;
+                public int paletteCalls, fontCalls;
+                public String title, body, action;
+                public Runnable callback;
+                public void dismiss() {
+                    if (!showing) return;
+                    showing = false;
+                    if (listener != null) listener.onDismiss(this);
+                }
+                public void confirm() { if (!showing) throw new AssertionError("Already dismissed"); dismiss(); callback.run(); }
+                public void setOnDismissListener(android.content.DialogInterface.OnDismissListener value) { listener = value; }
             }
             """),
         Map.entry("android/graphics/Color", "package android.graphics; public final class Color { private Color() { } }"),
@@ -240,19 +323,24 @@ public final class NativeNewTabTileHostTest {
             public class GradientDrawable {
                 public static final int OVAL = 1, RECTANGLE = 0;
                 public enum Orientation { TOP_BOTTOM }
+                public int color, strokeWidth, strokeColor, shape;
+                public float radius;
+                public int[] colors;
                 public void setOrientation(Orientation value) { }
-                public void setColors(int[] colors) { }
-                public void setColor(int color) { }
-                public void setStroke(int width, int color) { }
-                public void setCornerRadius(float radius) { }
-                public void setShape(int shape) { }
+                public void setColors(int[] value) { colors = value.clone(); }
+                public void setColor(int value) { color = value; }
+                public void setStroke(int width, int value) { strokeWidth = width; strokeColor = value; }
+                public void setCornerRadius(float value) { radius = value; }
+                public void setShape(int value) { shape = value; }
             }
             """),
         Map.entry("android/graphics/drawable/RippleDrawable", """
             package android.graphics.drawable;
             public final class RippleDrawable {
-                public RippleDrawable(android.content.res.ColorStateList colors, Object content, Object mask) { }
-                public void setColor(android.content.res.ColorStateList colors) { }
+                public int color;
+                public final Object content, mask;
+                public RippleDrawable(android.content.res.ColorStateList colors, Object content, Object mask) { color = colors.color; this.content = content; this.mask = mask; }
+                public void setColor(android.content.res.ColorStateList colors) { color = colors.color; }
             }
             """),
         Map.entry("android/view/Gravity", "package android.view; public final class Gravity { public static final int CENTER_HORIZONTAL = 1, CENTER_VERTICAL = 16, CENTER = 17; }"),
@@ -270,43 +358,38 @@ public final class NativeNewTabTileHostTest {
         Map.entry("android/widget/EditText", """
             package android.widget;
             public final class EditText extends TextView {
-                private int start, end;
-                private CharSequence hint;
                 public EditText(android.content.Context context) { super(context); }
-                public void setSelection(int first, int last) {
-                    if (first < 0 || last < first || last > getText().length()) throw new AssertionError("Invalid selection");
-                    start = first; end = last;
-                }
-                public int getSelectionStart() { return start; }
-                public int getSelectionEnd() { return end; }
-                public void setHint(CharSequence value) { hint = value; requestLayout(); }
-                public CharSequence getHint() { return hint; }
-                // Stored API only: this fixture deliberately does not render or measure the hint.
-                public void setHintTextColor(int color) { }
-                public void setImeOptions(int options) { }
-                public void setInputType(int type) { }
-                public void setOnEditorActionListener(OnEditorActionListener listener) { }
-                public interface OnEditorActionListener { boolean onEditorAction(TextView view, int action, android.view.KeyEvent event); }
             }
             """),
-        Map.entry("android/widget/Toast", "package android.widget; public final class Toast { public static final int LENGTH_SHORT = 0; public static Toast makeText(android.content.Context context, String text, int duration) { throw new AssertionError(\"Unexpected toast\"); } public void show() { } }"),
+        Map.entry("android/widget/Toast", "package android.widget; public final class Toast { public static final int LENGTH_SHORT = 0; public static int shown; public static String lastText; public static Toast makeText(android.content.Context context, String text, int duration) { lastText = text; return new Toast(); } public void show() { shown++; } }"),
         Map.entry("com/ahoo/abs/android/nativekernel/BrowserHistoryStore", """
             package com.ahoo.abs.android.nativekernel;
             import java.util.List;
             final class BrowserHistoryStore {
-                final List<BrowserHistory.SiteVisit> visits;
-                int rankedCalls;
-                BrowserHistoryStore(List<BrowserHistory.SiteVisit> visits) { this.visits = visits; }
-                public List<BrowserHistory.SiteVisit> ranked() { rankedCalls++; return List.copyOf(visits); }
-                public boolean removeSite(String origin) { throw new AssertionError("Unexpected history mutation"); }
+                List<BrowserHistory.SiteVisit> visits;
+                private BrowserHistory model;
+                int rankedCalls, removeCalls;
+                String removedOrigin;
+                BrowserHistoryStore(List<BrowserHistory.SiteVisit> visits) { this.visits = List.copyOf(visits); }
+                BrowserHistoryStore(BrowserHistory model) { this.model = model; }
+                public List<BrowserHistory.SiteVisit> ranked() { rankedCalls++; return model == null ? List.copyOf(visits) : model.ranked(); }
+                public boolean removeSite(String origin) {
+                    removeCalls++; removedOrigin = origin;
+                    if (model != null) return model.removeSite(origin);
+                    List<BrowserHistory.SiteVisit> next = visits.stream().filter(visit -> !visit.origin.equals(origin)).toList();
+                    boolean changed = next.size() != visits.size(); visits = next; return changed;
+                }
             }
             """),
         Map.entry("com/ahoo/abs/android/nativekernel/BrowserDialogs", """
             package com.ahoo.abs.android.nativekernel;
             final class BrowserDialogs {
-                static void applyPalette(android.app.Dialog dialog) { throw new AssertionError("Unexpected dialog"); }
-                static void applyFontScale(android.app.Dialog dialog) { throw new AssertionError("Unexpected dialog"); }
-                static android.app.Dialog confirm(android.content.Context context, String title, String body, String action, Runnable callback) { throw new AssertionError("Unexpected dialog"); }
+                static void applyPalette(android.app.Dialog dialog) { dialog.paletteCalls++; }
+                static void applyFontScale(android.app.Dialog dialog) { dialog.fontCalls++; }
+                static android.app.Dialog confirm(android.content.Context context, String title, String body, String action, Runnable callback) {
+                    android.app.Dialog dialog = new android.app.Dialog();
+                    dialog.title = title; dialog.body = body; dialog.action = action; dialog.callback = callback; return dialog;
+                }
             }
             """)
     );
@@ -322,6 +405,11 @@ public final class NativeNewTabTileHostTest {
             private int visibility, width, height, left, top, right, bottom, minWidth, minHeight;
             private int pl, pt, pr, pb;
             public int layoutRequests, measures;
+            private Object background, foreground;
+            private float elevation;
+            private boolean clickable, enabled = true;
+            private OnClickListener click;
+            private OnLongClickListener longClick;
             public View(android.content.Context context) { this.context = context; }
             public android.content.Context getContext() { return context; }
             public android.content.res.Resources getResources() { return context.getResources(); }
@@ -371,19 +459,27 @@ public final class NativeNewTabTileHostTest {
             public int getBottom() { return bottom; }
             public int getWidth() { return right - left; }
             public int getHeight() { return bottom - top; }
-            public boolean requestFocus() { context.focused = this; return true; }
+            public boolean requestFocus() { context.focusWrites++; context.focused = this; return true; }
             public boolean hasFocus() { return context.focused == this; }
-            public void clearFocus() { if (context.focused == this) context.focused = null; }
-            public void setBackground(Object drawable) { }
-            public void setForeground(Object drawable) { }
-            public void setElevation(float value) { }
-            public void setClickable(boolean value) { }
-            public void setDescendantFocusability(int value) { }
-            public void setFocusableInTouchMode(boolean value) { }
-            public void setEnabled(boolean value) { }
-            public void setOnClickListener(OnClickListener listener) { }
-            public void setOnLongClickListener(OnLongClickListener listener) { }
-            public boolean performHapticFeedback(int value) { throw new AssertionError("Unexpected action"); }
+            public void clearFocus() { context.focusWrites++; if (context.focused == this) context.focused = null; }
+            public void setBackground(Object drawable) { background = drawable; }
+            public Object getBackground() { return background; }
+            public void setForeground(Object drawable) { foreground = drawable; }
+            public Object getForeground() { return foreground; }
+            public void setElevation(float value) { elevation = value; }
+            public float getElevation() { return elevation; }
+            public void setClickable(boolean value) { clickable = value; }
+            public boolean isClickable() { return clickable; }
+            public void setDescendantFocusability(int value) { context.focusConfigWrites++; }
+            public void setFocusableInTouchMode(boolean value) { context.focusConfigWrites++; }
+            public void setFocusable(boolean value) { context.focusConfigWrites++; }
+            public void setEnabled(boolean value) { enabled = value; }
+            public void setOnClickListener(OnClickListener listener) { click = listener; clickable = listener != null; }
+            public boolean hasOnClickListeners() { return click != null; }
+            public void setOnLongClickListener(OnLongClickListener listener) { longClick = listener; }
+            public boolean performClick() { if (enabled && click != null) { click.onClick(this); return true; } return false; }
+            public boolean performLongClick() { return enabled && longClick != null && longClick.onLongClick(this); }
+            public boolean performHapticFeedback(int value) { context.haptics++; return true; }
             public Object getWindowToken() { return this; }
             public interface OnClickListener { void onClick(View view); }
             public interface OnLongClickListener { boolean onLongClick(View view); }
@@ -539,6 +635,9 @@ public final class NativeNewTabTileHostTest {
         import android.view.View;
         public final class ScrollView extends FrameLayout {
             private boolean fill;
+            private int scrollY;
+            public int getScrollY() { return scrollY; }
+            public void scrollTo(int x, int y) { scrollY = Math.max(0, Math.min(y, getChildAt(0).getMeasuredHeight() - getMeasuredHeight())); }
             public ScrollView(android.content.Context context) { super(context); }
             public void setFillViewport(boolean value) { fill = value; }
             public void setVerticalScrollBarEnabled(boolean value) { }
@@ -564,6 +663,7 @@ public final class NativeNewTabTileHostTest {
             private boolean singleLine;
             private android.text.TextUtils.TruncateAt ellipsize;
             public int textSizeCalls;
+            private int textColor;
             private TextLayout layout;
             public TextView(android.content.Context context) { super(context); }
             public void setText(CharSequence value) { text = value.toString(); requestLayout(); }
@@ -582,7 +682,8 @@ public final class NativeNewTabTileHostTest {
             public void setEllipsize(android.text.TextUtils.TruncateAt value) { ellipsize = value; requestLayout(); }
             public android.text.TextUtils.TruncateAt getEllipsize() { return ellipsize; }
             public void setGravity(int value) { }
-            public void setTextColor(int color) { }
+            public void setTextColor(int color) { textColor = color; }
+            public int getCurrentTextColor() { return textColor; }
             public void setTypeface(android.graphics.Typeface face) { }
             public void setLineSpacing(float extra, float multiplier) { spacingExtra = extra; spacingMultiplier = multiplier; requestLayout(); }
             public TextLayout getLayout() { return layout; }
@@ -687,104 +788,185 @@ public final class NativeNewTabTileHostTest {
                         + "\\tfooter=" + footer.getTop() + ".." + footer.getBottom() + "\\t" + details + "\\n");
                 trace.flush();
             }
-            private record Header(LinearLayout wrapper, LinearLayout row, TextView avatar,
-                    LinearLayout identity, TextView title, TextView hint, TextView history) { }
+            private record Header(LinearLayout wrapper, TextView title, TextView hint,
+                    LinearLayout section, TextView recent, TextView history) { }
+            private static LinearLayout column(NewTabPage page) {
+                require(page.getChildCount() == 1 && page.getChildAt(0) instanceof ScrollView,
+                        "NTP_TREE one scroll surface, not a replacement search card");
+                return (LinearLayout) ((ScrollView) page.getChildAt(0)).getChildAt(0);
+            }
+            private static void noEditor(View view) {
+                require(!(view instanceof EditText), "NO_LOCAL_EDITOR toolbar is the sole editor, including hidden views");
+                if (view instanceof ViewGroup group) for (int i = 0; i < group.getChildCount(); i++) noEditor(group.getChildAt(i));
+            }
+            private static void inputOwnership(NewTabPage page, Context context, View externalFocus) {
+                noEditor(page);
+                require(context.focused == externalFocus && context.focusWrites == 0 && context.focusConfigWrites == 0
+                                && context.keyboardRequests == 0,
+                        "FOCUS_OWNER NTP never requests/configures/clears focus or owns keyboard services");
+                require(page.isClickable() && !page.hasOnClickListeners(), "blank WebContents taps consumed without fake search action");
+                for (var declared : NewTabPage.class.getDeclaredFields())
+                    require(!EditText.class.isAssignableFrom(declared.getType()), "NO_LOCAL_EDITOR no detached editor field");
+                for (var declared : NewTabPage.class.getDeclaredMethods())
+                    require(!List.of("buildSearchCard", "submit", "hideKeyboard", "showKeyboard").contains(declared.getName()),
+                            "NO_LOCAL_EDITOR no local card/submit/keyboard owner methods");
+            }
             private static Header header(NewTabPage page) {
-                LinearLayout column = (LinearLayout) ((ScrollView) page.getChildAt(0)).getChildAt(0);
-                require(column.getChildAt(0) instanceof LinearLayout, "HEADER_TREE stable header container");
-                LinearLayout wrapper = (LinearLayout) column.getChildAt(0);
-                require(wrapper.getOrientation() == LinearLayout.VERTICAL && wrapper.getChildCount() == 2,
-                        "HEADER_TREE vertical wrapper separates identity from History width competition");
-                require(wrapper.getChildAt(0) instanceof LinearLayout && wrapper.getChildAt(1) instanceof TextView,
-                        "HEADER_TREE identity first, same History TextView on independent second line");
-                LinearLayout row = (LinearLayout) wrapper.getChildAt(0);
-                require(row.getOrientation() == LinearLayout.HORIZONTAL && row.getChildCount() == 2,
-                        "HEADER_TREE horizontal row contains only avatar and weighted identity column");
-                require(row.getChildAt(0) instanceof TextView && row.getChildAt(1) instanceof LinearLayout,
-                        "HEADER_TREE existing avatar and title/hint column types");
-                LinearLayout identity = (LinearLayout) row.getChildAt(1);
+                LinearLayout column = column(page);
+                require(column.getChildCount() == 5, "NTP_TREE identity, section, tiles, empty text and footer only; no fake search card");
+                require(column.getChildAt(0) instanceof LinearLayout && column.getChildAt(1) instanceof LinearLayout,
+                        "HEADER_TREE identity and recent section are independent siblings");
+                LinearLayout identity = (LinearLayout) column.getChildAt(0), section = (LinearLayout) column.getChildAt(1);
                 require(identity.getOrientation() == LinearLayout.VERTICAL && identity.getChildCount() == 2
                                 && identity.getChildAt(0) instanceof TextView && identity.getChildAt(1) instanceof TextView,
-                        "HEADER_TREE title/hint keep their own vertical column");
-                TextView history = (TextView) wrapper.getChildAt(1);
-                require(history.getText().toString().equals("历史记录") && history.getParent() == wrapper
-                                && row.getParent() == wrapper && identity.getParent() == row,
-                        "HEADER_TREE History belongs to header, never identity row/column");
-                return new Header(wrapper, row, (TextView) row.getChildAt(0), identity,
-                        (TextView) identity.getChildAt(0), (TextView) identity.getChildAt(1), history);
-            }
-            private static void searchLabels(EditText search) {
-                require("搜索".contentEquals(search.getHint() == null ? "" : search.getHint()),
-                        "SEARCH_HINT actual stored short hint, including empty-editor phase");
-                require("搜索或输入网址".contentEquals(search.getContentDescription() == null ? "" : search.getContentDescription()),
-                        "SEARCH_LABEL actual stored full accessible name, not TalkBack execution");
+                        "HEADER_TREE environment title and isolation metadata only, no avatar/history pill");
+                require(section.getOrientation() == LinearLayout.HORIZONTAL && section.getChildCount() == 2
+                                && section.getChildAt(0) instanceof TextView && section.getChildAt(1) instanceof TextView,
+                        "HEADER_TREE recent heading and one History action in their own section");
+                return new Header(identity, (TextView) identity.getChildAt(0), (TextView) identity.getChildAt(1),
+                        section, (TextView) section.getChildAt(0), (TextView) section.getChildAt(1));
             }
             private static void storedApiChecks() {
-                scenario = "stored fixture APIs only; no Android accessibility/rendering claim";
-                EditText probe = new EditText(new Context());
-                require(probe.getHint() == null && probe.getContentDescription() == null, "stored API defaults are not invented labels");
-                probe.setHint("first hint"); probe.setContentDescription("first label");
-                require("first hint".contentEquals(probe.getHint()) && "first label".contentEquals(probe.getContentDescription()), "stored API values round-trip");
-                probe.setHint("second hint"); probe.setContentDescription("second label");
-                require("second hint".contentEquals(probe.getHint()) && "second label".contentEquals(probe.getContentDescription()), "stored API replacement is observable");
-                probe.setHint(null); probe.setContentDescription(null);
-                require(probe.getHint() == null && probe.getContentDescription() == null, "stored API clear is observable");
+                scenario = "fixture sensitivity only, not Android rendering/accessibility/touch evidence";
+                TextView probe = new TextView(new Context());
+                require(probe.getContentDescription() == null, "stored label defaults absent");
+                probe.setContentDescription("one"); require("one".contentEquals(probe.getContentDescription()), "label round-trip");
+                probe.setContentDescription("two"); require("two".contentEquals(probe.getContentDescription()), "label replacement observable");
+                probe.setContentDescription(null); require(probe.getContentDescription() == null, "label clear observable");
+                probe.setTextColor(17); require(probe.getCurrentTextColor() == 17, "color writes observable, not no-op setters");
+                probe.setTextColor(29); require(probe.getCurrentTextColor() == 29, "color replacement observable");
+                int[] clicks = {0}; probe.setOnClickListener(view -> clicks[0]++); probe.performClick();
+                require(clicks[0] == 1, "fixture dispatches captured actual listener");
             }
-            private static Header headerGeometry(NewTabPage page, Context context) {
+            private static void completeText(TextView text, String reason) {
+                var layout = text.getLayout();
+                require(layout != null && text.getMeasuredWidth() > 0 && text.getMeasuredHeight() > 0
+                                && layout.lineHeight() > 0 && layout.naturalHeight() > 0, reason + " nonzero text extent");
+                int next = 0;
+                for (var line : layout.lines()) {
+                    require(line.start() == next && line.end() > next && line.visibleEnd() == line.end()
+                                    && line.ellipsisCount() == 0 && Float.isFinite(line.advance())
+                                    && line.advance() <= layout.contentWidth() + .01f,
+                            reason + " all actual characters fit finite synthetic line bounds");
+                    next = line.end();
+                }
+                require(next == text.getText().length()
+                                && layout.naturalHeight() + text.getPaddingTop() + text.getPaddingBottom() <= text.getMeasuredHeight(),
+                        reason + " complete text fits allocated height");
+            }
+            private static boolean visibleToPage(View view, NewTabPage page) {
+                for (View current = view; current != null; current = current.getParent()) {
+                    if (current.getVisibility() != View.VISIBLE) return false;
+                    if (current == page) return true;
+                }
+                return false;
+            }
+            private static int historyActions(View view) {
+                int found = view.hasOnClickListeners() && "历史记录".contentEquals(view.getContentDescription() == null ? "" : view.getContentDescription()) ? 1 : 0;
+                if (view instanceof ViewGroup group) for (int i = 0; i < group.getChildCount(); i++) found += historyActions(group.getChildAt(i));
+                return found;
+            }
+            private static Header headerGeometry(NewTabPage page, Context context) throws Exception {
                 Header h = header(page);
-                LinearLayout.LayoutParams rowLp = (LinearLayout.LayoutParams) h.row().getLayoutParams();
-                LinearLayout.LayoutParams identityLp = (LinearLayout.LayoutParams) h.identity().getLayoutParams();
-                LinearLayout.LayoutParams historyLp = (LinearLayout.LayoutParams) h.history().getLayoutParams();
+                require(h.history().getText().toString().equals("全部")
+                                && "历史记录".contentEquals(h.history().getContentDescription() == null ? "" : h.history().getContentDescription()),
+                        "HISTORY_LABEL visible 全部 has full accessible History name");
+                require(h.history().hasOnClickListeners() && historyActions(page) == 1, "HISTORY_LABEL exactly one History callback");
+                require(visibleToPage(h.history(), page), "HISTORY_REACHABLE History remains visible even for empty history");
+                require(h.history().getMinimumWidth() >= dp(context, 48) && h.history().getMinimumHeight() >= dp(context, 48)
+                                && h.history().getMeasuredWidth() >= dp(context, 48) && h.history().getMeasuredHeight() >= dp(context, 48),
+                        "HISTORY_TARGET minimum and measured touch target at least48dp in both dimensions");
                 require(h.wrapper().getLayoutParams().width == -1 && h.wrapper().getLayoutParams().height == -2
-                                && rowLp.width == -1 && rowLp.height == -2 && rowLp.weight == 0,
-                        "HEADER_LAYOUT stable full-width WRAP header and identity row");
-                require(identityLp.width == 0 && identityLp.height == -2 && identityLp.weight == 1
-                                && identityLp.leftMargin == dp(context, 12) && identityLp.rightMargin == dp(context, 8),
-                        "HEADER_LAYOUT existing weighted identity column/margins unchanged");
-                require(historyLp.width == -2 && historyLp.height == -2 && historyLp.weight == 0
-                                && historyLp.leftMargin == 0 && historyLp.rightMargin == 0
-                                && historyLp.topMargin == dp(context, 8) && historyLp.bottomMargin == 0,
-                        "HEADER_LAYOUT History has its own WRAP second line and8dp gap");
-                require(h.avatar().getLayoutParams().width == dp(context, 44) && h.avatar().getLayoutParams().height == dp(context, 44)
-                                && h.avatar().getMeasuredWidth() == dp(context, 44) && h.avatar().getMeasuredHeight() == dp(context, 44),
-                        "HEADER_LAYOUT original44dp identity avatar retained");
-                font(h.avatar(), 17, context); font(h.title(), 17, context);
-                font(h.hint(), 12.5f, context); font(h.history(), 12.5f, context);
-                require(h.title().isSingleLine() && h.title().getEllipsize() == android.text.TextUtils.TruncateAt.END
-                                && h.hint().getText().toString().equals("历史记录按环境隔离"),
-                        "HEADER_LAYOUT original title ellipsis and identity hint retained");
-                int rowWidth = h.wrapper().getMeasuredWidth() - h.wrapper().getPaddingLeft() - h.wrapper().getPaddingRight();
-                require(h.row().getMeasuredWidth() == rowWidth && h.identity().getMeasuredWidth() > 0
-                                && h.identity().getMeasuredWidth() == rowWidth - h.row().getPaddingLeft() - h.row().getPaddingRight()
-                                    - h.avatar().getMeasuredWidth() - identityLp.leftMargin - identityLp.rightMargin,
-                        "SYNTHETIC_HEADER identity finite width excludes History entirely");
-                require(h.history().getTop() == h.row().getBottom() + dp(context, 8)
-                                && h.history().getMeasuredWidth() <= rowWidth && h.history().getMeasuredHeight() > 0,
-                        "SYNTHETIC_HEADER History below identity, bounded only by full header width");
-                var layout = h.history().getLayout();
-                require(layout != null && layout.lines().size() == 1 && layout.lines().get(0).start() == 0
-                                && layout.lines().get(0).end() == 4 && layout.lines().get(0).visibleEnd() == 4
-                                && layout.lines().get(0).ellipsisCount() == 0
-                                && Math.abs(layout.lines().get(0).advance() - 4 * h.history().getTextSize()) < .01f
-                                && layout.lines().get(0).advance() <= layout.contentWidth() + .01f
-                                && layout.naturalHeight() <= h.history().getMeasuredHeight(),
-                        "SYNTHETIC_HEADER four-character History label fits generated line bounds, not Android proof");
-                vertical(h.identity(), false); vertical(h.wrapper(), false);
+                                && h.section().getLayoutParams().width == -1 && h.section().getLayoutParams().height == -2,
+                        "HEADER_LAYOUT full-width WRAP_CONTENT identity and recent section");
+                for (TextView text : List.of(h.title(), h.hint())) {
+                    require(text.getLayoutParams().width == -1 && text.getLayoutParams().height == -2
+                                    && text.getMeasuredWidth() == h.wrapper().getMeasuredWidth(), "HEADER_LAYOUT full identity width independent of History");
+                    completeText(text, "HEADER_TEXT");
+                }
+                require(!h.title().isSingleLine() && h.title().getEllipsize() == null
+                                && h.hint().getText().toString().equals("历史记录按环境隔离")
+                                && h.recent().getText().toString().equals("最近访问"), "HEADER_LAYOUT long profile wraps; concise identity metadata");
+                font(h.title(), 17, context); font(h.hint(), 12.5f, context); font(h.recent(), 17, context); font(h.history(), 14, context);
+                completeText(h.recent(), "SECTION_TEXT"); completeText(h.history(), "HISTORY_TEXT");
+                require(h.recent().getRight() <= h.history().getLeft() && h.history().getRight() <= h.section().getMeasuredWidth(),
+                        "SECTION_LAYOUT heading and History do not overlap at narrow/large font");
+                require(h.history().getLayoutParams().height == -2 && h.section().getMeasuredHeight() >= h.history().getMeasuredHeight(),
+                        "HISTORY_TARGET WRAP_CONTENT action/section grow rather than clip text");
+                LinearLayout empty = (LinearLayout) field(page, "emptyState");
+                require(empty.getChildCount() == 2 && empty.getBackground() == null && empty.getElevation() == 0,
+                        "EMPTY_FLAT text-only empty state, no fake search card/badge/elevation");
+                TextView emptyTitle = (TextView) empty.getChildAt(0), body = (TextView) empty.getChildAt(1);
+                font(emptyTitle, 16, context); font(body, 13.5f, context);
+                require(body.getText().toString().contains("顶部地址栏") && !body.hasOnClickListeners(), "EMPTY_OWNERSHIP honest toolbar instruction, not pseudo-input");
+                if (empty.getVisibility() == View.VISIBLE) { completeText(emptyTitle, "EMPTY_TEXT"); completeText(body, "EMPTY_TEXT"); vertical(empty, false); }
+                font((TextView) column(page).getChildAt(4), 11, context); vertical(h.wrapper(), false);
                 return h;
             }
             private static String headerReceipt(Header h) {
                 return "syntheticHeader=" + h.wrapper().getMeasuredWidth() + "x" + h.wrapper().getMeasuredHeight()
-                        + ",identityWidth:" + h.identity().getMeasuredWidth() + ",history:"
+                        + ",identityWidth:" + h.title().getMeasuredWidth() + ",history:"
                         + h.history().getMeasuredWidth() + "x" + h.history().getMeasuredHeight()
-                        + ",secondLine:" + h.history().getTop() + ".." + h.history().getBottom();
+                        + ",label:" + h.history().getContentDescription() + ",sectionVisible:" + h.section().getVisibility();
+            }
+            private static void setPalette(boolean dark) {
+                NativeBrowserActivity.C_CANVAS = dark ? 0xff111111 : 0xfff7f7f7;
+                NativeBrowserActivity.C_SURFACE = dark ? 0xff1d1d1d : 0xffffffff;
+                NativeBrowserActivity.C_INK = dark ? 0xffeeeeee : 0xff171717;
+                NativeBrowserActivity.C_MUTED = dark ? 0xffa8a8a8 : 0xff646464;
+                NativeBrowserActivity.C_ACCENT = dark ? 0xffb7c8ee : 0xff314e79;
+                NativeBrowserActivity.C_ACCENT_SOFT = dark ? 0xff29354a : 0xffe8edf6;
+                NativeBrowserActivity.C_STROKE = dark ? 0xff3b3b3b : 0xffdedede;
+                NativeBrowserActivity.C_RIPPLE = dark ? 0x1affffff : 0x14000000;
+            }
+            private static void palette(NewTabPage page) throws Exception {
+                Header h = header(page);
+                var background = (android.graphics.drawable.GradientDrawable) page.getBackground();
+                require(background.color == NativeBrowserActivity.C_CANVAS && background.colors == null
+                                && h.title().getCurrentTextColor() == NativeBrowserActivity.C_INK
+                                && h.hint().getCurrentTextColor() == NativeBrowserActivity.C_MUTED
+                                && h.recent().getCurrentTextColor() == NativeBrowserActivity.C_INK
+                                && h.history().getCurrentTextColor() == NativeBrowserActivity.C_ACCENT, "PALETTE_STATIC flat page/identity/section colors update");
+                var historyRipple = (android.graphics.drawable.RippleDrawable) h.history().getBackground();
+                require(historyRipple.color == NativeBrowserActivity.C_RIPPLE
+                                && ((android.graphics.drawable.GradientDrawable) historyRipple.mask).color == NativeBrowserActivity.C_SURFACE,
+                        "PALETTE_STATIC History ripple/mask update");
+                LinearLayout empty = (LinearLayout) field(page, "emptyState");
+                require(((TextView) empty.getChildAt(0)).getCurrentTextColor() == NativeBrowserActivity.C_INK
+                                && ((TextView) empty.getChildAt(1)).getCurrentTextColor() == NativeBrowserActivity.C_MUTED
+                                && ((TextView) column(page).getChildAt(4)).getCurrentTextColor() == NativeBrowserActivity.C_MUTED,
+                        "PALETTE_STATIC empty/footer update even when hidden");
+                for (LinearLayout tile : tileList(page)) {
+                    var tileBackground = (android.graphics.drawable.GradientDrawable) tile.getBackground();
+                    var ripple = (android.graphics.drawable.RippleDrawable) tile.getForeground();
+                    TextView avatar = (TextView) tile.getChildAt(0), title = (TextView) tile.getChildAt(1), meta = (TextView) tile.getChildAt(2);
+                    require(tileBackground.color == NativeBrowserActivity.C_SURFACE && tileBackground.strokeColor == NativeBrowserActivity.C_STROKE
+                                    && tileBackground.strokeWidth == dp(page.getContext(), 1) && tile.getElevation() == 0
+                                    && ripple.color == NativeBrowserActivity.C_RIPPLE
+                                    && ((android.graphics.drawable.GradientDrawable) ripple.mask).color == NativeBrowserActivity.C_SURFACE
+                                    && avatar.getCurrentTextColor() == NativeBrowserActivity.C_ACCENT
+                                    && ((android.graphics.drawable.GradientDrawable) avatar.getBackground()).color == NativeBrowserActivity.C_ACCENT_SOFT
+                                    && title.getCurrentTextColor() == NativeBrowserActivity.C_INK && meta.getCurrentTextColor() == NativeBrowserActivity.C_MUTED,
+                            "PALETTE_TILE tile/stroke/ripple/avatar/name/meta recolor in place without elevation");
+                }
+            }
+            private static List<LinearLayout> tileList(NewTabPage page) throws Exception {
+                LinearLayout tiles = (LinearLayout) field(page, "tiles"); List<LinearLayout> result = new ArrayList<>();
+                for (int r = 0; r < tiles.getChildCount(); r++) {
+                    LinearLayout row = (LinearLayout) tiles.getChildAt(r);
+                    for (int c = 0; c < row.getChildCount(); c++) if (row.getChildAt(c) instanceof LinearLayout tile) result.add(tile);
+                }
+                return result;
             }
             private NtpTileOracle() { }
             private static void require(boolean condition, String message) { checks++; if (!condition) throw new AssertionError(message + " [" + scenario + "]"); }
             private static int dp(Context context, float value) { return Math.round(context.getResources().getDisplayMetrics().density * value); }
             private static Object field(Object owner, String name) throws Exception { var field = owner.getClass().getDeclaredField(name); field.setAccessible(true); return field.get(owner); }
-            private record Identity(View view, ViewGroup parent, ViewGroup.LayoutParams params, String text) { }
+            private record Identity(View view, ViewGroup parent, ViewGroup.LayoutParams params, String text,
+                    Object background, Object foreground, String label) { }
             private static void identities(View view, List<Identity> result) {
-                result.add(new Identity(view, view.getParent(), view.getLayoutParams(), view instanceof TextView text ? text.getText().toString() : null));
+                result.add(new Identity(view, view.getParent(), view.getLayoutParams(), view instanceof TextView text ? text.getText().toString() : null,
+                        view.getBackground(), view.getForeground(), view.getContentDescription() == null ? null : view.getContentDescription().toString()));
                 if (view instanceof ViewGroup group) for (int i = 0; i < group.getChildCount(); i++) identities(group.getChildAt(i), result);
             }
             private static List<Integer> rectangles(View view) { List<Integer> result = new ArrayList<>(); rects(view, result); return result; }
@@ -841,13 +1023,13 @@ public final class NativeNewTabTileHostTest {
             }
             private static int geometry(NewTabPage page, Context context, int count, int content, float scale) throws Exception {
                 LinearLayout tiles = (LinearLayout) field(page, "tiles");
-                View empty = (View) field(page, "emptyCard"), section = (View) field(page, "sectionRow");
+                View empty = (View) field(page, "emptyState");
                 ScrollView scroll = (ScrollView) page.getChildAt(0); LinearLayout column = (LinearLayout) scroll.getChildAt(0);
                 TextView footer = (TextView) column.getChildAt(column.getChildCount() - 1);
                 require(column.getPaddingLeft() == dp(context, 18) && column.getPaddingRight() == dp(context, 18), "actual outer18dp constrains width");
                 require(tiles.getMeasuredWidth() == page.getMeasuredWidth() - dp(context, 18) * 2, "real constrained tiles width");
-                require(tiles.getChildCount() == (count + 2) / 3, "actual refresh row count");
-                require(empty.getVisibility() == (count == 0 ? View.VISIBLE : View.GONE) && section.getVisibility() == (count == 0 ? View.GONE : View.VISIBLE), "actual empty/section visibility");
+                require(tiles.getChildCount() == (count + 2) / 3, "RANKED_CAP actual refresh row count respects max9");
+                require(empty.getVisibility() == (count == 0 ? View.VISIBLE : View.GONE), "actual empty visibility follows ranked history");
                 int seen = 0, previousBottom = 0, previousGap = 0, metaTotal = 0;
                 for (int r = 0; r < tiles.getChildCount(); r++) {
                     LinearLayout row = (LinearLayout) tiles.getChildAt(r);
@@ -895,136 +1077,164 @@ public final class NativeNewTabTileHostTest {
                 require(column.getMeasuredHeight() >= footer.getBottom() + column.getPaddingBottom(), "scroll content encloses footer after propagation");
                 return metaTotal;
             }
-            private static void runCase(int width, float density, int count, int content) throws Exception {
-                scenario = "draft constructor width=" + width + "dp density=" + density + " count=" + count + " content=" + content;
+            private static final class Actions implements NewTabPage.Listener {
+                final List<String> navigations = new ArrayList<>(); int history;
+                @Override public void onNtpNavigate(String url) { navigations.add(url); }
+                @Override public void onNtpOpenHistory() { history++; }
+            }
+            private static void sameTree(NewTabPage page, List<Identity> before, String reason) {
+                List<Identity> after = new ArrayList<>(); identities(page, after);
+                require(after.size() == before.size(), reason + " complete tree size");
+                for (int i = 0; i < before.size(); i++) {
+                    Identity a = before.get(i), b = after.get(i);
+                    require(a.view == b.view && a.parent == b.parent && a.params == b.params && a.background == b.background && a.foreground == b.foreground
+                                    && java.util.Objects.equals(a.text, b.text) && java.util.Objects.equals(a.label, b.label),
+                            reason + " original view/parent/LayoutParams/text/drawables/label identities");
+                }
+            }
+            private static void layout(NewTabPage page, Context context, int width, int height) {
+                page.measure(View.MeasureSpec.makeMeasureSpec(dp(context, width), View.MeasureSpec.EXACTLY),
+                        View.MeasureSpec.makeMeasureSpec(dp(context, height), View.MeasureSpec.EXACTLY));
+                page.layout(0, 0, page.getMeasuredWidth(), page.getMeasuredHeight());
+                require(page.getMeasuredWidth() == dp(context, width) && page.getMeasuredHeight() == dp(context, height), "finite constrained root dimensions");
+            }
+            private static void runCase(int width, float density, int count, int content) throws Exception { runSurface(width, density, count, content, "测试环境", false); }
+            private static void runEmptyCase(int width, float density, String profile) throws Exception { runSurface(width, density, 0, 0, profile, true); }
+            private static void runSurface(int width, float density, int supplied, int content, String profile, boolean extraEmpty) throws Exception {
+                scenario = "constructor width=" + width + " density=" + density + " supplied=" + supplied + " content=" + content; setPalette(false);
                 Context context = new Context(); context.getResources().getDisplayMetrics().density = density;
-                List<BrowserHistory.SiteVisit> visits = new ArrayList<>(); long now = System.currentTimeMillis();
-                for (int i = 0; i < count; i++) {
+                View externalFocus = new View(context); context.focused = externalFocus;
+                List<BrowserHistory.SiteVisit> visits = new ArrayList<>(); long now = System.currentTimeMillis() + 60000L;
+                for (int i = 0; i < supplied; i++) {
                     boolean old = content == 1 || (content == 2 && i % 2 == 0);
                     visits.add(new BrowserHistory.SiteVisit("https://long-history-hostname-" + i + ".example", "真实长度测试标题" + i, old ? 946771200000L : now, old ? 9999 : 1));
                 }
-                BrowserHistoryStore store = new BrowserHistoryStore(visits); int[] actions = {0};
-                NewTabPage page = new NewTabPage(context, store, "测试环境", new NewTabPage.Listener() {
-                    @Override public void onNtpNavigate(String url) { actions[0]++; }
-                    @Override public void onNtpOpenHistory() { actions[0]++; }
-                });
-                require(store.rankedCalls == 0, "constructor no invented history query"); page.onShown();
-                require(store.rankedCalls == 1, "actual onShown/refresh one ranked query");
-                EditText search = (EditText) field(page, "search"); String draft = "保留草稿 example.invalid/路径?x=未提交";
-                require(search.getText().length() == 0, "SEARCH_EMPTY actual NTP editor starts empty before draft"); searchLabels(search);
-                Header originalHeader = header(page); int baseIdentityWidth = 0, baseHistoryWidth = 0;
-                search.setText(draft); search.setSelection(2, 9); search.requestFocus();
-                List<Identity> snapshot = new ArrayList<>(); identities(page, snapshot);
-                LinearLayout tiles = (LinearLayout) field(page, "tiles"); Map<View, Integer> baseMeta = new IdentityHashMap<>();
-                List<Integer> baseline = null, peak = null; int baseHeight = 0, peakHeight = 0, baseMetaTotal = 0;
-                float[] scales = {1, 1.3f, 2, 2, 1};
-                for (int step = 0; step < scales.length; step++) {
-                    float scale = scales[step];
-                    scenario = "width=" + width + "dp density=" + density + " count=" + count + " content=" + content + " step=" + step + " font=" + scale;
-                    context.getResources().getConfiguration().fontScale = scale;
-                    int requests = page.layoutRequests; page.applyFontScale();
-                    require(page.layoutRequests > requests, "font rebind requests layout on same tree"); font(search, 15.5f, context);
-                    page.measure(View.MeasureSpec.makeMeasureSpec(dp(context, width), View.MeasureSpec.EXACTLY), View.MeasureSpec.makeMeasureSpec(dp(context, 720), View.MeasureSpec.EXACTLY));
-                    page.layout(0, 0, page.getMeasuredWidth(), page.getMeasuredHeight());
-                    require(page.getMeasuredWidth() == dp(context, width) && page.getMeasuredHeight() > 0, "root finite nonzero constrained measurement");
-                    measurementReceipt(page, tiles);
-                    int metaTotal = geometry(page, context, count, content, scale);
-                    searchLabels(search); Header currentHeader = headerGeometry(page, context);
-                    require(currentHeader.equals(originalHeader), "HEADER_IDENTITY all original header/row/text references retained");
-                    if (step == 0) { baseIdentityWidth = currentHeader.identity().getMeasuredWidth(); baseHistoryWidth = currentHeader.history().getMeasuredWidth(); }
-                    require(currentHeader.identity().getMeasuredWidth() == baseIdentityWidth, "SYNTHETIC_HEADER History growth never consumes identity width");
-                    if (scale == 2) require(currentHeader.history().getMeasuredWidth() > baseHistoryWidth, "SYNTHETIC_HEADER unchanged History SP grows independently");
-                    states++;
-                    List<Identity> after = new ArrayList<>(); identities(page, after);
-                    require(after.size() == snapshot.size(), "same complete tree size across font cycles");
-                    for (int i = 0; i < snapshot.size(); i++) {
-                        Identity a = snapshot.get(i), b = after.get(i);
-                        require(a.view == b.view && a.parent == b.parent && a.params == b.params, "same view/parent/LayoutParams identity across font cycles");
-                        require(java.util.Objects.equals(a.text, b.text), "text/search draft unchanged across font cycles");
-                    }
-                    require(field(page, "search") == search && search.hasFocus() && context.focused == search && search.getText().toString().equals(draft) && search.getSelectionStart() == 2 && search.getSelectionEnd() == 9, "search reference/draft/focus/selection preserved");
-                    require(field(page, "tiles") == tiles && store.rankedCalls == 1 && actions[0] == 0, "no rebuild/history requery/navigation on font rebind");
-                    for (int r = 0; r < tiles.getChildCount(); r++) {
-                        LinearLayout row = (LinearLayout) tiles.getChildAt(r);
-                        for (int c = 0; c < row.getChildCount(); c++) {
-                            if (!(row.getChildAt(c) instanceof LinearLayout tile)) continue;
-                            TextView meta = (TextView) tile.getChildAt(2);
-                            if (step == 0) baseMeta.put(meta, meta.getMeasuredHeight());
-                            if (scale == 2) require(meta.getMeasuredHeight() > baseMeta.get(meta), "individual metadata height grows under2x");
-                        }
-                    }
-                    if (step == 0) { baseline = rectangles(page); baseHeight = tiles.getMeasuredHeight(); baseMetaTotal = metaTotal; }
-                    if (step == 2) { peak = rectangles(page); peakHeight = tiles.getMeasuredHeight(); }
-                    if (step == 3) require(rectangles(page).equals(peak) && tiles.getMeasuredHeight() == peakHeight, "repeated2x exactly idempotent geometry/ranges");
-                    if (step == 4) require(rectangles(page).equals(baseline) && tiles.getMeasuredHeight() == baseHeight, "return1x exactly restores geometry/ranges");
-                    if (count > 0 && step == 2) require(tiles.getMeasuredHeight() > baseHeight && metaTotal > baseMetaTotal, "metadata height growth propagates to rows/tiles");
-                }
-            }
-            private static void runEmptyCase(int width, float density, String profile) throws Exception {
-                scenario = "empty constructor width=" + width + "dp density=" + density + " profile=" + profile;
-                Context context = new Context(); context.getResources().getDisplayMetrics().density = density;
-                BrowserHistoryStore store = new BrowserHistoryStore(List.of()); int[] actions = {0};
-                NewTabPage page = new NewTabPage(context, store, profile, new NewTabPage.Listener() {
-                    @Override public void onNtpNavigate(String url) { actions[0]++; }
-                    @Override public void onNtpOpenHistory() { actions[0]++; }
-                });
-                require(store.rankedCalls == 0, "empty constructor no invented query"); page.onShown();
-                require(store.rankedCalls == 1, "empty actual onShown one ranked query");
-                EditText search = (EditText) field(page, "search");
-                require(search.getText().length() == 0, "SEARCH_EMPTY separate empty-editor phase has no draft"); searchLabels(search);
-                search.setSelection(0, 0); search.requestFocus(); Header originalHeader = header(page);
+                BrowserHistoryStore store = new BrowserHistoryStore(visits); Actions actions = new Actions();
+                NewTabPage page = new NewTabPage(context, store, profile, actions); inputOwnership(page, context, externalFocus); header(page);
+                require(store.rankedCalls == 0, "constructor never invents a history query"); page.onShown();
+                require(store.rankedCalls == 1, "actual onShown/refresh one ranked query"); Header originalHeader = header(page);
                 String expectedName = profile == null || profile.trim().isEmpty() ? "默认环境" : profile.trim();
-                require(originalHeader.title().getText().toString().equals(expectedName), "empty profile title exercises default/long Chinese/mixed content");
+                require(originalHeader.title().getText().toString().equals(expectedName), "profile default/blank/Chinese/mixed name preserved");
                 List<Identity> snapshot = new ArrayList<>(); identities(page, snapshot);
-                List<Integer> baseline = null, peak = null; int baseIdentityWidth = 0, baseHistoryWidth = 0;
+                LinearLayout tiles = (LinearLayout) field(page, "tiles"); ScrollView scroll = (ScrollView) page.getChildAt(0);
+                Map<View, Integer> baseMeta = new IdentityHashMap<>(); int count = Math.min(supplied, 9);
+                List<Integer> baseline = null, peak = null; int baseHeight = 0, peakHeight = 0, baseMetaTotal = 0, baseIdentityWidth = 0, scrollY = 0;
                 float[] scales = {1, 1.3f, 2, 2, 1};
                 for (int step = 0; step < scales.length; step++) {
-                    float scale = scales[step];
-                    scenario = "EMPTY_EDITOR width=" + width + "dp density=" + density + " profile=" + expectedName + " step=" + step + " font=" + scale;
-                    context.getResources().getConfiguration().fontScale = scale;
-                    int requests = page.layoutRequests; page.applyFontScale();
-                    require(page.layoutRequests > requests, "empty font rebind requests layout on same tree"); font(search, 15.5f, context);
-                    require(search.getText().length() == 0, "SEARCH_EMPTY no hidden populated-editor proxy for hint coverage"); searchLabels(search);
-                    page.measure(View.MeasureSpec.makeMeasureSpec(dp(context, width), View.MeasureSpec.EXACTLY), View.MeasureSpec.makeMeasureSpec(dp(context, 720), View.MeasureSpec.EXACTLY));
-                    page.layout(0, 0, page.getMeasuredWidth(), page.getMeasuredHeight());
-                    Header currentHeader = headerGeometry(page, context);
-                    require(currentHeader.equals(originalHeader), "HEADER_IDENTITY empty phase retains existing header/History references");
-                    if (step == 0) { baseline = rectangles(page); baseIdentityWidth = currentHeader.identity().getMeasuredWidth(); baseHistoryWidth = currentHeader.history().getMeasuredWidth(); }
-                    require(currentHeader.identity().getMeasuredWidth() == baseIdentityWidth, "SYNTHETIC_HEADER empty-phase History never consumes identity width");
-                    if (scale == 2) require(currentHeader.history().getMeasuredWidth() > baseHistoryWidth, "SYNTHETIC_HEADER empty-phase History grows without shrinking identity");
-                    if (step == 2) peak = rectangles(page);
-                    if (step == 3) require(rectangles(page).equals(peak), "empty repeated2x idempotent synthetic geometry");
-                    if (step == 4) require(rectangles(page).equals(baseline), "empty return1x restores synthetic geometry");
-                    List<Identity> after = new ArrayList<>(); identities(page, after);
-                    require(after.size() == snapshot.size(), "empty same complete tree size");
-                    for (int i = 0; i < snapshot.size(); i++) {
-                        Identity a = snapshot.get(i), b = after.get(i);
-                        require(a.view == b.view && a.parent == b.parent && a.params == b.params && java.util.Objects.equals(a.text, b.text), "empty view/parent/LayoutParams/text identity retained");
+                    float scale = scales[step]; scenario = (extraEmpty ? "EMPTY_PROFILE " : "TILES ") + "width=" + width + "dp density=" + density + " supplied=" + supplied
+                            + " content=" + content + " profile=" + expectedName + " step=" + step + " font=" + scale;
+                    context.getResources().getConfiguration().fontScale = scale; int requests = page.layoutRequests; page.applyFontScale();
+                    require(page.layoutRequests > requests, "font rebind requests layout on original tree");
+                    setPalette(step > 0 && step < 4); page.applyPalette(); palette(page); layout(page, context, width, 720); inputOwnership(page, context, externalFocus);
+                    Header currentHeader = headerGeometry(page, context); int metaTotal = geometry(page, context, count, content, scale);
+                    require(currentHeader.equals(originalHeader), "HEADER_IDENTITY same identity/section/text/action references");
+                    if (step == 0) baseIdentityWidth = currentHeader.title().getMeasuredWidth();
+                    require(currentHeader.title().getMeasuredWidth() == baseIdentityWidth, "HEADER_LAYOUT History/font growth cannot consume profile width");
+                    sameTree(page, snapshot, "FONT_PALETTE_IDENTITY");
+                    require(store.rankedCalls == 1 && store.removeCalls == 0 && actions.history == 0 && actions.navigations.isEmpty(), "font/palette never rebuild/requery/mutate history or navigate");
+                    require(field(page, "tiles") == tiles, "same grid container through repeated live updates");
+                    List<LinearLayout> actualTiles = tileList(page); require(actualTiles.size() == count, "RANKED_CAP genuine ranked results capped to9, no seeded/filler sites");
+                    for (int i = 0; i < actualTiles.size(); i++) {
+                        LinearLayout tile = actualTiles.get(i); TextView title = (TextView) tile.getChildAt(1), meta = (TextView) tile.getChildAt(2);
+                        require(title.getText().toString().equals(NewTabPage.displayHostFor(visits.get(i).origin)), "RANKED_ORDER supplied ranked order retained");
+                        if (step == 0) baseMeta.put(meta, meta.getMeasuredHeight());
+                        if (scale == 2) require(meta.getMeasuredHeight() > baseMeta.get(meta), "individual metadata height grows under2x");
                     }
-                    require(field(page, "search") == search && search.hasFocus() && context.focused == search
-                                    && search.getSelectionStart() == 0 && search.getSelectionEnd() == 0
-                                    && store.rankedCalls == 1 && actions[0] == 0,
-                            "empty editor reference/focus/selection/query count unchanged; no navigation actions executed");
-                    emptyTrace.write(scenario + (char) 9 + "textLength=" + search.getText().length() + (char) 9 + "storedHint=" + search.getHint()
-                            + (char) 9 + "storedContentDescription=" + search.getContentDescription() + (char) 9 + headerReceipt(currentHeader)
-                            + (char) 9 + "LIMIT=hint-not-rendered,no-TalkBack-click-IME-proof" + (char) 10); emptyTrace.flush();
-                    emptyStates++;
+                    if (step == 0) { baseline = rectangles(page); baseHeight = tiles.getMeasuredHeight(); baseMetaTotal = metaTotal; scroll.scrollTo(0, 31); scrollY = scroll.getScrollY(); }
+                    require(scroll.getScrollY() == scrollY, "SCROLL_STATE fixture offset retained across font/palette updates");
+                    if (step == 2) { peak = rectangles(page); peakHeight = tiles.getMeasuredHeight(); }
+                    if (step == 3) require(rectangles(page).equals(peak) && tiles.getMeasuredHeight() == peakHeight, "repeated2x idempotent geometry/ranges");
+                    if (step == 4) require(rectangles(page).equals(baseline) && tiles.getMeasuredHeight() == baseHeight, "return1x restores exact geometry/ranges");
+                    if (count > 0 && step == 2) require(tiles.getMeasuredHeight() > baseHeight && metaTotal > baseMetaTotal, "metadata growth propagates up to rows and tiles");
+                    if (extraEmpty) { emptyTrace.write(scenario + (char) 9 + headerReceipt(currentHeader) + (char) 9 + "localEditors=0;historyActions=1;LIMIT=synthetic-state-only" + (char) 10); emptyTrace.flush(); emptyStates++; }
+                    else { measurementReceipt(page, tiles); states++; }
                 }
+                require(originalHeader.history().performClick() && actions.history == 1 && actions.navigations.isEmpty(), "HISTORY_CALLBACK same real History callback in empty/populated states");
+                List<LinearLayout> liveTiles = tileList(page);
+                for (int i = 0; i < liveTiles.size(); i++) { liveTiles.get(i).performClick(); require(actions.navigations.get(i).equals(visits.get(i).origin), "RANKED_NAVIGATION exact origin matching each tile"); }
+                int navigationCount = actions.navigations.size(), haptics = context.haptics;
+                page.quiesce(); page.setVisibility(View.GONE); page.refresh(); page.onShown();
+                require(store.rankedCalls == 1 && page.getVisibility() == View.GONE, "QUIESCENT_QUERY refresh/onShown cannot requery or reshow stopped profile");
+                int requests = page.layoutRequests; page.applyFontScale(); require(page.layoutRequests == requests, "quiescent page does not rebind fonts");
+                originalHeader.history().performClick(); for (LinearLayout tile : liveTiles) { tile.performClick(); tile.performLongClick(); }
+                require(actions.history == 1 && actions.navigations.size() == navigationCount && context.haptics == haptics && store.removeCalls == 0 && field(page, "removalDialog") == null,
+                        "QUIESCENT_ACTION no navigation/History/haptic/removal/dialog on stopped page");
+                inputOwnership(page, context, externalFocus); sameTree(page, snapshot, "QUIESCENT_IDENTITY");
+            }
+            private static void retiredBindings() throws Exception {
+                scenario = "retired tile bindings released on refresh and empty"; setPalette(false); Context context = new Context();
+                BrowserHistoryStore store = new BrowserHistoryStore(List.of(new BrowserHistory.SiteVisit("https://old.example", "old", 946771200000L, 2)));
+                NewTabPage page = new NewTabPage(context, store, "scope", new Actions()); page.onShown();
+                LinearLayout oldTile = tileList(page).get(0); TextView oldMeta = (TextView) oldTile.getChildAt(2); int calls = oldMeta.textSizeCalls, color = oldMeta.getCurrentTextColor();
+                store.visits = List.of(new BrowserHistory.SiteVisit("https://new.example", "new", 946771200000L, 3)); page.refresh();
+                require(tileList(page).get(0) != oldTile && oldTile.getParent().getParent() == null, "refresh retires old row, not static page tree");
+                context.getResources().getConfiguration().fontScale = 2; setPalette(true); page.applyFontScale(); page.applyPalette();
+                require(oldMeta.textSizeCalls == calls && oldMeta.getCurrentTextColor() == color, "RETIRED_BINDINGS detached font/palette bindings never run again");
+                font((TextView) tileList(page).get(0).getChildAt(2), 10.5f, context); palette(page);
+                TextView nextMeta = (TextView) tileList(page).get(0).getChildAt(2); calls = nextMeta.textSizeCalls; color = nextMeta.getCurrentTextColor();
+                store.visits = List.of(); page.refresh(); context.getResources().getConfiguration().fontScale = 1; setPalette(false); page.applyFontScale(); page.applyPalette();
+                require(nextMeta.textSizeCalls == calls && nextMeta.getCurrentTextColor() == color && tileList(page).isEmpty(), "RETIRED_BINDINGS clear-to-empty also releases tile bindings");
+                layout(page, context, 288, 720); headerGeometry(page, context);
+            }
+            private static void rankedProfilesAndConfirmation() throws Exception {
+                scenario = "actual BrowserHistory ranking, injected profile boundaries and modeled confirmation"; setPalette(false);
+                long now = System.currentTimeMillis(); BrowserHistory a = new BrowserHistory(), b = new BrowserHistory();
+                for (int i = 0; i < 12; i++) a.recordVisit("https://profile-a-" + i + ".example/path", "A" + i, now - (12 - i) * 6000L);
+                b.recordVisit("https://profile-b.example/private", "B", now); BrowserHistoryStore storeA = new BrowserHistoryStore(a), storeB = new BrowserHistoryStore(b);
+                Actions actionsA = new Actions(), actionsB = new Actions(); Context contextA = new Context(), contextB = new Context();
+                NewTabPage pageA = new NewTabPage(contextA, storeA, "A", actionsA), pageB = new NewTabPage(contextB, storeB, "B", actionsB);
+                pageA.onShown(); pageB.onShown(); List<BrowserHistory.SiteVisit> ranked = a.ranked();
+                require(tileList(pageA).size() == 9 && tileList(pageB).size() == 1, "actual ranking feeds max9 tiles, separate supplied profile stores");
+                for (int i = 0; i < 9; i++) { tileList(pageA).get(i).performClick(); require(actionsA.navigations.get(i).equals(ranked.get(i).origin), "RANKED_ORDER actual most-recent order, not insertion order"); }
+                require(((TextView) tileList(pageB).get(0).getChildAt(1)).getText().toString().equals("profile-b.example"), "profile B never displays profile A sites");
+                List<Identity> profileB = new ArrayList<>(); identities(pageB, profileB); LinearLayout tile = tileList(pageA).get(0); String origin = ranked.get(0).origin; int toasts = android.widget.Toast.shown;
+                require(tile.performLongClick(), "actual long-press listener consumes removal request"); android.app.Dialog cancel = (android.app.Dialog) field(pageA, "removalDialog");
+                require(cancel != null && cancel.title.equals("移除该站点？") && cancel.action.equals("移除") && cancel.body.contains(NewTabPage.displayHostFor(origin)) && storeA.removeCalls == 0,
+                        "REMOVAL_CONFIRM real origin named, no mutation before explicit confirm");
+                cancel.dismiss(); require(field(pageA, "removalDialog") == null && storeA.removeCalls == 0 && android.widget.Toast.shown == toasts, "REMOVAL_CANCEL cancel has no mutation/success feedback");
+                tile.performLongClick(); android.app.Dialog confirm = (android.app.Dialog) field(pageA, "removalDialog"); pageA.applyFontScale(); pageA.applyPalette();
+                require(field(pageA, "removalDialog") == confirm && confirm.fontCalls == 1 && confirm.paletteCalls == 1, "DIALOG_STATE live font/palette dispatch retains open dialog");
+                confirm.confirm();
+                require(storeA.removeCalls == 1 && origin.equals(storeA.removedOrigin) && storeA.rankedCalls == 2 && a.size() == 11 && android.widget.Toast.shown == toasts + 1 && field(pageA, "removalDialog") == null,
+                        "REMOVAL_CONFIRM explicit confirm removes exact site, refreshes ranking, emits success");
+                require(!((TextView) tileList(pageA).get(0).getChildAt(1)).getText().toString().equals(NewTabPage.displayHostFor(origin)), "removed site absent from refreshed tiles");
+                sameTree(pageB, profileB, "PROFILE_ISOLATION"); require(b.size() == 1 && storeB.removeCalls == 0 && storeB.rankedCalls == 1, "profile B model/store untouched");
+                tile = tileList(pageA).get(0); tile.performLongClick(); android.app.Dialog pending = (android.app.Dialog) field(pageA, "removalDialog");
+                Runnable staleConfirm = pending.callback; int queries = storeA.rankedCalls, nav = actionsA.navigations.size(), haptics = contextA.haptics;
+                pageA.quiesce(); require(!pending.showing && field(pageA, "removalDialog") == null, "QUIESCENT_DIALOG dismiss and clear pending confirmation");
+                staleConfirm.run(); tile.performClick(); tile.performLongClick(); header(pageA).history().performClick(); pageA.setVisibility(View.GONE); pageA.onShown(); pageA.refresh();
+                require(storeA.removeCalls == 1 && storeA.rankedCalls == queries && actionsA.navigations.size() == nav && actionsA.history == 0 && contextA.haptics == haptics && android.widget.Toast.shown == toasts + 1 && field(pageA, "removalDialog") == null,
+                        "QUIESCENT_CONFIRM late callback/click/long-press/History cannot touch stopped profile");
+                BrowserHistory last = new BrowserHistory(); last.recordVisit("https://last.example", "last", now);
+                NewTabPage lastPage = new NewTabPage(new Context(), new BrowserHistoryStore(last), "last", new Actions()); lastPage.onShown();
+                tileList(lastPage).get(0).performLongClick(); ((android.app.Dialog) field(lastPage, "removalDialog")).confirm();
+                require(last.size() == 0 && tileList(lastPage).isEmpty() && ((View) field(lastPage, "emptyState")).getVisibility() == View.VISIBLE, "REMOVAL_EMPTY last-site confirm exposes real empty state");
+                layout(lastPage, lastPage.getContext(), 288, 720); headerGeometry(lastPage, lastPage.getContext());
+            }
+            private static void nonzeroScrollState() throws Exception {
+                scenario = "nonzero retained synthetic scroll, not Android lifecycle"; setPalette(false); Context context = new Context(); List<BrowserHistory.SiteVisit> visits = new ArrayList<>();
+                for (int i = 0; i < 9; i++) visits.add(new BrowserHistory.SiteVisit("https://scroll-" + i + ".example", "scroll", 946771200000L, 9999));
+                NewTabPage page = new NewTabPage(context, new BrowserHistoryStore(visits), "scroll", new Actions()); page.onShown(); layout(page, context, 288, 320);
+                ScrollView scroll = (ScrollView) page.getChildAt(0); scroll.scrollTo(0, 37); require(scroll.getScrollY() == 37, "SCROLL_STATE dedicated fixture has nonzero offset");
+                List<Identity> snapshot = new ArrayList<>(); identities(page, snapshot);
+                for (float scale : new float[]{1.3f, 2, 2, 1}) { context.getResources().getConfiguration().fontScale = scale; setPalette(scale != 1); page.applyFontScale(); page.applyPalette(); layout(page, context, 288, 320);
+                    require(scroll.getScrollY() == 37, "SCROLL_STATE nonzero offset survives live font/palette cycles"); sameTree(page, snapshot, "SCROLL_IDENTITY"); }
             }
             public static int run(String receiptPath) throws Exception {
                 try (var writer = java.nio.file.Files.newBufferedWriter(java.nio.file.Path.of(receiptPath));
-                        var emptyWriter = java.nio.file.Files.newBufferedWriter(java.nio.file.Path.of(receiptPath).resolveSibling("empty-editor.tsv"))) {
+                        var emptyWriter = java.nio.file.Files.newBufferedWriter(java.nio.file.Path.of(receiptPath).resolveSibling("empty-profile.tsv"))) {
                     trace = writer; emptyTrace = emptyWriter; storedApiChecks();
                     for (int width : new int[]{288, 320, 412}) for (float density : new float[]{1, 2.625f})
-                        for (int count : new int[]{0, 1, 3, 4, 9}) for (int content = 0; content < 3; content++) {
+                        for (int count : new int[]{0, 1, 3, 4, 9, 12}) for (int content = 0; content < 3; content++) {
                             runCase(width, density, count, content); cases++;
                         }
-                    require(cases == 90 && states == 450, "complete90case/450state matrix, no skipped fixture scenarios");
+                    require(cases == 108 && states == 540, "complete108case/540state matrix, including >9 real results");
                     for (int width : new int[]{288, 320, 412}) for (float density : new float[]{1, 2.625f})
-                        for (String profile : new String[]{null, "这是用于窄屏大字检验的长中文环境名称", "Route104 alpha-beta mixed 环境名称"}) {
+                        for (String profile : new String[]{null, "  ", "这是用于窄屏大字检验的长中文环境名称", "Route104 alpha-beta mixed 环境名称"}) {
                             runEmptyCase(width, density, profile); emptyCases++;
                         }
-                    require(emptyCases == 18 && emptyStates == 90, "separate18case/90state empty-editor matrix, never counted as metadata states");
+                    require(emptyCases == 24 && emptyStates == 120, "separate24case/120state empty-profile matrix");
+                    retiredBindings(); rankedProfilesAndConfirmation(); nonzeroScrollState();
                     return checks;
                 }
             }

@@ -14,7 +14,7 @@ printf 'JDK17 regression output: %s\n' "$CLASSES"
     "$SCRIPT_DIR/NativeBrowserLifecycleHostTest.java" "$SCRIPT_DIR/NativeBrowserFocusHostTest.java" \
     "$SCRIPT_DIR/NativeBrowserPaletteHostTest.java" "$SCRIPT_DIR/NativeTabSwitcherHostTest.java" \
     "$SCRIPT_DIR/NativeSystemBarHostTest.java" "$SCRIPT_DIR/NativeBrowserFontHostTest.java" \
-    "$SCRIPT_DIR/FingerprintSeedStoreHostTest.java"
+    "$SCRIPT_DIR/FingerprintSeedStoreHostTest.java" "$SCRIPT_DIR/NativeBrowserRecoveryHostTest.java"
 "$JDK17/bin/java" -ea -cp "$CLASSES" BrowserHistoryTest
 "$JDK17/bin/java" -ea -cp "$CLASSES" NativeBrowserUiSourceContractTest "$ROOT"
 "$JDK17/bin/java" -ea -cp "$CLASSES" com.ahoo.abs.android.nativekernel.FingerprintSeedStoreHostTest
@@ -24,3 +24,4 @@ printf 'JDK17 regression output: %s\n' "$CLASSES"
 "$JDK17/bin/java" -ea -cp "$CLASSES" NativeTabSwitcherHostTest "$ROOT" "$CLASSES"
 "$JDK17/bin/java" -ea -cp "$CLASSES" NativeSystemBarHostTest "$ROOT" "$CLASSES"
 "$JDK17/bin/java" -ea -cp "$CLASSES" NativeBrowserFontHostTest "$ROOT" "$CLASSES"
+"$JDK17/bin/java" -ea -cp "$CLASSES" NativeBrowserRecoveryHostTest "$ROOT" "$CLASSES"

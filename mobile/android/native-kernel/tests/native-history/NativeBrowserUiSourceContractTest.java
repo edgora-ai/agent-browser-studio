@@ -273,31 +273,47 @@ public final class NativeBrowserUiSourceContractTest {
                 && !text.contains(compact(editor + ".setHint(\"搜索或输入网址\");"));
     }
 
+    private static boolean singleSearchOwnerContract(String ntp) {
+        return !ntp.contains("EditText") && !ntp.contains("buildSearchCard")
+                && !ntp.contains("setOnEditorActionListener") && !ntp.contains("InputMethodManager")
+                && !ntp.contains("SearchEngine.resolve");
+    }
+
     private static void shortSearchAndIndependentHeader() {
-        for (String editor : List.of("address", "search")) {
-            String body = editor.equals("address") ? declaration("NativeBrowserActivity", "buildChrome")
-                    : declaration("NewTabPage", "buildSearchCard");
-            check(searchLabelContract(body, editor), editor + " source declares short hint/full label; not runtime accessibility proof");
-            String shortHint = editor + ".setHint(\"搜索\");";
-            String oldHint = editor + ".setHint(\"搜索或输入网址\");";
-            String label = editor + ".setContentDescription(\"搜索或输入网址\");";
-            check(!searchLabelContract(body.replace(shortHint, oldHint), editor), editor + " source contract rejects old-long-hint in-memory control");
-            check(!searchLabelContract(body.replace(label, ""), editor), editor + " source contract rejects missing-full-label in-memory control");
-        }
+        String body = declaration("NativeBrowserActivity", "buildChrome");
+        check(searchLabelContract(body, "address"), "sole omnibox has short hint/full label; not runtime accessibility proof");
+        check(!searchLabelContract(body.replace("address.setHint(\"搜索\");", "address.setHint(\"搜索或输入网址\");"), "address"),
+                "reject old-long-hint in-memory control");
+        check(!searchLabelContract(body.replace("address.setContentDescription(\"搜索或输入网址\");", ""), "address"),
+                "reject missing-full-label in-memory control");
+        String ntp = source("NewTabPage.java");
+        check(singleSearchOwnerContract(ntp), "NTP has no second editor, resolver, submission or keyboard owner");
+        check(!singleSearchOwnerContract(ntp + "new EditText(context)"), "reject reintroduced real editor negative control");
+        check(!singleSearchOwnerContract(ntp + "SearchEngine.resolve(query)"), "reject separate navigation resolver negative control");
         String header = declaration("NewTabPage", "buildIdentityRow");
-        has(header, "header.setOrientation(LinearLayout.VERTICAL)", "NTP declares independent vertical header lines");
-        has(header, "row.setOrientation(LinearLayout.HORIZONTAL)", "original avatar/identity row stays horizontal");
-        has(header, "header.addView(row, new LinearLayout.LayoutParams(-1, -2))", "identity row keeps full-width WRAP allocation");
-        has(header, "row.addView(column, columnLayout)", "existing weighted identity remains in avatar row");
-        has(header, "historyLayout.setMargins(0, dp(8), 0, 0)", "independent History line declares8dp top rhythm");
-        has(header, "header.addView(historyButton, historyLayout)", "same History TextView belongs to header second line");
-        lacks(header, "row.addView(historyButton", "History cannot compete in avatar/identity horizontal allocation");
-        has(header, "return header", "stable wrapper is returned to the page column");
-        has(header, "staticFonts.bind(avatar, 17)", "identity avatar SP role is unchanged");
-        has(header, "staticFonts.bind(title, 17)", "identity title SP role is unchanged");
-        has(header, "staticFonts.bind(historyButton, 12.5f)", "History SP role is unchanged, not shrunk to fit");
-        has(declaration("NativeBrowserActivity", "buildChrome"), "chromeFonts.bind(address, 16)", "toolbar editor original16sp role retained");
-        has(declaration("NewTabPage", "buildSearchCard"), "staticFonts.bind(search, 15.5f)", "NTP editor original15.5sp role retained");
+        has(header, "header.setOrientation(LinearLayout.VERTICAL)", "environment identity and metadata have independent lines");
+        has(header, "title.setSingleLine(false)", "full environment name may wrap instead of disappearing");
+        lacks(header, "setOnClickListener", "identity does not duplicate the history action");
+        String section = declaration("NewTabPage", "buildSectionRow");
+        has(section, "all.setContentDescription(\"历史记录\")", "contextual all action has full accessible destination");
+        has(section, "all.setMinimumWidth(dp(48))", "history action has48dp width floor");
+        has(section, "all.setMinimumHeight(dp(48))", "history action has48dp height floor");
+        lacks(method("NewTabPage", "refresh"), "sectionRow.setVisibility", "history destination stays reachable with empty history");
+        has(declaration("NewTabPage", "buildEmptyState"), "顶部地址栏", "empty state explains the real next action");
+        has(body, "chromeFonts.bind(address, 16)", "sole toolbar editor retains16sp role");
+        String history = method("NativeBrowserActivity", "createHistorySurfaces");
+        has(history, "browserFrame.addView(historyPanel", "history owns a full-window single header");
+        lacks(history, "pageContainer.addView(historyPanel", "history does not stack a second browser header");
+        String open = method("NativeBrowserActivity", "showHistoryPanel");
+        before(open, "dismissAddressEditor()", "historyPanel.show()", "history takes focus/IME ownership before entry");
+        has(open, "IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS", "covered browser chrome is not exposed to accessibility");
+        String dismiss = method("HistoryPanel", "dismiss");
+        before(dismiss, "searchField.clearFocus()", "setVisibility(View.GONE)", "history releases editor focus before hiding");
+        has(dismiss, "hideSoftInputFromWindow", "history filter keyboard closes on dismissal");
+        has(method("NativeBrowserActivity", "onBackPressed"), "address.hasFocus()", "Back settles editing independently of suggestions");
+        String row = method("HistoryPanel", "makeRow");
+        has(row, "remove.setMinimumWidth(dp(48))", "delete does not compete with open-row below48dp width");
+        has(row, "remove.setMinimumHeight(dp(48))", "delete target minimum48dp high");
     }
 
     private static void nativePaletteContinuity() {
@@ -439,12 +455,11 @@ public final class NativeBrowserUiSourceContractTest {
         has(source("TabSwitcherView.java"), "placeholder.measure", "preview grows from owned text, not bitmap intrinsic dimensions");
         String[][] roles = {
             {"NativeBrowserActivity", "chromeFonts.bind(title, 19)", "chromeFonts.bind(splashStatus, 13)",
-                "chromeFonts.bind(tabCounter, 12)", "chromeFonts.bind(address, 16)", "overflowFonts.bind(action, 14)",
+                "chromeFonts.bind(tabCounter, 12)", "chromeFonts.bind(address, 16)", "chromeFonts.bind(restoreRetry, 14)", "overflowFonts.bind(action, 14)",
                 "suggestionFonts.bind(titleView, 14.5f)", "suggestionFonts.bind(originView, 12)"},
-            {"NewTabPage", "staticFonts.bind(footer, 11)", "staticFonts.bind(avatar, 17)", "staticFonts.bind(title, 17)",
-                "staticFonts.bind(hint, 12.5f)", "staticFonts.bind(historyButton, 12.5f)", "staticFonts.bind(search, 15.5f)",
-                "staticFonts.bind(go, 13.5f)", "staticFonts.bind(section, 17)", "staticFonts.bind(all, 12.5f)",
-                "staticFonts.bind(badge, 20)", "staticFonts.bind(title, 16)", "staticFonts.bind(body, 12.5f)",
+            {"NewTabPage", "staticFonts.bind(footer, 11)", "staticFonts.bind(title, 17)",
+                "staticFonts.bind(hint, 12.5f)", "staticFonts.bind(section, 17)", "staticFonts.bind(all, 14)",
+                "staticFonts.bind(title, 16)", "staticFonts.bind(body, 13.5f)",
                 "tileFonts.bind(avatar, 16)", "tileFonts.bind(name, 12.5f)", "tileFonts.bind(meta, 10.5f)"},
             {"HistoryPanel", "staticFonts.bind(back, 23)", "staticFonts.bind(title, 18)", "staticFonts.bind(clear, 13)",
                 "staticFonts.bind(searchField, 14)", "staticFonts.bind(emptyTitle, 13)", "staticFonts.bind(hint, 11)",
@@ -469,7 +484,7 @@ public final class NativeBrowserUiSourceContractTest {
             lacks(text, "setAutoSizeTextType", "no font shrinking to mask overflow in " + file[0]);
             if (!file[0].equals("NativeBrowserActivity")) lacks(text, ".setTextSize(", "all roles participate in binding: " + file[0]);
         }
-        check(count == 51, "all 51 original text-size declarations audited");
+        check(count == 47, "all47 surviving/new text roles audited; removed editor/decorative roles are not retained");
     }
 
     private static void nonDestructiveQuiescence() {
@@ -630,23 +645,43 @@ public final class NativeBrowserUiSourceContractTest {
 
     private static void pageRestoreCover() {
         String show = method("NativeBrowserActivity", "showPageRestoring");
-        has(show, "restoreSplashShown = true", "reclaimed renderer shows an honest page-area loading state");
-        has(show, "splash.setVisibility(View.VISIBLE)", "restore cover reuses the existing splash");
+        has(show, "restoreSplashShown = true", "reclaimed renderer gets honest page-area loading state");
+        has(show, "splash.setVisibility(View.VISIBLE)", "reuse the startup splash without touching the renderer");
         has(show, "isPageReady(shell)", "a ready page is never covered");
-        String hide = method("NativeBrowserActivity", "hidePageRestoring");
-        has(hide, "hideSplash()", "restore cover is removed once the page is ready");
-        has(source("NativeBrowserActivity.java"), "showPageRestoring(shell)",
-                "tab switch covers only non-ready targets");
-        has(method("ShellHistoryObserver", "didFirstVisuallyNonEmptyPaint"), "hidePageRestoring()",
-                "first paint removes the restore cover");
-        has(method("ShellHistoryObserver", "didStopLoading"), "hidePageRestoring()",
-                "load completion removes the restore cover");
-        has(show, "postOnAnimationDelayed", "a bounded fallback never leaves the restore cover stuck");
-        lacks(show, "bringToFront()", "the restore cover stays below the chrome and overlays");
-        has(method("NativeBrowserActivity", "initializeBrowserUi"), "reparentSplashToPageArea()",
-                "the startup splash moves into the page area after startup");
-        has(method("NativeBrowserActivity", "reparentSplashToPageArea"), "pageContainer.addView(splash",
-                "restore cover lives below the chrome");
+        has(show, "restoreShell = shell", "restore state is Shell-owned");
+        has(show, "restoreContents = contents", "restore state is WebContents-owned");
+        has(show, "restoreUrl = visibleUrl(shell)", "navigation URL belongs to restore state");
+        has(show, "restoreEpoch != epoch", "retired deadline cannot alter a new restore");
+        has(show, "restoreRetry.setVisibility(View.VISIBLE)", "deadline exposes a real reload action, not an empty page");
+        has(show, "splashSpinner.setVisibility(View.GONE)", "a long recovery is not an endless spinner");
+        has(show, "postOnAnimationDelayed(restoreTimeout, 8000)", "deadline changes state at8s, not fake readiness");
+        lacks(show, "bringToFront()", "recovery stays below chrome/native destinations");
+        String owns = method("NativeBrowserActivity", "ownsPageRestoring");
+        for (String guard : List.of("restoreGeneration == generation", "manager.getActiveShell() == shell",
+                "restoreShell == shell", "restoreContents == contents", "shell.getWebContents() == contents",
+                "restoreUrl.equals(visibleUrl(shell))", "interactive()")) {
+            has(owns, guard, "recovery ownership guard: " + guard);
+        }
+        String reconcile = method("NativeBrowserActivity", "reconcilePageRestoring");
+        has(reconcile, "active != chromeShell || contents != chromeContents", "all active-owner transitions are reconciled");
+        has(reconcile, "changed || stale", "ordinary refresh cannot reset delayed recovery");
+        has(method("NativeBrowserActivity", "refreshChrome"), "reconcilePageRestoring()", "close/native-close/new-tab paths share reconciliation");
+        has(method("NativeBrowserActivity", "hidePageRestoring"), "removeCallbacks(restoreTimeout)", "cancel stale deadlines explicitly");
+        has(method("NativeBrowserActivity", "cancelUiWork"), "hidePageRestoring()", "pause/shutdown retires recovery state");
+        String retry = method("NativeBrowserActivity", "retryPageRestoring");
+        has(retry, "ownsPageRestoring(shell, contents)", "retry validates current live owner");
+        before(retry, "showPageRestoring(shell)", "reload(true)", "reset state before reload prevents repeat taps");
+        String complete = method("NativeBrowserActivity", "completePageRestoring");
+        has(complete, "ownsPageRestoring(shell, contents) && isPageReady(shell)", "load-stop alone is not success evidence");
+        for (String event : List.of("didFirstVisuallyNonEmptyPaint", "didStopLoading")) {
+            has(method("ShellHistoryObserver", event), "completePageRestoring(shell, contents)", "observer callback has exact identity: " + event);
+        }
+        has(method("NativeBrowserActivity", "initializeBrowserUi"), "reparentSplashToPageArea()", "startup cover becomes page-area-only after startup");
+        has(method("NativeBrowserActivity", "reparentSplashToPageArea"), "pageContainer.addView(splash", "chrome remains reachable throughout recovery");
+        String capture = method("NativeBrowserActivity", "captureActivePreview");
+        lacks(capture, "if (!retrying)", "retry callback cannot suppress its own schedule");
+        has(capture, "result == PixelCopy.ERROR_TIMEOUT", "only transient copy failures are retryable");
+        lacks(capture, "tabSwitcher.isShowing()", "surface-only copy may settle behind overview sibling");
     }
 
     private static void popupAndHistorySemantics() {

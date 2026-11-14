@@ -63,6 +63,7 @@ final class HistoryPanel extends FrameLayout {
         setBackground(pageBackground);
         staticPaletteBindings.add(() -> pageBackground.setColor(PAGE));
         setClickable(true);
+        setFocusableInTouchMode(true);
 
         LinearLayout column = new LinearLayout(context);
         column.setOrientation(LinearLayout.VERTICAL);
@@ -124,6 +125,8 @@ final class HistoryPanel extends FrameLayout {
         // Search over the aggregated sites; filtering is local and never touches the store.
         searchField = new android.widget.EditText(context);
         searchField.setSingleLine(true);
+        searchField.setContentDescription("搜索历史站点");
+        searchField.setMinimumHeight(dp(48));
         searchField.setHint("搜索历史站点");
         staticPaletteBindings.add(() -> searchField.setHintTextColor(MUTED));
         staticPaletteBindings.add(() -> searchField.setTextColor(INK));
@@ -206,11 +209,20 @@ final class HistoryPanel extends FrameLayout {
         if (quiescing) return;
         setVisibility(View.VISIBLE);
         searchField.setVisibility(View.VISIBLE);
+        // Opening history never implicitly opens the keyboard; its filter remains opt-in.
+        requestFocus();
         rebuild();
     }
 
     void dismiss() {
         boolean wasShowing = getVisibility() == View.VISIBLE;
+        if (wasShowing) {
+            searchField.clearFocus();
+            clearFocus();
+            android.view.inputmethod.InputMethodManager keyboard =
+                    (android.view.inputmethod.InputMethodManager) getContext().getSystemService(Context.INPUT_METHOD_SERVICE);
+            if (keyboard != null) keyboard.hideSoftInputFromWindow(searchField.getWindowToken(), 0);
+        }
         setVisibility(View.GONE);
         if (clearDialog != null) clearDialog.dismiss();
         if (rowDialog != null) rowDialog.dismiss();
@@ -292,7 +304,7 @@ final class HistoryPanel extends FrameLayout {
             rowBackground.setColor(CARD);
             rowBackground.setStroke(dp(1), STROKE);
         });
-        row.setElevation(dp(1.5f));
+        row.setElevation(0);
         row.setPadding(dp(16), dp(12), dp(10), dp(12));
         row.setMinimumHeight(dp(56));
 
@@ -345,8 +357,8 @@ final class HistoryPanel extends FrameLayout {
         remove.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
         rowPaletteBindings.add(() -> remove.setTextColor(MUTED));
         remove.setGravity(Gravity.CENTER);
-        remove.setMinimumWidth(dp(36));
-        remove.setMinimumHeight(dp(36));
+        remove.setMinimumWidth(dp(48));
+        remove.setMinimumHeight(dp(48));
         remove.setContentDescription("删除站点记录：" + label);
         remove.setOnClickListener(view -> {
             if (quiescing) return;

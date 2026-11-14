@@ -1,16 +1,11 @@
 package com.ahoo.abs.android.nativekernel;
 
-import android.app.Activity;
 import android.app.Dialog;
 import android.content.Context;
-import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.view.Gravity;
 import android.view.View;
-import android.view.inputmethod.EditorInfo;
-import android.view.inputmethod.InputMethodManager;
-import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
@@ -22,13 +17,12 @@ import java.util.Locale;
 /**
  * Native new-tab surface shown over the ShellManager while the active WebContents is still
  * blank. Built entirely from framework widgets (no XML resources, no AndroidX) in the
- * manager's premium light theme. Tiles come from the real per-profile history store —
- * nothing is preseeded, and the empty state explains that sites appear after browsing.
+ * activity's live theme. The Activity omnibox owns all search input and keyboard state.
+ * Tiles come from the real per-profile history store — nothing is preseeded.
  */
 final class NewTabPage extends FrameLayout {
     // Palette resolved from the activity's night mode (NativeBrowserActivity.resolvePalette).
     private int PAGE;
-    private int PAGE_TOP;
     private int CARD;
     private int INK;
     private int MUTED;
@@ -53,10 +47,8 @@ final class NewTabPage extends FrameLayout {
 
     private final BrowserHistoryStore store;
     private final Listener listener;
-    private final EditText search;
     private final LinearLayout tiles;
-    private final View sectionRow;
-    private final View emptyCard;
+    private final View emptyState;
     private Dialog removalDialog;
     private boolean quiescing;
 
@@ -66,14 +58,11 @@ final class NewTabPage extends FrameLayout {
 
         this.store = store;
         this.listener = listener;
-        search = new EditText(context);
         GradientDrawable pageBackground = new GradientDrawable();
-        pageBackground.setOrientation(GradientDrawable.Orientation.TOP_BOTTOM);
         setBackground(pageBackground);
-        staticPaletteBindings.add(() -> pageBackground.setColors(new int[]{PAGE_TOP, PAGE}));
+        staticPaletteBindings.add(() -> pageBackground.setColor(PAGE));
+        // Consume taps over the blank WebContents without taking focus from the toolbar.
         setClickable(true);
-        setDescendantFocusability(FOCUS_BEFORE_DESCENDANTS);
-        setFocusableInTouchMode(true);
 
         ScrollView scroll = new ScrollView(context);
         scroll.setFillViewport(true);
@@ -87,14 +76,13 @@ final class NewTabPage extends FrameLayout {
         scroll.addView(column, new FrameLayout.LayoutParams(-1, -2));
 
         column.addView(buildIdentityRow(context, profileName));
-        column.addView(buildSearchCard(context));
-        sectionRow = buildSectionRow(context);
-        column.addView(sectionRow);
+        // The single History action remains reachable even before the first visit.
+        column.addView(buildSectionRow(context));
         tiles = new LinearLayout(context);
         tiles.setOrientation(LinearLayout.VERTICAL);
         column.addView(tiles, new LinearLayout.LayoutParams(-1, -2));
-        emptyCard = buildEmptyCard(context);
-        column.addView(emptyCard);
+        emptyState = buildEmptyState(context);
+        column.addView(emptyState);
 
         TextView footer = new TextView(context);
         footer.setText("长按站点可移除 · 历史记录仅保存在本设备的当前环境，不会上传");
@@ -107,14 +95,14 @@ final class NewTabPage extends FrameLayout {
     }
 
     private void readPalette() {
-        PAGE = NativeBrowserActivity.C_CANVAS; PAGE_TOP = NativeBrowserActivity.C_TILE_TOP;
+        PAGE = NativeBrowserActivity.C_CANVAS;
         CARD = NativeBrowserActivity.C_SURFACE; INK = NativeBrowserActivity.C_INK;
         MUTED = NativeBrowserActivity.C_MUTED; ACCENT = NativeBrowserActivity.C_ACCENT;
         ACCENT_SOFT = NativeBrowserActivity.C_ACCENT_SOFT; STROKE = NativeBrowserActivity.C_STROKE;
         RIPPLE = NativeBrowserActivity.C_RIPPLE;
     }
 
-    /** Recolors the existing surface and dialogs without rebuilding content or input. */
+    /** Recolors the existing surface and dialogs without rebuilding content. */
     void applyPalette() {
         readPalette();
         staticPaletteBindings.apply();
@@ -122,7 +110,7 @@ final class NewTabPage extends FrameLayout {
         if (removalDialog != null) BrowserDialogs.applyPalette(removalDialog);
     }
 
-    /** Rebind existing text without rebuilding tiles or changing the search draft. */
+    /** Rebind existing text without rebuilding tiles or changing scroll/focus state. */
     void applyFontScale() {
         if (quiescing) return;
         staticFonts.apply();
@@ -132,121 +120,25 @@ final class NewTabPage extends FrameLayout {
 
     private LinearLayout buildIdentityRow(Context context, String profileName) {
         String name = profileName == null || profileName.trim().isEmpty() ? "默认环境" : profileName.trim();
-        // Keep identity and navigation on independent lines at every font size.
         LinearLayout header = new LinearLayout(context);
         header.setOrientation(LinearLayout.VERTICAL);
-        LinearLayout row = new LinearLayout(context);
-        row.setOrientation(LinearLayout.HORIZONTAL);
-        row.setGravity(Gravity.CENTER_VERTICAL);
 
-        TextView avatar = new TextView(context);
-        avatar.setText(new String(Character.toChars(name.codePointAt(0))).toUpperCase(Locale.ROOT));
-        staticFonts.bind(avatar, 17);
-        avatar.setTypeface(Typeface.DEFAULT_BOLD);
-        staticPaletteBindings.add(() -> avatar.setTextColor(ACCENT));
-        avatar.setGravity(Gravity.CENTER);
-        GradientDrawable disc = new GradientDrawable();
-        disc.setShape(GradientDrawable.OVAL);
-        staticPaletteBindings.add(() -> disc.setColor((ACCENT & 0x00FFFFFF) | 0x1A000000));
-        avatar.setBackground(disc);
-        row.addView(avatar, new LinearLayout.LayoutParams(dp(44), dp(44)));
-
-        LinearLayout column = new LinearLayout(context);
-        column.setOrientation(LinearLayout.VERTICAL);
         TextView title = new TextView(context);
         title.setText(name);
         staticFonts.bind(title, 17);
         title.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
         staticPaletteBindings.add(() -> title.setTextColor(INK));
-        title.setSingleLine(true);
-        title.setEllipsize(android.text.TextUtils.TruncateAt.END);
-        column.addView(title, new LinearLayout.LayoutParams(-2, -2));
+        title.setSingleLine(false);
+        header.addView(title, new LinearLayout.LayoutParams(-1, -2));
+
         TextView hint = new TextView(context);
         hint.setText("历史记录按环境隔离");
         staticFonts.bind(hint, 12.5f);
         staticPaletteBindings.add(() -> hint.setTextColor(MUTED));
-        column.addView(hint, new LinearLayout.LayoutParams(-2, -2));
-        LinearLayout.LayoutParams columnLayout = new LinearLayout.LayoutParams(0, -2, 1);
-        columnLayout.setMargins(dp(12), 0, dp(8), 0);
-        row.addView(column, columnLayout);
-
-        TextView historyButton = new TextView(context);
-        historyButton.setText("历史记录");
-        staticFonts.bind(historyButton, 12.5f);
-        historyButton.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
-        staticPaletteBindings.add(() -> historyButton.setTextColor(ACCENT));
-        historyButton.setGravity(Gravity.CENTER);
-        historyButton.setMinimumWidth(dp(48));
-        historyButton.setMinimumHeight(dp(40));
-        GradientDrawable historyButtonBackground = rounded(ACCENT_SOFT, 20);
-        historyButton.setBackground(historyButtonBackground);
-        staticPaletteBindings.add(() -> historyButtonBackground.setColor(ACCENT_SOFT));
-        historyButton.setPadding(dp(14), 0, dp(14), 0);
-        historyButton.setOnClickListener(view -> {
-            view.performHapticFeedback(android.view.HapticFeedbackConstants.KEYBOARD_TAP);
-            if (!quiescing) listener.onNtpOpenHistory();
-        });
-        header.addView(row, new LinearLayout.LayoutParams(-1, -2));
-        LinearLayout.LayoutParams historyLayout = new LinearLayout.LayoutParams(-2, -2);
-        historyLayout.setMargins(0, dp(8), 0, 0);
-        header.addView(historyButton, historyLayout);
+        LinearLayout.LayoutParams hintLayout = new LinearLayout.LayoutParams(-1, -2);
+        hintLayout.setMargins(0, dp(4), 0, 0);
+        header.addView(hint, hintLayout);
         return header;
-    }
-
-    private LinearLayout buildSearchCard(Context context) {
-        LinearLayout card = new LinearLayout(context);
-        card.setOrientation(LinearLayout.HORIZONTAL);
-        card.setGravity(Gravity.CENTER_VERTICAL);
-        GradientDrawable cardBackground = stroked(CARD, 23);
-        card.setBackground(cardBackground);
-        staticPaletteBindings.add(() -> {
-            cardBackground.setColor(CARD);
-            cardBackground.setStroke(dp(1), STROKE);
-        });
-        card.setElevation(dp(1.5f));
-        card.setPadding(dp(10), dp(8), dp(10), dp(8));
-        LinearLayout.LayoutParams cardLayout = new LinearLayout.LayoutParams(-1, -2);
-        cardLayout.setMargins(0, dp(20), 0, 0);
-        card.setLayoutParams(cardLayout);
-
-        search.setHint("搜索");
-        search.setContentDescription("搜索或输入网址");
-        staticPaletteBindings.add(() -> search.setHintTextColor(MUTED));
-        staticPaletteBindings.add(() -> search.setTextColor(INK));
-        staticFonts.bind(search, 15.5f);
-        search.setSingleLine(true);
-        search.setBackground(null);
-        search.setImeOptions(EditorInfo.IME_ACTION_GO);
-        search.setInputType(android.text.InputType.TYPE_CLASS_TEXT
-                | android.text.InputType.TYPE_TEXT_VARIATION_URI);
-        search.setOnEditorActionListener((view, actionId, event) -> {
-            if (actionId == EditorInfo.IME_ACTION_GO
-                    || (event != null && event.getKeyCode() == android.view.KeyEvent.KEYCODE_ENTER)) {
-                submit();
-                return true;
-            }
-            return false;
-        });
-        card.addView(search, new LinearLayout.LayoutParams(0, -2, 1));
-
-        TextView go = new TextView(context);
-        go.setText("前往");
-        staticFonts.bind(go, 13.5f);
-        go.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
-        staticPaletteBindings.add(() -> go.setTextColor(ACCENT));
-        go.setGravity(Gravity.CENTER);
-        go.setMinimumWidth(dp(56));
-        go.setMinimumHeight(dp(40));
-        GradientDrawable goBackground = rounded(ACCENT_SOFT, 20);
-        go.setBackground(goBackground);
-        staticPaletteBindings.add(() -> goBackground.setColor(ACCENT_SOFT));
-        go.setPadding(dp(14), 0, dp(14), 0);
-        go.setOnClickListener(view -> {
-            view.performHapticFeedback(android.view.HapticFeedbackConstants.KEYBOARD_TAP);
-            submit();
-        });
-        card.addView(go, new LinearLayout.LayoutParams(-2, -2));
-        return card;
     }
 
     private LinearLayout buildSectionRow(Context context) {
@@ -254,7 +146,7 @@ final class NewTabPage extends FrameLayout {
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(Gravity.CENTER_VERTICAL);
         LinearLayout.LayoutParams rowLayout = new LinearLayout.LayoutParams(-1, -2);
-        rowLayout.setMargins(0, dp(26), 0, dp(12));
+        rowLayout.setMargins(0, dp(20), 0, dp(8));
         row.setLayoutParams(rowLayout);
 
         TextView section = new TextView(context);
@@ -265,72 +157,58 @@ final class NewTabPage extends FrameLayout {
         row.addView(section, new LinearLayout.LayoutParams(0, -2, 1));
 
         TextView all = new TextView(context);
-        all.setText("全部 ›");
-        staticFonts.bind(all, 12.5f);
-        staticPaletteBindings.add(() -> all.setTextColor(MUTED));
+        all.setText("全部");
+        all.setContentDescription("历史记录");
+        staticFonts.bind(all, 14);
+        staticPaletteBindings.add(() -> all.setTextColor(ACCENT));
         all.setMinimumWidth(dp(48));
-        all.setMinimumHeight(dp(40));
+        all.setMinimumHeight(dp(48));
+        all.setPadding(dp(12), dp(8), dp(12), dp(8));
         all.setGravity(Gravity.CENTER);
+        GradientDrawable historyMask = rounded(CARD, 12);
+        android.graphics.drawable.RippleDrawable historyRipple = new android.graphics.drawable.RippleDrawable(
+                android.content.res.ColorStateList.valueOf(RIPPLE), null, historyMask);
+        all.setBackground(historyRipple);
+        staticPaletteBindings.add(() -> {
+            historyRipple.setColor(android.content.res.ColorStateList.valueOf(RIPPLE));
+            historyMask.setColor(CARD);
+        });
         all.setOnClickListener(view -> {
+            if (quiescing) return;
             view.performHapticFeedback(android.view.HapticFeedbackConstants.KEYBOARD_TAP);
-            if (!quiescing) listener.onNtpOpenHistory();
+            listener.onNtpOpenHistory();
         });
         row.addView(all, new LinearLayout.LayoutParams(-2, -2));
         return row;
     }
 
-    private LinearLayout buildEmptyCard(Context context) {
-        LinearLayout card = new LinearLayout(context);
-        card.setOrientation(LinearLayout.VERTICAL);
-        card.setGravity(Gravity.CENTER);
-        GradientDrawable cardBackground = stroked(CARD, 20);
-        card.setBackground(cardBackground);
-        staticPaletteBindings.add(() -> {
-            cardBackground.setColor(CARD);
-            cardBackground.setStroke(dp(1), STROKE);
-        });
-        card.setElevation(dp(1.5f));
-        card.setPadding(dp(22), dp(30), dp(22), dp(30));
-
-        TextView badge = new TextView(context);
-        badge.setText("空");
-        staticFonts.bind(badge, 20);
-        badge.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
-        staticPaletteBindings.add(() -> badge.setTextColor(ACCENT));
-        badge.setGravity(Gravity.CENTER);
-        GradientDrawable disc = new GradientDrawable();
-        disc.setShape(GradientDrawable.OVAL);
-        staticPaletteBindings.add(() -> disc.setColor(ACCENT_SOFT));
-        badge.setBackground(disc);
-        card.addView(badge, new LinearLayout.LayoutParams(dp(56), dp(56)));
+    private LinearLayout buildEmptyState(Context context) {
+        LinearLayout empty = new LinearLayout(context);
+        empty.setOrientation(LinearLayout.VERTICAL);
+        empty.setPadding(0, dp(20), 0, dp(24));
 
         TextView title = new TextView(context);
         title.setText("还没有浏览记录");
         staticFonts.bind(title, 16);
         title.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
         staticPaletteBindings.add(() -> title.setTextColor(INK));
-        title.setGravity(Gravity.CENTER);
-        LinearLayout.LayoutParams titleLayout = new LinearLayout.LayoutParams(-2, -2);
-        titleLayout.setMargins(0, dp(14), 0, 0);
-        card.addView(title, titleLayout);
+        empty.addView(title, new LinearLayout.LayoutParams(-1, -2));
 
         TextView body = new TextView(context);
-        body.setText("正常浏览网页后，最近访问的站点\n会以卡片形式显示在这里");
-        staticFonts.bind(body, 12.5f);
+        body.setText("使用顶部地址栏搜索或输入网址，访问过的站点会显示在这里。");
+        staticFonts.bind(body, 13.5f);
         staticPaletteBindings.add(() -> body.setTextColor(MUTED));
         body.setLineSpacing(dp(3), 1f);
-        body.setGravity(Gravity.CENTER);
-        LinearLayout.LayoutParams bodyLayout = new LinearLayout.LayoutParams(-2, -2);
-        bodyLayout.setMargins(0, dp(6), 0, 0);
-        card.addView(body, bodyLayout);
-        LinearLayout.LayoutParams cardLayout = new LinearLayout.LayoutParams(-1, -2);
-        cardLayout.setMargins(0, dp(8), 0, 0);
-        card.setLayoutParams(cardLayout);
-        return card;
+        LinearLayout.LayoutParams bodyLayout = new LinearLayout.LayoutParams(-1, -2);
+        bodyLayout.setMargins(0, dp(8), 0, 0);
+        empty.addView(body, bodyLayout);
+        empty.setLayoutParams(new LinearLayout.LayoutParams(-1, -2));
+        return empty;
     }
 
     /** Called by the activity right after the overlay becomes visible; rebuilds the tiles. */
     void onShown() {
+        if (quiescing) return;
         if (getVisibility() != View.VISIBLE) {
             setVisibility(View.VISIBLE);
             refresh();
@@ -339,10 +217,10 @@ final class NewTabPage extends FrameLayout {
 
     /** Rebuilds tiles after a history mutation (removal, clear) while the page is visible. */
     void refresh() {
+        if (quiescing) return;
         List<BrowserHistory.SiteVisit> ranked = store.ranked();
         boolean empty = ranked.isEmpty();
-        sectionRow.setVisibility(empty ? View.GONE : View.VISIBLE);
-        emptyCard.setVisibility(empty ? View.VISIBLE : View.GONE);
+        emptyState.setVisibility(empty ? View.VISIBLE : View.GONE);
         tilePaletteBindings.clear();
         tileFonts.clear();
         tiles.removeAllViews();
@@ -374,14 +252,13 @@ final class NewTabPage extends FrameLayout {
         LinearLayout tile = new LinearLayout(context);
         tile.setOrientation(LinearLayout.VERTICAL);
         tile.setGravity(Gravity.CENTER_HORIZONTAL);
-        GradientDrawable tileBackground = stroked(CARD, 18);
+        GradientDrawable tileBackground = stroked(CARD, 14);
         tile.setBackground(tileBackground);
         tilePaletteBindings.add(() -> {
             tileBackground.setColor(CARD);
             tileBackground.setStroke(dp(1), STROKE);
         });
-        tile.setElevation(dp(1.5f));
-        GradientDrawable rippleMask = rounded(CARD, 18);
+        GradientDrawable rippleMask = rounded(CARD, 14);
         android.graphics.drawable.RippleDrawable ripple = new android.graphics.drawable.RippleDrawable(
                 android.content.res.ColorStateList.valueOf(RIPPLE), null, rippleMask);
         tile.setForeground(ripple);
@@ -395,8 +272,9 @@ final class NewTabPage extends FrameLayout {
         tile.setLayoutParams(tileLayout);
         tile.setMinimumHeight(dp(88));
         tile.setOnClickListener(view -> {
+            if (quiescing) return;
             view.performHapticFeedback(android.view.HapticFeedbackConstants.KEYBOARD_TAP);
-            if (!quiescing) listener.onNtpNavigate(visit.origin);
+            listener.onNtpNavigate(visit.origin);
         });
         tile.setOnLongClickListener(view -> {
             confirmRemove(visit, host);
@@ -443,9 +321,6 @@ final class NewTabPage extends FrameLayout {
     void quiesce() {
         quiescing = true;
         dismissDialogs();
-        search.setEnabled(false);
-        search.clearFocus();
-        hideKeyboard();
     }
 
     private void confirmRemove(final BrowserHistory.SiteVisit visit, String host) {
@@ -462,27 +337,6 @@ final class NewTabPage extends FrameLayout {
         pending.setOnDismissListener(dialog -> {
             if (removalDialog == pending) removalDialog = null;
         });
-    }
-
-    private void submit() {
-        if (quiescing) return;
-        String url = BrowserHistory.resolveInput(search.getText().toString());
-        if (url == null) {
-            Toast.makeText(getContext(), "暂不支持打开该类型的链接", Toast.LENGTH_SHORT).show();
-            return;
-        }
-        search.setText("");
-        search.clearFocus();
-        hideKeyboard();
-        listener.onNtpNavigate(url);
-    }
-
-    private void hideKeyboard() {
-        InputMethodManager keyboard =
-                (InputMethodManager) getContext().getSystemService(Activity.INPUT_METHOD_SERVICE);
-        if (keyboard != null && getWindowToken() != null) {
-            keyboard.hideSoftInputFromWindow(getWindowToken(), 0);
-        }
     }
 
     /** Host label for an origin: scheme and credentials dropped, leading www. removed. */
