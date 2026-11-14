@@ -449,13 +449,15 @@ final class TabSwitcherView extends FrameLayout {
         return getVisibility() == View.VISIBLE;
     }
 
+    /** Compact chrome bar matching the browser address row: same surface, height, divider
+     *  rhythm and icon-sized actions. The count is inline, not a second title line. */
     private LinearLayout buildHeader(Context context, TextView countLabel) {
         LinearLayout header = new LinearLayout(context);
         header.setOrientation(LinearLayout.HORIZONTAL);
         header.setGravity(Gravity.CENTER_VERTICAL);
         header.setBackgroundColor(CARD);
-        header.setElevation(dp(1.5f));
-        header.setPadding(dp(8), dp(8), dp(14), dp(8));
+        header.setPadding(dp(4), dp(4), dp(4), dp(4));
+        header.setMinimumHeight(dp(56));
 
         TextView back = new TextView(context);
         back.setText("‹");
@@ -471,31 +473,30 @@ final class TabSwitcherView extends FrameLayout {
         });
         header.addView(back);
 
-        LinearLayout titles = new LinearLayout(context);
-        titles.setOrientation(LinearLayout.VERTICAL);
         TextView title = new TextView(context);
         title.setText("标签页");
         staticFonts.bind(title, 18);
         title.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
         title.setTextColor(INK);
-        titles.addView(title, new LinearLayout.LayoutParams(-2, -2));
+        title.setSingleLine(true);
+        LinearLayout.LayoutParams titleLayout = new LinearLayout.LayoutParams(-2, -2);
+        titleLayout.setMargins(dp(6), 0, 0, 0);
+        header.addView(title, titleLayout);
+
         staticFonts.bind(countLabel, 12.5f);
         countLabel.setTextColor(MUTED);
-        titles.addView(countLabel, new LinearLayout.LayoutParams(-2, -2));
-        LinearLayout.LayoutParams titlesLayout = new LinearLayout.LayoutParams(0, -2, 1);
-        titlesLayout.setMargins(dp(6), 0, dp(8), 0);
-        header.addView(titles, titlesLayout);
+        countLabel.setSingleLine(true);
+        LinearLayout.LayoutParams countLayout = new LinearLayout.LayoutParams(0, -2, 1);
+        countLayout.setMargins(dp(6), 0, dp(8), 0);
+        header.addView(countLabel, countLayout);
 
         TextView create = new TextView(context);
-        create.setText("＋ 新建");
-        staticFonts.bind(create, 13);
-        create.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+        create.setText("＋");
+        staticFonts.bind(create, 24);
         create.setTextColor(ACCENT);
         create.setGravity(Gravity.CENTER);
         create.setMinimumWidth(dp(48));
         create.setMinimumHeight(dp(48));
-        create.setPadding(dp(12), 0, dp(12), 0);
-        create.setBackground(rounded(ACCENT_SOFT, 20));
         create.setContentDescription("新建标签页");
         create.setOnClickListener(view -> {
             view.performHapticFeedback(android.view.HapticFeedbackConstants.KEYBOARD_TAP);
@@ -508,7 +509,6 @@ final class TabSwitcherView extends FrameLayout {
             title.setTextColor(INK);
             countLabel.setTextColor(MUTED);
             create.setTextColor(ACCENT);
-            ((GradientDrawable) create.getBackground()).setColor(ACCENT_SOFT);
         });
         return header;
     }
@@ -558,7 +558,7 @@ final class TabSwitcherView extends FrameLayout {
         cardFonts.clear();
         grid.removeAllViews();
         int count = shownItems.size();
-        countLabel.setText("共 " + count + " 个标签页");
+        countLabel.setText("· " + count);
         if (count == 0) {
             emptyLabel.setVisibility(View.VISIBLE);
             grid.addView(emptyLabel, new LinearLayout.LayoutParams(-1, -2));

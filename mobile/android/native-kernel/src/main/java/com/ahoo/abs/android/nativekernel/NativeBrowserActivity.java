@@ -880,8 +880,10 @@ public final class NativeBrowserActivity extends Activity {
     private void syncWebContentsVisibility() {
         if (manager == null) return;
         Shell active = manager.getActiveShell();
+        // The tab switcher deliberately keeps the active page visible: its cards need a real
+        // PixelCopy preview, and pausing/resuming the renderer on every open made switching
+        // feel like a freeze. The overlay is opaque, so the page stays out of the user's view.
         boolean pageForeground = resumed && current()
-                && (tabSwitcher == null || !tabSwitcher.isShowing())
                 && (historyPanel == null || historyPanel.getVisibility() != View.VISIBLE)
                 && (newTab == null || newTab.getVisibility() != View.VISIBLE);
         for (Shell shell : manager.getShells()) {
@@ -1059,6 +1061,9 @@ public final class NativeBrowserActivity extends Activity {
     private void captureActivePreview() {
         Shell shell = manager == null ? null : manager.getActiveShell();
         if (!previewRequested || !resumed || !validTab(shell) || previewInFlight) return;
+        // The switcher shows the last captured bitmap; capturing while its overlay is up would
+        // copy the overlay itself and steal frames from the dismiss animation.
+        if (tabSwitcher != null && tabSwitcher.isShowing()) return;
         WebContents contents = shell.getWebContents();
         if (contents == null) return;
         String url = visibleUrl(shell);
@@ -1105,6 +1110,7 @@ public final class NativeBrowserActivity extends Activity {
                 boolean samePage = resumed && validTab(shell) && previewEpoch == epoch
                         && manager.getActiveShell() == shell && shell.getWebContents() == contents
                         && url.equals(visibleUrl(shell));
+                boolean retrying = false;
                 if (result == PixelCopy.SUCCESS && samePage) {
                     // Published bitmaps may be referenced by ImageView/display lists. Let GC
                     // release replaced snapshots; only unpublished destinations are recycled.
@@ -1113,14 +1119,22 @@ public final class NativeBrowserActivity extends Activity {
                     refreshTabSwitcher(true);
                 } else {
                     bitmap.recycle();
-                    if (samePage && result == PixelCopy.ERROR_SOURCE_NO_DATA
-                            && previewRetries < MAX_PREVIEW_RETRIES) {
+                    if (result == PixelCopy.ERROR_SOURCE_NO_DATA) {
+                        Log.d(TAG, "Preview copy no data");
+                    } else if (result == PixelCopy.ERROR_SOURCE_INVALID) {
+                        Log.d(TAG, "Preview copy source invalid");
+                    } else if (result == PixelCopy.ERROR_DESTINATION_INVALID) {
+                        Log.d(TAG, "Preview copy destination invalid");
+                    } else {
+                        Log.d(TAG, "Preview copy rejected");
+                    }
+                    if (samePage && previewRetries < MAX_PREVIEW_RETRIES) {
                         previewRetries++;
                         previewRequested = true;
+                        retrying = true;
                     }
-                    Log.d(TAG, "Preview copy rejected");
                 }
-                schedulePreviewCapture();
+                if (!retrying) schedulePreviewCapture();
             }, previewResults);
         } catch (RuntimeException unavailable) {
             previewInFlight = false;

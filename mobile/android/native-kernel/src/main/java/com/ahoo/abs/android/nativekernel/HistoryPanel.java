@@ -74,8 +74,8 @@ final class HistoryPanel extends FrameLayout {
         ColorDrawable headerBackground = new ColorDrawable();
         header.setBackground(headerBackground);
         staticPaletteBindings.add(() -> headerBackground.setColor(CARD));
-        header.setElevation(dp(1.5f));
-        header.setPadding(dp(8), dp(8), dp(14), dp(8));
+        header.setPadding(dp(4), dp(4), dp(4), dp(4));
+        header.setMinimumHeight(dp(56));
 
         TextView back = new TextView(context);
         back.setText("‹");

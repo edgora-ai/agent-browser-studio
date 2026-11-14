@@ -450,7 +450,7 @@ public final class NativeBrowserUiSourceContractTest {
                 "rowFonts.bind(header, 12.5f)", "rowFonts.bind(badge, 14)", "rowFonts.bind(title, 14)",
                 "rowFonts.bind(sub, 12.5f)", "rowFonts.bind(time, 11.5f)", "rowFonts.bind(remove, 15)"},
             {"TabSwitcherView", "staticFonts.bind(emptyLabel, 13)", "staticFonts.bind(back, 23)", "staticFonts.bind(title, 18)",
-                "staticFonts.bind(countLabel, 12.5f)", "staticFonts.bind(create, 13)", "staticFonts.bind(label, 12.5f)",
+                "staticFonts.bind(countLabel, 12.5f)", "staticFonts.bind(create, 24)", "staticFonts.bind(label, 12.5f)",
                 "staticFonts.bind(hint, 11)", "cardFonts.bind(hostLabel, 11)", "cardFonts.bind(note, 12)",
                 "cardFonts.bind(close, 14)", "cardFonts.bind(title, 13)", "cardFonts.bind(badge, 10)",
                 "cardFonts.bind(url, 11.5f)", "cardFonts.bind(avatar, 18)"},
@@ -567,9 +567,11 @@ public final class NativeBrowserUiSourceContractTest {
         has(visibility, "pageForeground && shell == active ? Visibility.VISIBLE : Visibility.HIDDEN",
                 "only selected foreground WebContents may be visible");
         has(visibility, "contents.getVisibility() != visibility", "visibility updates are idempotent");
-        for (String overlay : List.of("tabSwitcher", "historyPanel", "newTab")) {
+        for (String overlay : List.of("historyPanel", "newTab")) {
             has(visibility, overlay, "native overlay hides underlying web page: " + overlay);
         }
+        lacks(visibility, "tabSwitcher.isShowing()",
+                "tab switcher keeps the active page visible so real previews can be captured");
         String pause = method("NativeBrowserActivity", "onPause");
         before(pause, "resumed = false", "syncWebContentsVisibility()", "background flag set before hiding tabs");
         has(pause, "cancelUiWork()", "pause cancels pending capture/refresh");
@@ -597,7 +599,7 @@ public final class NativeBrowserUiSourceContractTest {
         has(capture, "shell.getWebContents() == contents", "WebContents identity must still match");
         has(capture, "url.equals(visibleUrl(shell))", "preview URL must still match");
         has(capture, "result == PixelCopy.SUCCESS && samePage", "only matching successful pixels are published");
-        has(capture, "PixelCopy.ERROR_SOURCE_NO_DATA", "first-buffer copies can retry honestly");
+        has(capture, "Preview copy rejected", "rejected copies stay diagnosable without string concatenation");
         has(capture, "previewRetries < MAX_PREVIEW_RETRIES", "source-no-data retries are bounded");
         has(method("NativeBrowserActivity", "schedulePreviewCapture"), "postOnAnimation(previewCapture)",
                 "retry on a real animation traversal, not timer/JS spoofing");
