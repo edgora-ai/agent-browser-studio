@@ -689,8 +689,11 @@ public final class NativeBrowserUiSourceContractTest {
      */
     private static void perProfileFingerprintSeeds() {
         String freeze = method("NativeBrowserApplication", "freezeCommandLine");
-        has(freeze, "fingerprintConfigPayload(loadOrCreateFingerprintSeed(launch.directorySuffix(), seedContext))",
+        has(freeze, "loadOrCreateFingerprintSeed(launch.directorySuffix(), seedContext)",
             "frozen argv must carry the per-profile fingerprint payload");
+        has(freeze, "fingerprintConfigPayload(fingerprintSeed)",
+            "frozen argv encodes the seed that was just persisted");
+        has(freeze, "seed_fp=", "freeze logs a non-reversible seed fingerprint");
         String verify = method("NativeBrowserApplication", "verifyFrozenCommandLineFor");
         has(verify, "readPersistedFingerprintSeed(launch.directorySuffix(), seedContext)",
             "fingerprint payload belongs to the verified frozen switch set");
@@ -699,12 +702,21 @@ public final class NativeBrowserUiSourceContractTest {
             "seed is minted by a CSPRNG, not derived from the env name");
         has(load, "fingerprintSeedFile(directorySuffix, context)",
             "seed persists per environment under the app files dir");
+        has(load, "persistSeedAtomically(file, fresh)",
+            "freeze persists the minted seed before the read-only verify");
         String file = method("NativeBrowserApplication", "fingerprintSeedFile");
         has(file, "context.getFilesDir()", "seed storage is app-private");
         has(file, "fingerprint-seeds", "seed storage lives under a dedicated dir");
         has(file, "directorySuffix + \".seed\"", "seed file is keyed by the env suffix");
+        has(file, "setPosixFilePermissions", "seed directory is owner-only");
+        lacks(file, "/data/data", "no hardcoded app data path");
+        String persist = method("NativeBrowserApplication", "persistSeedAtomically");
+        has(persist, "ATOMIC_MOVE", "seed write is atomic");
         String verifySeed = method("NativeBrowserApplication", "readPersistedFingerprintSeed");
         has(verifySeed, "stored.length != 8", "persisted seed round-trips exactly");
+        String digest = method("NativeBrowserApplication", "fingerprintSeedDigest");
+        has(digest, "MessageDigest.getInstance(\"SHA-256\")",
+            "logs carry a digest, never the raw seed");
         String payload = method("NativeBrowserApplication", "fingerprintConfigPayload");
         has(payload, "canvasSeed", "canvas noise seed is profile-derived");
         has(payload, "audioSeed", "audio noise seed is profile-derived");

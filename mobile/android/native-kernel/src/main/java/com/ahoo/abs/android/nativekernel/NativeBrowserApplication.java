@@ -142,6 +142,12 @@ public final class NativeBrowserApplication extends Application implements Brows
         if (!dir.isDirectory() && !dir.mkdirs()) {
             throw new IllegalStateException("FINGERPRINT_SEED_DIR_UNAVAILABLE");
         }
+        try {
+            java.nio.file.Files.setPosixFilePermissions(dir.toPath(),
+                    java.nio.file.attribute.PosixFilePermissions.fromString("rwx------"));
+        } catch (java.io.IOException | UnsupportedOperationException ignored) {
+            // non-POSIX host: the app-private parent still guards the directory
+        }
         return new java.io.File(dir, directorySuffix + ".seed");
     }
 
@@ -239,18 +245,43 @@ public final class NativeBrowserApplication extends Application implements Brows
                 .encodeToString(json.getBytes(java.nio.charset.StandardCharsets.UTF_8));
     }
 
+    /** Hex digest of the seed bytes for logs: lets a release build prove seed
+     *  stability across restarts without writing the seed itself anywhere. */
+    static String fingerprintSeedDigest(long seed) {
+        byte[] value = new byte[8];
+        long remaining = seed;
+        for (int i = 7; i >= 0; i--) {
+            value[i] = (byte) (remaining & 0xffL);
+            remaining >>>= 8;
+        }
+        try {
+            byte[] digest = java.security.MessageDigest.getInstance("SHA-256").digest(value);
+            char[] hex = new char[16];
+            for (int i = 0; i < 8; i++) {
+                int unsigned = digest[i] & 0xff;
+                hex[i * 2] = HEX_DIGITS[unsigned >>> 4];
+                hex[i * 2 + 1] = HEX_DIGITS[unsigned & 0xf];
+            }
+            return new String(hex);
+        } catch (java.security.NoSuchAlgorithmException impossible) {
+            throw new IllegalStateException("SHA-256_UNAVAILABLE", impossible);
+        }
+    }
+
+    private static final char[] HEX_DIGITS = "0123456789abcdef".toCharArray();
+
     private void freezeCommandLine(Context seedContext) {
         // Runs inside attachBaseContext: this Application is not attached yet,
         // so seed access must use the framework's base Context parameter.
         if (CommandLine.isInitialized()) throw new IllegalStateException("NATIVE_COMMAND_LINE_ALREADY_INITIALIZED");
+        long fingerprintSeed = loadOrCreateFingerprintSeed(launch.directorySuffix(), seedContext);
         String[] timezone = frozen.commandLine();
         // Route A: ordinary browsing is enabled; the preflight-only switch is no longer forced.
         String[] arguments = new String[]{timezone[0], timezone[1], timezone[2],
                 "--agent-browser-product-profile",
                 "--proxy-server=" + launch.profile.proxy.proxyRule(), "--proxy-bypass-list=<-loopback>",
                 "--host-resolver-rules=" + launch.profile.proxy.hostResolverRules(),
-                "--agent-browser-noise-seeds=" + fingerprintConfigPayload(
-                loadOrCreateFingerprintSeed(launch.directorySuffix(), seedContext)),
+                "--agent-browser-noise-seeds=" + fingerprintConfigPayload(fingerprintSeed),
                 "--disable-quic", "--use-mobile-user-agent",
                 "--disable-features=ReduceAcceptLanguage,ReduceAcceptLanguageHTTP",
                 "--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
@@ -259,7 +290,8 @@ public final class NativeBrowserApplication extends Application implements Brows
         CommandLine.init(arguments);
         verifyFrozenCommandLineFor(seedContext);
         Log.i("AbsNativeBootstrap", "ABS_ANDROID_TIMEZONE_V1 frozen=1 input_sha256="
-                + frozen.inputSha256() + " pid=" + android.os.Process.myPid());
+                + frozen.inputSha256() + " pid=" + android.os.Process.myPid()
+                + " seed_fp=" + fingerprintSeedDigest(fingerprintSeed));
     }
 
     public void verifyFrozenCommandLine() {
