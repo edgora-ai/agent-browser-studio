@@ -192,6 +192,8 @@ public final class NativeBrowserActivity extends Activity {
     private boolean quiescing;
     private boolean resumed;
     private boolean chromeRefreshPosted;
+    private boolean restoreSplashShown;
+    private int restoreEpoch;
     private PopupWindow overflowMenu;
     private final PaletteBindings overflowPalette = new PaletteBindings();
     private final PaletteBindings suggestionPalette = new PaletteBindings();
@@ -372,11 +374,51 @@ public final class NativeBrowserActivity extends Activity {
         if (splash != null && splash.getVisibility() != View.GONE) splash.setVisibility(View.GONE);
     }
 
+    private boolean isPageReady(Shell shell) {
+        WebContents contents = shell == null || shell.isDestroyed() ? null : shell.getWebContents();
+        RenderWidgetHostView view = contents == null ? null : contents.getRenderWidgetHostView();
+        return view != null && view.isReady();
+    }
+
+    /** A reclaimed renderer reload starts from a blank frame; reuse the startup splash as an
+     *  honest page-area loading state instead of leaving the page blank. */
+    private void showPageRestoring(Shell shell) {
+        if (!uiBuilt || splash == null || splashTitle == null || splashStatus == null) return;
+        if (shell == null || shell.isDestroyed() || isPageReady(shell)) return;
+        String title = tabTitle(shell);
+        if (title != null && !title.isEmpty()) splashTitle.setText(title);
+        splashStatus.setText("正在恢复页面…");
+        restoreSplashShown = true;
+        int epoch = ++restoreEpoch;
+        splash.setVisibility(View.VISIBLE);
+        // A hung load must not leave the cover up forever; a fresh show invalidates old timers.
+        browserFrame.postOnAnimationDelayed(() -> {
+            if (restoreEpoch == epoch) hidePageRestoring();
+        }, 8000);
+    }
+
+    private void hidePageRestoring() {
+        if (!restoreSplashShown) return;
+        restoreSplashShown = false;
+        restoreEpoch++;
+        hideSplash();
+    }
+
+    /** The startup splash covers the whole window; after startup it becomes the page-area
+     *  restore cover so the address bar and menu remain reachable. */
+    private void reparentSplashToPageArea() {
+        if (splash == null || pageContainer == null || splash.getParent() != browserFrame) return;
+        browserFrame.removeView(splash);
+        pageContainer.addView(splash, Math.min(1, pageContainer.getChildCount()),
+                new FrameLayout.LayoutParams(-1, -1));
+    }
+
     private void initializeBrowserUi() {
         application.requireBrowserActivation();
         prepareInitialTab();
         uiBuilt = true;
         hideSplash();
+        reparentSplashToPageArea();
         refreshChrome();
         requestActivePreview(manager.getActiveShell());
     }
@@ -869,8 +911,8 @@ public final class NativeBrowserActivity extends Activity {
         // Reconcile the load bar with the now-active shell so it can never stick after a switch.
         if (progressBar != null) {
             Shell barOwner = loadingShell;
-            boolean show = barOwner != null && !barOwner.isDestroyed() && barOwner == active;
-            progressBar.setVisibility(show ? View.VISIBLE : View.GONE);
+            boolean loading = barOwner != null && !barOwner.isDestroyed() && barOwner == active;
+            progressBar.setVisibility(loading ? View.VISIBLE : View.GONE);
         }
         refreshTabSwitcher(false);
         syncWebContentsVisibility();
@@ -932,6 +974,7 @@ public final class NativeBrowserActivity extends Activity {
             manager.selectShell(shell);
             dismissTabSwitcher();
             refreshChrome();
+            if (isPageReady(shell)) hidePageRestoring(); else showPageRestoring(shell);
             requestActivePreview(shell);
         }
         @Override public void onClose(Shell shell) {
@@ -1396,6 +1439,7 @@ public final class NativeBrowserActivity extends Activity {
             if (!current()) return;
             awaitingPaint = false;
             if (loadingShell == shell) loadingShell = null;
+            if (manager != null && manager.getActiveShell() == shell) hidePageRestoring();
             requestActivePreview(shell);
             requestChromeRefresh();
         }
@@ -1404,6 +1448,7 @@ public final class NativeBrowserActivity extends Activity {
             if (!current()) return;
             awaitingPaint = false;
             if (loadingShell == shell) loadingShell = null;
+            if (manager != null && manager.getActiveShell() == shell) hidePageRestoring();
             requestActivePreview(shell);
             requestChromeRefresh();
         }

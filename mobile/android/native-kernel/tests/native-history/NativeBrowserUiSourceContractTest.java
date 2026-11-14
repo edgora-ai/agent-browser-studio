@@ -60,6 +60,7 @@ public final class NativeBrowserUiSourceContractTest {
         privateLifecycleStages();
         eventDrivenForegroundVisibility();
         realPreviewOwnership();
+        pageRestoreCover();
         popupAndHistorySemantics();
         overlaySafetyAndWarnings();
         frozenProxyOnlyResolverChain();
@@ -625,6 +626,27 @@ public final class NativeBrowserUiSourceContractTest {
                 "setPreferredRefreshRate", "captureContentAsBitmapForTesting", "Bitmap.compress")) {
             lacks(source("NativeBrowserActivity.java"), fake, "no fake score, frame cadence or disk snapshots: " + fake);
         }
+    }
+
+    private static void pageRestoreCover() {
+        String show = method("NativeBrowserActivity", "showPageRestoring");
+        has(show, "restoreSplashShown = true", "reclaimed renderer shows an honest page-area loading state");
+        has(show, "splash.setVisibility(View.VISIBLE)", "restore cover reuses the existing splash");
+        has(show, "isPageReady(shell)", "a ready page is never covered");
+        String hide = method("NativeBrowserActivity", "hidePageRestoring");
+        has(hide, "hideSplash()", "restore cover is removed once the page is ready");
+        has(source("NativeBrowserActivity.java"), "showPageRestoring(shell)",
+                "tab switch covers only non-ready targets");
+        has(method("ShellHistoryObserver", "didFirstVisuallyNonEmptyPaint"), "hidePageRestoring()",
+                "first paint removes the restore cover");
+        has(method("ShellHistoryObserver", "didStopLoading"), "hidePageRestoring()",
+                "load completion removes the restore cover");
+        has(show, "postOnAnimationDelayed", "a bounded fallback never leaves the restore cover stuck");
+        lacks(show, "bringToFront()", "the restore cover stays below the chrome and overlays");
+        has(method("NativeBrowserActivity", "initializeBrowserUi"), "reparentSplashToPageArea()",
+                "the startup splash moves into the page area after startup");
+        has(method("NativeBrowserActivity", "reparentSplashToPageArea"), "pageContainer.addView(splash",
+                "restore cover lives below the chrome");
     }
 
     private static void popupAndHistorySemantics() {
