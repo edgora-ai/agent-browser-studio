@@ -44,7 +44,7 @@ public final class NativeBrowserLifecycleHostTest {
                 "draining", "drainReturned", "drainTimeout", "main", "DRAIN_TIMEOUT_MS", "status"))
                 + methodMembers("NativeBrowserRuntime", List.of("attach", "isCurrent", "detach", "beginDrain", "finishDrain", "requireMain"));
         String activity = fieldMembers("NativeBrowserActivity", List.of("TAG", "application", "runtime", "generation",
-                "closed", "quiescing", "cleanupComplete", "uiBuilt", "manager"))
+                "closed", "quiescing", "cleanupComplete", "uiBuilt", "manager", "pageContainer"))
                 + methodMembers("NativeBrowserActivity", List.of("validateIntent", "current", "startupFailed", "returnToList", "onNewIntent", "onDestroy", "onStatus"));
         String rejected = null;
         for (StatementTree statement : methods.get("NativeBrowserActivity#onCreate").getBody().getStatements()) {
@@ -182,6 +182,19 @@ public final class NativeBrowserLifecycleHostTest {
                         if (synchronous) callback.accept(confirmed);
                     }
                 }
+                static final class FrameLayout {
+                    static final class LayoutParams {
+                        final int width, height;
+                        LayoutParams(int width, int height) { this.width = width; this.height = height; }
+                    }
+                    int attachments;
+                    void addView(ShellManager view, int index, LayoutParams params) {
+                        check(view != null && index == 0 && params.width == -1 && params.height == -1,
+                                "startup attaches shared renderer below overlays at full size");
+                        check(attachments == 0, "startup attaches shared renderer at most once");
+                        attachments++;
+                    }
+                }
                 static final class LaunchSpec {
                     final String sessionId = "session-private-canary";
                     final String nonce = "nonce-private-canary";
@@ -271,7 +284,7 @@ public final class NativeBrowserLifecycleHostTest {
                     final NativeBrowserRuntime runtime = new NativeBrowserRuntime(app);
                     final NativeBrowserActivity activity = new NativeBrowserActivity();
                     final List<String> receipts = new ArrayList<>();
-                    Fixture() { activity.application = app; activity.runtime = runtime; activity.manager = new ShellManager(); activity.generation = runtime.attach(activity); }
+                    Fixture() { activity.application = app; activity.runtime = runtime; activity.manager = new ShellManager(); activity.pageContainer = new FrameLayout(); activity.generation = runtime.attach(activity); }
                     void drain() { runtime.beginDrain(outcome -> { events.add("CALLBACK"); receipts.add(outcome); }); }
                 }
                 static Intent valid(NativeBrowserApplication app) {
@@ -416,7 +429,16 @@ public final class NativeBrowserLifecycleHostTest {
                     catch (IllegalStateException expected) { equal(rejected.finishes, 0, "finish requires successful manager return"); }
                 }
                 static void lateStartupCallbacks() {
+                    reset(); Fixture live = new Fixture();
+                    equal(live.activity.pageContainer.attachments, 0, "renderer stays off-window before startup success");
+                    live.activity.succeedAsyncStartup();
+                    equal(live.activity.pageContainer.attachments, 1, "startup success attaches renderer");
+                    equal(events, List.of("PREPARE_TABS", "REFRESH_CHROME", "PREVIEW_REQUEST"),
+                            "startup success then initializes browser UI");
+                    live.activity.succeedAsyncStartup();
+                    equal(live.activity.pageContainer.attachments, 1, "repeated success cannot attach renderer twice");
                     reset(); Fixture f = new Fixture(); f.activity.failAsyncStartup();
+                    equal(f.activity.pageContainer.attachments, 0, "failed startup leaves renderer off-window");
                     equal(events, List.of("TOAST", "RETURN_MANAGER"), "active async startup failure preserves Activity");
                     equal(f.activity.finishes, 0, "active async failure cannot finish attached runtime");
                     check(logs.contains("LIFECYCLE_ASYNC_STARTUP_FAILURE"), "async failure has fixed phase");
@@ -424,6 +446,7 @@ public final class NativeBrowserLifecycleHostTest {
                     List<String> before = List.copyOf(events); int logCount = logs.size();
                     f.activity.failAsyncStartup(); f.activity.succeedAsyncStartup();
                     equal(events, before, "late success/failure during quiescence has no UI/teardown side effects");
+                    equal(f.activity.pageContainer.attachments, 0, "revoked startup cannot attach renderer");
                     equal(logs.size(), logCount, "late callback is ignored before logging");
                     f.activity.onNewIntent(null);
                     equal(events, before, "quiescing reuse failure cannot navigate or finish early");

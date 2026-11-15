@@ -25,13 +25,10 @@ diff --git a/content/shell/android/java/src/org/chromium/content_shell/ShellMana
  
      // The target for all content rendering.
      private @Nullable ContentViewRenderView mContentViewRenderView;
-@@ -53,6 +56,28 @@
-         mWindow = window;
-         mContentViewRenderView = new ContentViewRenderView(getContext());
-         mContentViewRenderView.onNativeLibraryLoaded(window);
-+    }
-+
-+    /**
+@@ -56,6 +59,28 @@
+     }
+ 
+     /**
 +     * Product-only opt-in, after setWindow() and before creating any Shells. Keep the render
 +     * surface below the active Shell's transparent ContentView instead of reparenting it per tab.
 +     */
@@ -51,9 +48,12 @@ diff --git a/content/shell/android/java/src/org/chromium/content_shell/ShellMana
 +                        ViewGroup.LayoutParams.MATCH_PARENT,
 +                        ViewGroup.LayoutParams.MATCH_PARENT));
 +        mUsePersistentTabContentViewHost = true;
-     }
- 
-     /**
++    }
++
++    /**
+      * @return The window used to generate all shells.
+      */
+     public WindowAndroid getWindow() {
 @@ -91,6 +116,14 @@
          if (mContentViewRenderView == null) {
              mContentViewRenderView = new ContentViewRenderView(getContext());
@@ -69,7 +69,7 @@ diff --git a/content/shell/android/java/src/org/chromium/content_shell/ShellMana
          }
          LayoutInflater inflater =
                  (LayoutInflater) getContext().getSystemService(Context.LAYOUT_INFLATER_SERVICE);
-@@ -106,12 +139,15 @@
+@@ -106,28 +139,32 @@
  
      @RequiresNonNull("mContentViewRenderView")
      private void showShell(Shell shellView) {
@@ -87,7 +87,14 @@ diff --git a/content/shell/android/java/src/org/chromium/content_shell/ShellMana
          mActiveShell = shellView;
          if (!mShells.contains(shellView)) mShells.add(shellView);
          WebContents webContents = mActiveShell.getWebContents();
-@@ -125,9 +161,10 @@
+         if (webContents != null) {
+-            mContentViewRenderView.setCurrentWebContents(webContents);
++            shellView.bindCurrentWebContentsToRenderView();
+             webContents.updateWebContentsVisibility(Visibility.VISIBLE);
+         }
+     }
+ 
+     private void detachShell(Shell shellView) {
          WebContents contents = shellView.getWebContents();
 -        if (contents != null) contents.updateWebContentsVisibility(Visibility.HIDDEN);
 +        if (contents != null && !contents.isDestroyed()) {
@@ -122,7 +129,7 @@ diff --git a/content/shell/android/java/src/org/chromium/content_shell/ShellMana
          if (shellView == mActiveShell) mActiveShell = null;
          if (shellView.getParent() == null) return;
          shellView.setContentViewRenderView(null);
-@@ -186,10 +230,24 @@
+@@ -186,16 +230,32 @@
          if (mActiveShell != null) {
              removeShell(mActiveShell);
          }
@@ -138,16 +145,16 @@ diff --git a/content/shell/android/java/src/org/chromium/content_shell/ShellMana
              mContentViewRenderView.destroy();
              mContentViewRenderView = null;
          }
-+    }
-+
+     }
+ 
 +    /** Async product-only storage attempt; native owns context lookup independently of views. */
 +    public static void flushPersistentStorageForShutdown(Callback<Boolean> callback) {
 +        ThreadUtils.assertOnUiThread();
 +        ShellManagerJni.get().flushPersistentStorageForShutdown(callback);
-     }
- 
++    }
++
      @NativeMethods
-@@ -197,5 +255,7 @@
+     interface Natives {
          void init(Object shellManagerInstance);
  
          void launchShell(String url);
@@ -166,16 +173,17 @@ diff --git a/content/shell/android/java/src/org/chromium/content_shell/Shell.jav
  import android.view.inputmethod.EditorInfo;
  import android.view.inputmethod.InputMethodManager;
  import android.widget.EditText;
-@@ -86,6 +87,8 @@
+@@ -86,6 +87,9 @@
  
      private boolean mLoading;
      private boolean mIsFullscreen;
 +    private boolean mUsePersistentContentViewHost;
 +    private boolean mOverlayMode;
++    private boolean mContentViewRenderViewReady;
  
      private @Nullable Callback<Boolean> mOverlayModeChangedCallbackForTesting;
  
-@@ -94,21 +97,32 @@
+@@ -94,21 +98,52 @@
          super(context, attrs);
      }
  
@@ -191,13 +199,6 @@ diff --git a/content/shell/android/java/src/org/chromium/content_shell/Shell.jav
 -        if (contentViewRenderView == null) {
 -            if (mContentViewRenderView != null) {
 -                contentViewHolder.removeView(mContentViewRenderView);
--            }
--        } else {
--            contentViewHolder.addView(
--                    contentViewRenderView,
--                    new FrameLayout.LayoutParams(
--                            FrameLayout.LayoutParams.MATCH_PARENT,
--                            FrameLayout.LayoutParams.MATCH_PARENT));
 +        if (!mUsePersistentContentViewHost) {
 +            FrameLayout contentViewHolder = (FrameLayout) findViewById(R.id.contentview_holder);
 +            if (contentViewRenderView == null) {
@@ -210,16 +211,50 @@ diff --git a/content/shell/android/java/src/org/chromium/content_shell/Shell.jav
 +                        new FrameLayout.LayoutParams(
 +                                ViewGroup.LayoutParams.MATCH_PARENT,
 +                                ViewGroup.LayoutParams.MATCH_PARENT));
-+            }
+             }
+-        } else {
+-            contentViewHolder.addView(
+-                    contentViewRenderView,
+-                    new FrameLayout.LayoutParams(
+-                            FrameLayout.LayoutParams.MATCH_PARENT,
+-                            FrameLayout.LayoutParams.MATCH_PARENT));
          }
++        mContentViewRenderViewReady = false;
          mContentViewRenderView = contentViewRenderView;
-+        if (mUsePersistentContentViewHost && contentViewRenderView != null) {
-+            contentViewRenderView.setOverlayVideoMode(mOverlayMode);
++    }
++
++    /** Bind content first: native SetCurrentWebContents initializes the compositor. */
++    void bindCurrentWebContentsToRenderView() {
++        ContentViewRenderView renderView = mContentViewRenderView;
++        WebContents webContents = mWebContents;
++        if (!mUsePersistentContentViewHost) {
++            assumeNonNull(renderView).setCurrentWebContents(assumeNonNull(webContents));
++            return;
 +        }
++        mContentViewRenderViewReady = false;
++        if (renderView == null || webContents == null || webContents.isDestroyed() || isDestroyed()) {
++            return;
++        }
++        renderView.setCurrentWebContents(webContents);
++        // Native calls may reenter tab selection or teardown. Never revive a detached binding.
++        if (mContentViewRenderView != renderView || mWebContents != webContents
++                || webContents.isDestroyed() || isDestroyed()) {
++            return;
++        }
++        mContentViewRenderViewReady = true;
++        renderView.setOverlayVideoMode(mOverlayMode);
      }
  
      /**
-@@ -284,7 +298,7 @@
+@@ -134,6 +169,7 @@
+     @SuppressWarnings("NullAway")
+     @CalledByNative
+     private void onNativeDestroyed() {
++        mContentViewRenderViewReady = false;
+         mWindow = null;
+         mNativeShell = 0;
+         mWebContents = null;
+@@ -284,7 +320,7 @@
      private void toggleFullscreenModeForTab(boolean enterFullscreen) {
          mIsFullscreen = enterFullscreen;
          LinearLayout toolBar = (LinearLayout) findViewById(R.id.toolbar);
@@ -228,7 +263,7 @@ diff --git a/content/shell/android/java/src/org/chromium/content_shell/Shell.jav
      }
  
      @CalledByNative
-@@ -333,8 +347,8 @@
+@@ -333,10 +369,10 @@
                  .addView(
                          cv,
                          new FrameLayout.LayoutParams(
@@ -237,17 +272,21 @@ diff --git a/content/shell/android/java/src/org/chromium/content_shell/Shell.jav
 +                                ViewGroup.LayoutParams.MATCH_PARENT,
 +                                ViewGroup.LayoutParams.MATCH_PARENT));
          cv.requestFocus();
-         assumeNonNull(mContentViewRenderView).setCurrentWebContents(mWebContents);
+-        assumeNonNull(mContentViewRenderView).setCurrentWebContents(mWebContents);
++        bindCurrentWebContentsToRenderView();
      }
-@@ -384,7 +398,12 @@
+ 
+     /**
+@@ -384,7 +420,13 @@
  
      @CalledByNative
      public void setOverlayMode(boolean useOverlayMode) {
 -        assumeNonNull(mContentViewRenderView).setOverlayVideoMode(useOverlayMode);
 +        mOverlayMode = useOverlayMode;
-+        // An inactive product tab has no renderer reference. Cache its mode for reactivation,
-+        // without touching the selected tab's surface or throwing on a late native callback.
-+        if (!mUsePersistentContentViewHost || mContentViewRenderView != null) {
++        // Cache until this binding has initialized the compositor via setCurrentWebContents.
++        // Inactive and not-yet-initialized product tabs must not touch the shared renderer.
++        if (!mUsePersistentContentViewHost
++                || (mContentViewRenderView != null && mContentViewRenderViewReady && !isDestroyed())) {
 +            assumeNonNull(mContentViewRenderView).setOverlayVideoMode(useOverlayMode);
 +        }
          if (mOverlayModeChangedCallbackForTesting != null) {
