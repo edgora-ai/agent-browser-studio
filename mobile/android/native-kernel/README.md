@@ -1,16 +1,22 @@
 # Android native Chromium product adapter
 
-## Current checkpoint — 2026-11-15, r13z rev7 candidate
+## Previous device checkpoint — 2026-11-15, r13z rev7 candidate
 
 The current product package is `com.ahoo.abs.browser`, version `1.0.0`, ARM64, non-debuggable and signed with the original release certificate. Rev7 was built and update-installed; follow-up independently reverified the installed APK identity. It retains native Chromium/Shell/WebContents and Java UI, not Android System WebView.
 
 See the [rev7 recovery/source/QA handoff](../../../docs/review/android-r13z-rev7-closure-2026-11-15.md) for exact hashes, fresh host results and remaining work. Known renderer death is now durable owner-bound state even when an old saved frame reports ready. Recovery is explicit, busy-gated and never automatic replay. Controlled device subcases are partial; hidden-tab/Home long-wait recovery, natural OS reclaim, reliable live web previews and final UI/a11y acceptance remain unaccepted. Later [r13q persistence evidence](../../../docs/review/android-r13q-closure-2026-11-14.md) supersedes the historical v5 cookie statement only within its documented scope. Full Chromium/DEPS/build-reproducibility and NOTICE/license closure are still open. This is not a published or fully accepted product release.
 
-## Source follow-up — 2026-11-15, persistent tab compositor (not yet packaged)
+## Latest signed candidate — 2026-11-15, r13z rev8 persistent tab compositor
 
 The product Activity now opts into a fixed `ContentViewRenderView` host before creating its first Shell. The shared renderer stays attached to `ShellManager` while retained Shell/ContentView layers change; selecting a tab must not move the renderer between holders. Product Shells keep the stock Chromium toolbar disabled even after fullscreen exit, while default content-shell embedding retains its toolbar behavior. Inactive tabs cache video-overlay state without touching the active renderer.
 
-This is a source change, **not part of the rev7 APK above**. Host regressions and patch application checks do not establish Android compilation, real Surface/input continuity, device navigation-bar consistency or visual acceptance. Those remain separate checks; no device data or tabs are changed by the host tests.
+Rev8 packages the Java product changes from commit `ea8eda9`. Android incremental compilation and fresh ErrorProne/dependency validation completed for the product and content-shell Java targets. The ARM64, non-debuggable package retains the original release certificate; an independent verification of the resulting APK passed.
+
+- Candidate, relative to the repository root: `.tmp-apk/proxy-fix-work/v13z-rev8/ABS-Browser-v1.0.0-r13z-rev8-arm64-release-candidate.apk` (372327592 bytes).
+- APK SHA-256: `efa101b539b251717847cc3041c5495ad47a5ffa15fcb9be9d74edebefe703f9`.
+- Certificate SHA-256: `0f186dd70f80892e04443b7105842eef2ac9e641e9ecefa15015158317f1402f`.
+
+These changes are **not part of the rev7 APK above**. Rev8 is a **signed candidate, not runtime-accepted**: it has not been installed or run on the phone, and this build made no device or tab changes. Host contracts and successful compilation do not establish physical Surface/input continuity, resolution of the reported tab freeze, navigation/system-bar consistency or visual polish. Cold tab restoration is not implemented; preserve pages before an explicitly authorized update, which can restart the app.
 
 Targeted JDK17 regression, using original Chromium Shell sources before the product patches (only temporary copies are patched):
 
