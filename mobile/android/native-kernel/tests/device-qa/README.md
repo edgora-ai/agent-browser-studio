@@ -35,3 +35,19 @@ will pass this stricter module; there has been no device compatibility run.
   missing-B creation/fault was performed; hidden-tab/Home remain **NOT COMPLETE**.
   This host suite cannot change that status. Device use needs a fresh verifiable
   QA-only handoff and all existing guards; no automatic acquisition is authorized.
+
+## Future runner review gate
+
+Fresh QA-only ownership is necessary, not sufficient to resume the historical
+lifecycle script. The host-only audit also found that early busy samples do not
+distinguish a fresh eight-second budget from remaining/never-expiring budgets;
+Home command return is not pre-dwell pause proof; fixture request counts precede
+delivery; and historical cleanup ERROR can coexist with PASS/exit 0.
+
+A future runner needs independently reviewed timing discriminators, background
+state proof, per-request/document correlation, and final acceptance that includes
+all required cleanup/receipt outcomes. Async readiness/tick evidence needs bounded
+independent observations, not an immediate post-gate or same-click tick assertion.
+Continue attempting independent cleanup when one fails; never overwrite an externally changed reverse mapping. This
+parser does not implement or satisfy those integration requirements. See the
+[canonical audit and evidence limits](../../../../../docs/review/android-r13z-rev7-closure-2026-11-15.md).
