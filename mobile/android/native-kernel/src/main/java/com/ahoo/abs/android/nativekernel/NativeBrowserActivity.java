@@ -194,6 +194,7 @@ public final class NativeBrowserActivity extends Activity {
     private boolean resumed;
     private boolean chromeRefreshPosted;
     private boolean restoreSplashShown;
+    private boolean restoreInterrupted;
     private int restoreEpoch;
     private Shell restoreShell;
     private WebContents restoreContents;
@@ -406,52 +407,101 @@ public final class NativeBrowserActivity extends Activity {
         return view != null && view.isReady();
     }
 
-    /** A reclaimed renderer reload starts from a blank frame. Recovery belongs to one live
-     *  Shell/WebContents/URL; elapsed time alone cannot claim that a page has rendered. */
+    /** A known renderer loss is not ordinary unreadiness: a saved old frame may still be ready.
+     *  The observer owns that interruption even while its tab or Activity is not foreground. */
+    private ShellHistoryObserver pageInterruption(Shell shell) {
+        ShellHistoryObserver observer = historyObservers.get(shell);
+        if (observer == null) return null;
+        // A pending URL or navigation start is not proof that the dead document was replaced.
+        if (!observer.ownsContents()) {
+            observer.clearInterruption();
+        }
+        return observer.interruptedUrl == null ? null : observer;
+    }
+
     private void showPageRestoring(Shell shell) {
+        beginPageRestoring(shell, false);
+    }
+
+    /** Ordinary unready pages get a bounded wait; a dead page waits for an explicit user action. */
+    private void beginPageRestoring(Shell shell, boolean reloading) {
+        ShellHistoryObserver interrupted = pageInterruption(shell);
+        // Rebinding a pending/redirected URL is not foreground reentry: keep its original budget.
+        long priorDeadline = interrupted != null && restoreInterrupted && restoreShell == shell
+                && restoreContents == interrupted.contents ? interrupted.retryDeadline : 0;
         hidePageRestoring();
         if (!uiBuilt || splash == null || !interactive() || !validTab(shell)) return;
         WebContents contents = shell.getWebContents();
-        if (contents == null || isBlankPage(shell, visibleUrl(shell)) || isPageReady(shell)) return;
+        if (contents == null || contents.isDestroyed()
+                || (interrupted == null && isBlankPage(shell, visibleUrl(shell)))
+                || (!reloading && interrupted == null && isPageReady(shell))) return;
+        if (interrupted != null && interrupted.retryBusy && priorDeadline > 0) {
+            interrupted.retryDeadline = priorDeadline;
+        }
         restoreShell = shell;
         restoreContents = contents;
         restoreUrl = visibleUrl(shell);
         restoreGeneration = generation;
         restoreSplashShown = true;
+        restoreInterrupted = interrupted != null;
         splashTitle.setText(tabTitle(shell));
-        splashStatus.setText("正在恢复页面…");
+        splash.setVisibility(View.VISIBLE);
+        long now = android.os.SystemClock.elapsedRealtime();
+        if (interrupted != null && interrupted.retryBusy && interrupted.retryDeadline == 0) {
+            interrupted.retryDeadline = now + 8000;
+        }
+        long remaining = interrupted == null ? 8000 : interrupted.retryDeadline - now;
+        if (interrupted != null && remaining <= 0) {
+            interrupted.retryBusy = false;
+            interrupted.retryDeadline = 0;
+            splashStatus.setText(interrupted.retryRequested
+                    ? "页面恢复时间较长，可重新加载或切换标签页"
+                    : "页面已中断，可重新加载或切换标签页");
+            splashSpinner.setVisibility(View.GONE);
+            restoreRetry.setVisibility(View.VISIBLE);
+            return;
+        }
+        splashStatus.setText(reloading || interrupted != null ? "正在重新加载页面…" : "正在恢复页面…");
         splashSpinner.setVisibility(View.VISIBLE);
         restoreRetry.setVisibility(View.GONE);
-        splash.setVisibility(View.VISIBLE);
         int epoch = ++restoreEpoch;
         restoreTimeout = () -> {
             if (restoreEpoch != epoch || !ownsPageRestoring(shell, contents)) return;
             restoreTimeout = null;
-            if (isPageReady(shell)) {
+            if (pageInterruption(shell) == null && isPageReady(shell)) {
                 hidePageRestoring();
                 return;
+            }
+            ShellHistoryObserver owner = pageInterruption(shell);
+            if (owner != null) {
+                owner.retryBusy = false;
+                owner.retryDeadline = 0;
             }
             splashSpinner.setVisibility(View.GONE);
             splashStatus.setText("页面恢复时间较长，可重新加载或切换标签页");
             restoreRetry.setVisibility(View.VISIBLE);
         };
-        browserFrame.postOnAnimationDelayed(restoreTimeout, 8000);
+        browserFrame.postOnAnimationDelayed(restoreTimeout, remaining);
     }
 
     private boolean ownsPageRestoring(Shell shell, WebContents contents) {
         return restoreSplashShown && interactive() && restoreGeneration == generation
                 && validTab(shell) && manager.getActiveShell() == shell
                 && restoreShell == shell && restoreContents == contents
-                && shell.getWebContents() == contents && restoreUrl.equals(visibleUrl(shell));
+                && shell.getWebContents() == contents && !contents.isDestroyed()
+                && restoreUrl.equals(visibleUrl(shell));
     }
 
     private void hidePageRestoring() {
         if (restoreTimeout != null && browserFrame != null) browserFrame.removeCallbacks(restoreTimeout);
         restoreTimeout = null;
         restoreEpoch++;
+        ShellHistoryObserver interrupted = historyObservers.get(restoreShell);
+        if (restoreInterrupted && interrupted != null) interrupted.retryDeadline = 0;
         restoreShell = null;
         restoreContents = null;
         restoreUrl = null;
+        restoreInterrupted = false;
         if (!restoreSplashShown) return;
         restoreSplashShown = false;
         hideSplash();
@@ -461,26 +511,52 @@ public final class NativeBrowserActivity extends Activity {
         Shell shell = restoreShell;
         WebContents contents = restoreContents;
         if (!ownsPageRestoring(shell, contents) || restoreRetry.getVisibility() != View.VISIBLE) return;
-        // Changing the state before reload also gates repeated taps and reentrant callbacks.
-        showPageRestoring(shell);
-        if (ownsPageRestoring(shell, contents)) contents.getNavigationController().reload(true);
+        reloadPage(shell);
     }
 
-    /** Check every active-owner transition (including close/native window.close/new tab), not
-     *  only card taps. Ordinary refreshes never renew a stalled page's eight-second deadline. */
+    /** Both recovery and menu refresh use this gate; never automatically replay a dead document. */
+    private void reloadPage(Shell shell) {
+        if (!interactive() || !validTab(shell)) return;
+        WebContents contents = shell.getWebContents();
+        if (contents == null || contents.isDestroyed() || contents.getNavigationController() == null) return;
+        ShellHistoryObserver interrupted = pageInterruption(shell);
+        if (interrupted != null) {
+            if (interrupted.retryBusy) return;
+            interrupted.retryBusy = true;
+            interrupted.retryRequested = true;
+            interrupted.retryCommitted = false;
+            interrupted.retryNavigation = null;
+            interrupted.retryDeadline = 0;
+        } else if (ownsPageRestoring(shell, contents) && restoreRetry.getVisibility() != View.VISIBLE) {
+            return;
+        }
+        // Establish busy feedback and its deadline before reload, including ready-old-frame races.
+        beginPageRestoring(shell, true);
+        if (ownsPageRestoring(shell, contents) || (interrupted == null && isBlankPage(shell, visibleUrl(shell)))) {
+            contents.getNavigationController().reload(true);
+        }
+    }
+
+    /** Reconcile loss even without a Shell/WebContents transition. Ordinary refreshes never renew
+     *  a stalled page's deadline. Only actual screen reentry rearms the foreground wait budget. */
     private void reconcilePageRestoring() {
         Shell active = manager == null ? null : manager.getActiveShell();
         WebContents contents = active == null || active.isDestroyed() ? null : active.getWebContents();
         boolean changed = active != chromeShell || contents != chromeContents;
         chromeShell = active;
         chromeContents = contents;
-        boolean stale = restoreSplashShown && !ownsPageRestoring(active, contents);
-        if (stale || (restoreSplashShown && isPageReady(active))) hidePageRestoring();
-        if ((changed || stale) && interactive() && validTab(active)) showPageRestoring(active);
+        boolean interrupted = pageInterruption(active) != null;
+        boolean stale = restoreSplashShown && (!ownsPageRestoring(active, contents)
+                || restoreInterrupted != interrupted);
+        if (restoreSplashShown && !interrupted && isPageReady(active)) hidePageRestoring();
+        if ((changed || stale || (interrupted && !restoreSplashShown))
+                && interactive() && validTab(active)) showPageRestoring(active);
+        else if (stale) hidePageRestoring();
     }
 
     private void completePageRestoring(Shell shell, WebContents contents) {
-        if (ownsPageRestoring(shell, contents) && isPageReady(shell)) hidePageRestoring();
+        if (pageInterruption(shell) == null && ownsPageRestoring(shell, contents)
+                && isPageReady(shell)) hidePageRestoring();
     }
 
     private void applyRestoreActionPalette() {
@@ -763,8 +839,7 @@ public final class NativeBrowserActivity extends Activity {
         } else if ("历史记录".equals(title)) {
             showHistoryPanel();
         } else if ("刷新".equals(title)) {
-            WebContents contents = contents();
-            if (contents != null) contents.getNavigationController().reload(true);
+            reloadPage(manager.getActiveShell());
         } else if ("关闭当前标签页".equals(title)) {
             Shell active = manager.getActiveShell();
             if (active != null) closeTab(active);
@@ -1446,7 +1521,7 @@ public final class NativeBrowserActivity extends Activity {
         while (old.hasNext()) {
             java.util.Map.Entry<Shell, ShellHistoryObserver> entry = old.next();
             if (!shells.contains(entry.getKey()) || entry.getKey().isDestroyed()) {
-                entry.getValue().observe(null);
+                entry.getValue().retire();
                 old.remove();
             }
         }
@@ -1486,12 +1561,18 @@ public final class NativeBrowserActivity extends Activity {
     }
 
     private void observeShell(Shell shell) {
-        if (!current() || historyStore == null || shell.isDestroyed()) return;
-        WebContents contents = shell.getWebContents();
-        if (contents == null) return;
+        if (!current() || historyStore == null) return;
+        WebContents contents = shell.isDestroyed() ? null : shell.getWebContents();
         ShellHistoryObserver prior = historyObservers.get(shell);
-        if (prior == null || prior.getWebContents() != contents) {
-            if (prior != null) prior.observe(null);
+        if (contents == null || contents.isDestroyed()) {
+            if (prior != null) {
+                historyObservers.remove(shell);
+                prior.retire();
+            }
+            return;
+        }
+        if (prior == null || prior.getWebContents() != contents || prior.ownerGeneration != generation) {
+            if (prior != null) prior.retire();
             historyObservers.put(shell, new ShellHistoryObserver(shell, contents));
             requestChromeRefresh();
             requestActivePreview(shell);
@@ -1501,8 +1582,17 @@ public final class NativeBrowserActivity extends Activity {
     private final class ShellHistoryObserver extends WebContentsObserver {
         private final Shell shell;
         private final WebContents contents;
+        private final long ownerGeneration = generation;
         private String committedUrl;
         private boolean awaitingPaint;
+        private long navigationSerial;
+        private String interruptedUrl;
+        private long interruptedNavigation;
+        private long retryDeadline;
+        private boolean retryRequested;
+        private boolean retryBusy;
+        private boolean retryCommitted;
+        private NavigationHandle retryNavigation;
 
         ShellHistoryObserver(Shell shell, WebContents contents) {
             super(contents);
@@ -1510,8 +1600,65 @@ public final class NativeBrowserActivity extends Activity {
             this.contents = contents;
         }
 
+        private boolean ownsContents() {
+            return current() && ownerGeneration == generation && validTab(shell)
+                    && historyObservers.get(shell) == this && getWebContents() == contents
+                    && shell.getWebContents() == contents && !contents.isDestroyed();
+        }
+
+        private void clearInterruption() {
+            interruptedUrl = null;
+            retryNavigation = null;
+            retryRequested = false;
+            retryBusy = false;
+            retryCommitted = false;
+            retryDeadline = 0;
+        }
+
+        private void retire() {
+            clearInterruption();
+            observe(null);
+        }
+
+        @Override public void primaryMainFrameRenderProcessGone(int terminationStatus) {
+            if (!ownsContents()) return;
+            String deadDocumentUrl = contents.getLastCommittedUrl().getSpec();
+            clearInterruption();
+            if (visibleUrl(shell).equals(newTabUrls.get(shell))
+                    && deadDocumentUrl.equals(newTabUrls.get(shell))) {
+                // A pending back-to-NTP URL cannot exempt a still-committed dead web document.
+                // Only the actually committed owned native NTP is renderer-independent.
+                requestChromeRefresh();
+                return;
+            }
+            interruptedUrl = deadDocumentUrl.isEmpty() ? visibleUrl(shell) : deadDocumentUrl;
+            interruptedNavigation = ++navigationSerial;
+            awaitingPaint = true;
+            tabPreviews.remove(shell);
+            previewUrls.remove(shell);
+            if (loadingShell == shell) loadingShell = null;
+            if (manager.getActiveShell() == shell) {
+                previewEpoch++;
+                previewRequested = false;
+                browserFrame.removeCallbacks(previewCapture);
+                // No automatic reload/POST replay, and no same-Shell identity-change dependency.
+                showPageRestoring(shell);
+            }
+            requestChromeRefresh();
+        }
+
         @Override public void didStartNavigationInPrimaryMainFrame(NavigationHandle navigation) {
-            if (!current() || !navigation.isInPrimaryMainFrame()) return;
+            if (!ownsContents() || !navigation.isInPrimaryMainFrame()) return;
+            if (!navigation.isSameDocument()) {
+                navigationSerial++;
+                if (interruptedUrl != null) {
+                    // Address/history navigation can replace the dead document too, but a start,
+                    // pending URL, abort, error page, or same-document change cannot prove it did.
+                    retryCommitted = false;
+                    retryNavigation = navigation;
+                    interruptedNavigation = navigationSerial;
+                }
+            }
             tabPreviews.remove(shell);
             previewUrls.remove(shell);
             if (!navigation.isSameDocument()) awaitingPaint = true;
@@ -1524,8 +1671,19 @@ public final class NativeBrowserActivity extends Activity {
             requestChromeRefresh();
         }
 
+        /** isReady may describe a saved dead frame. Only a fresh, committed replacement navigation
+         *  followed by its URL-correct paint/valid load-stop can retire a known interruption. */
+        private boolean finishInterruptedPage(String url) {
+            if (interruptedUrl == null) return true;
+            if (!retryCommitted || interruptedNavigation != navigationSerial
+                    || !interruptedUrl.equals(url) || !url.equals(visibleUrl(shell))
+                    || !isPageReady(shell)) return false;
+            clearInterruption();
+            return true;
+        }
+
         @Override public void didFirstVisuallyNonEmptyPaint() {
-            if (!current()) return;
+            if (!ownsContents() || !finishInterruptedPage(visibleUrl(shell))) return;
             awaitingPaint = false;
             if (loadingShell == shell) loadingShell = null;
             completePageRestoring(shell, contents);
@@ -1534,7 +1692,8 @@ public final class NativeBrowserActivity extends Activity {
         }
 
         @Override public void didStopLoading(GURL url, boolean isKnownValid) {
-            if (!current()) return;
+            if (!ownsContents() || (interruptedUrl != null
+                    && (!isKnownValid || !finishInterruptedPage(url.getSpec())))) return;
             awaitingPaint = false;
             if (loadingShell == shell) loadingShell = null;
             completePageRestoring(shell, contents);
@@ -1542,18 +1701,46 @@ public final class NativeBrowserActivity extends Activity {
             requestChromeRefresh();
         }
 
-        @Override public void navigationEntriesChanged() { requestChromeRefresh(); }
-        @Override public void onVisibilityChanged(int visibility) { requestChromeRefresh(); }
+        @Override public void navigationEntriesChanged() {
+            if (ownsContents()) requestChromeRefresh();
+        }
+        @Override public void onVisibilityChanged(int visibility) {
+            if (ownsContents()) requestChromeRefresh();
+        }
         @Override public void webContentsDestroyed() {
+            retire();
+            if (historyObservers.get(shell) != this) return;
+            historyObservers.remove(shell);
+            if (restoreShell == shell && restoreContents == contents) hidePageRestoring();
             if (loadingShell == shell) loadingShell = null;
             requestChromeRefresh();
         }
 
         @Override public void didFinishNavigationInPrimaryMainFrame(NavigationHandle navigation) {
-            if (!current() || !navigation.isInPrimaryMainFrame() || !navigation.hasCommitted()) return;
+            if (!ownsContents() || !navigation.isInPrimaryMainFrame()) return;
+            if (retryNavigation == navigation) {
+                retryNavigation = null; // Chromium requires releasing the handle at finish.
+                retryCommitted = navigation.hasCommitted() && !navigation.isSameDocument()
+                        && !navigation.isErrorPage() && interruptedNavigation == navigationSerial;
+                if (retryCommitted) interruptedUrl = navigation.getUrl().getSpec();
+                else {
+                    retryBusy = false;
+                    retryDeadline = 0;
+                    if (manager.getActiveShell() == shell) showPageRestoring(shell);
+                }
+                requestChromeRefresh();
+            }
+            if (!navigation.hasCommitted()) return;
             requestChromeRefresh();
             if (navigation.isSameDocument()) requestActivePreview(shell);
             String url = navigation.getUrl().getSpec();
+            if (navigation.isSameDocument() && interruptedUrl != null && retryCommitted
+                    && interruptedNavigation == navigationSerial && !navigation.isErrorPage()
+                    && url.equals(visibleUrl(shell))) {
+                // A router may change a fresh replacement's URL before its first paint/stop.
+                // Same-document navigation follows existing proof; it can never create it.
+                interruptedUrl = url;
+            }
             if (navigation.isErrorPage() || !BrowserHistory.isTrackable(url)) {
                 committedUrl = null;
                 return;
@@ -1565,7 +1752,8 @@ public final class NativeBrowserActivity extends Activity {
         }
 
         @Override public void titleWasSet(String title) {
-            if (current() && committedUrl != null) {
+            if (!ownsContents()) return;
+            if (committedUrl != null) {
                 historyStore.updateTitle(committedUrl, title);
                 ntpRenderDirty = true;
             }
@@ -1633,6 +1821,10 @@ public final class NativeBrowserActivity extends Activity {
         chromeRefreshPosted = false;
         previewRequested = false;
         hidePageRestoring();
+        // Pause only retires visible work. A runtime/Activity exit also retires durable loss state.
+        if (!current()) {
+            for (ShellHistoryObserver observer : historyObservers.values()) observer.clearInterruption();
+        }
         chromeShell = null;
         chromeContents = null;
         hideUrlSuggestions();
@@ -1698,7 +1890,7 @@ public final class NativeBrowserActivity extends Activity {
         if (historyStore != null) {
             try { historyStore.flush(); } catch (RuntimeException ignored) { }
         }
-        for (ShellHistoryObserver observer : historyObservers.values()) observer.observe(null);
+        for (ShellHistoryObserver observer : historyObservers.values()) observer.retire();
         historyObservers.clear();
         newTabUrls.clear();
         tabPreviews.clear();

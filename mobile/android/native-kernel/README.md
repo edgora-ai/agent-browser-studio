@@ -1,6 +1,12 @@
-# Android native product adapter — installed development APK
+# Android native Chromium product adapter
 
-## Current checkpoint — 2026-11-05, v5 browser UX and tab overview
+## Current checkpoint — 2026-11-15, r13z rev7 candidate
+
+The current product package is `com.ahoo.abs.browser`, version `1.0.0`, ARM64, non-debuggable and signed with the original release certificate. Rev7 was built and update-installed; follow-up independently reverified the installed APK identity. It retains native Chromium/Shell/WebContents and Java UI, not Android System WebView.
+
+See the [rev7 recovery/source/QA handoff](../../../docs/review/android-r13z-rev7-closure-2026-11-15.md) for exact hashes, fresh host results and remaining work. Known renderer death is now durable owner-bound state even when an old saved frame reports ready. Recovery is explicit, busy-gated and never automatic replay. Controlled device subcases are partial; hidden-tab/Home long-wait recovery, natural OS reclaim, reliable live web previews and final UI/a11y acceptance remain unaccepted. Later [r13q persistence evidence](../../../docs/review/android-r13q-closure-2026-11-14.md) supersedes the historical v5 cookie statement only within its documented scope. Full Chromium/DEPS/build-reproducibility and NOTICE/license closure are still open. This is not a published or fully accepted product release.
+
+## Historical checkpoint — 2026-11-05, v5 browser UX and tab overview
 
 V5 adds separate profile/proxy management, grouped profile editing, isolated persistent history tiles, and a Chrome-inspired vertically scrolling two-column tab overview. The toolbar count opens the overview; cards select retained pages, × closes a page, and the header creates one. One profile is active at a time; manual creation is capped at 10 retained Shell/WebContents tabs. Cold tab restoration is not implemented.
 

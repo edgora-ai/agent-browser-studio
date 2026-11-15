@@ -292,6 +292,9 @@ public final class NativeBrowserFocusHostTest {
                     final TabSwitcher tabSwitcher = new TabSwitcher();
                     final HistoryStore historyStore = new HistoryStore();
                     final Runtime runtime = new Runtime();
+                    // Recovery ownership is covered by its real-observer extraction host, not this focus-only host.
+                    static final class ShellHistoryObserver { void clearInterruption() { } }
+                    final Map<Shell, ShellHistoryObserver> historyObservers = new HashMap<>();
                     final Map<Shell, Object> tabPreviews = new HashMap<>();
                     final Map<Shell, String> previewUrls = new HashMap<>(), newTabUrls = new HashMap<>();
                     final Runnable previewCapture = () -> { };

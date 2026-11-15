@@ -25,17 +25,19 @@ import javax.tools.ToolProvider;
  */
 public final class NativeBrowserRecoveryHostTest {
     private static final List<String> FIELD_NAMES = List.of(
-            "MAX_PREVIEW_RETRIES", "restoreSplashShown", "restoreEpoch", "restoreShell",
+            "MAX_PREVIEW_RETRIES", "restoreSplashShown", "restoreInterrupted", "restoreEpoch", "restoreShell",
             "restoreContents", "restoreUrl", "restoreGeneration", "restoreTimeout", "chromeShell",
             "chromeContents", "previewInFlight", "previewRequested", "previewRetries", "previewEpoch",
-            "previewCapture", "tabPreviews", "previewUrls", "newTabUrls", "historyObservers");
+            "previewCapture", "tabPreviews", "previewUrls", "newTabUrls", "historyObservers", "lastBackExitHint");
     private static final List<String> METHOD_NAMES = List.of(
-            "showPageRestoring", "ownsPageRestoring", "hidePageRestoring", "retryPageRestoring",
+            "showPageRestoring", "beginPageRestoring", "pageInterruption", "reloadPage",
+            "ownsPageRestoring", "hidePageRestoring", "retryPageRestoring",
             "reconcilePageRestoring", "completePageRestoring", "requestActivePreview",
             "schedulePreviewCapture", "captureActivePreview", "current", "interactive", "validTab",
             "visibleUrl", "isBlankPage", "tabTitle", "isPageReady", "hideSplash", "cancelUiWork",
-            "onPause", "onStop", "syncWebContentsVisibility", "installShellObserverHooks",
-            "installPreviewSurfaceHooks");
+            "onPause", "onStop", "onResume", "syncWebContentsVisibility", "installShellObserverHooks",
+            "installPreviewSurfaceHooks", "observeShell", "trackHistory", "contents",
+            "performMenuAction", "ShellHistoryObserver");
 
     private NativeBrowserRecoveryHostTest() { }
 
@@ -62,6 +64,9 @@ public final class NativeBrowserRecoveryHostTest {
                             }
                         }
                         if (member instanceof VariableTree field) fields.put(field.getName().toString(), field + ";\n");
+                        if (member instanceof ClassTree nested && nested.getSimpleName().contentEquals("ShellHistoryObserver")) {
+                            methods.put("ShellHistoryObserver", nested.toString());
+                        }
                     }
                 }
             }
@@ -74,9 +79,28 @@ public final class NativeBrowserRecoveryHostTest {
         rejected += rejects(compiler, output, fields, methods, "missing-restore-shell-identity",
                 "ownsPageRestoring", "restoreShell == shell &&", "", "restore Shell identity rejects aliased contents");
         rejected += rejects(compiler, output, fields, methods, "missing-timeout-epoch",
-                "showPageRestoring", "restoreEpoch != epoch ||", "", "old deadline cannot expire renewed retry");
+                "beginPageRestoring", "restoreEpoch != epoch ||", "", "old deadline cannot expire renewed retry");
         rejected += rejects(compiler, output, fields, methods, "missing-preview-reschedule",
                 "captureActivePreview", "schedulePreviewCapture();", "", "NO_DATA schedules next frame without a native event");
+        rejected += rejects(compiler, output, fields, methods, "saved-ready-suppresses-death",
+                "beginPageRestoring", "!reloading && interrupted == null && isPageReady(shell)",
+                "!reloading && isPageReady(shell)",
+                "real renderer loss immediately covers same ready Shell and WebContents");
+        rejected += rejects(compiler, output, fields, methods, "missing-renderer-interruption",
+                "ShellHistoryObserver", "interruptedUrl = deadDocumentUrl.isEmpty() ? visibleUrl(shell) : deadDocumentUrl;", "interruptedUrl = null;",
+                "real renderer loss immediately covers same ready Shell and WebContents");
+        rejected += rejects(compiler, output, fields, methods, "missing-fresh-retry-commit",
+                "ShellHistoryObserver", "!retryCommitted ||", "",
+                "old paint/load-stop and saved-ready frame cannot retire interruption");
+        rejected += rejects(compiler, output, fields, methods, "missing-renderer-generation",
+                "ShellHistoryObserver", "ownerGeneration == generation &&", "",
+                "generation mismatch prunes marker before replacing observer");
+        rejected += rejects(compiler, output, fields, methods, "pending-native-url-exempts-dead-web-document",
+                "ShellHistoryObserver", "deadDocumentUrl.equals(newTabUrls.get(shell))", "true",
+                "actual loss during pending owned-native URL retains committed web interruption");
+        rejected += rejects(compiler, output, fields, methods, "fresh-router-url-not-followed",
+                "ShellHistoryObserver", "interruptedUrl = url;", "interruptedUrl = \"https://mutation.invalid/stale-router\";",
+                "fresh committed replacement proof follows its successful same-document router URL");
         System.out.println(checks + " source-extracted recovery/preview fake-host checks, "
                 + rejected + " behavioral mutation controls rejected, 0 failures");
         System.out.println("Host-only evidence: no Android build, device, real pixels, timing, or visual acceptance asserted.");
@@ -138,7 +162,7 @@ public final class NativeBrowserRecoveryHostTest {
         }
     }
 
-    private static final String HOST = """
+    private static final String HOST = String.join("", """
             import java.util.*;
             public final class RecoveryHost {
                 static int checks;
@@ -197,6 +221,7 @@ public final class NativeBrowserRecoveryHostTest {
                     boolean has(Runnable task) { return deadline(task) >= 0; }
                     void advance(long millis) {
                         now += millis;
+                        android.os.SystemClock.now = now;
                         List<Task> due = new ArrayList<>();
                         for (Task item : tasks) if (item.due <= now) due.add(item);
                         tasks.removeAll(due);
@@ -212,7 +237,58 @@ public final class NativeBrowserRecoveryHostTest {
                 static final class HistoryPanel extends View { void dismiss() { visibility = GONE; } }
                 static final class TabSwitcher { boolean showing; }
                 static final class Popup { int dismisses; void dismiss() { dismisses++; } }
-                static final class Store { int flushes; void flush() { flushes++; } }
+                static final class Store {
+                    int flushes, visits, titles;
+                    void flush() { flushes++; }
+                    void recordVisit(String url, String title) { visits++; }
+                    void updateTitle(String url, String title) { titles++; }
+                }
+                static final class BrowserHistory {
+                    static boolean isTrackable(String url) { return url.startsWith("https://") || url.startsWith("http://"); }
+                }
+                // Monotonic Android clock and Chromium are host API fakes; the observer below is extracted.
+                static final class android {
+                    static final class os {
+                        static final class SystemClock {
+                            static long now;
+                            static long elapsedRealtime() { return now; }
+                        }
+                    }
+                }
+                static final class NavigationHandle {
+                    String url;
+                    boolean primary = true, sameDocument, committed = true, error;
+                    NavigationHandle(String url) { this.url = url; }
+                    boolean isInPrimaryMainFrame() { return primary; }
+                    boolean isSameDocument() { return sameDocument; }
+                    boolean hasCommitted() { return committed; }
+                    boolean isErrorPage() { return error; }
+                    GURL getUrl() { return new GURL(url); }
+                }
+                static class WebContentsObserver {
+                    private WebContents observing;
+                    WebContentsObserver(WebContents contents) { observe(contents); }
+                    final WebContents getWebContents() { return observing; }
+                    final void observe(WebContents contents) {
+                        if (observing != null) observing.observers.remove(this);
+                        observing = contents;
+                        if (contents != null) contents.observers.add(this);
+                    }
+                    public void primaryMainFrameRenderProcessGone(int status) { }
+                    public void didStartNavigationInPrimaryMainFrame(NavigationHandle navigation) { }
+                    public void didFinishNavigationInPrimaryMainFrame(NavigationHandle navigation) { }
+                    public void didFirstVisuallyNonEmptyPaint() { }
+                    public void didStopLoading(GURL url, boolean valid) { }
+                    public void navigationEntriesChanged() { }
+                    public void onVisibilityChanged(int visibility) { }
+                    public void webContentsDestroyed() { }
+                    public void titleWasSet(String title) { }
+                }
+                static final class Toast {
+                    static final int LENGTH_SHORT = 0;
+                    static Toast makeText(Object context, String text, int length) { return new Toast(); }
+                    void show() { }
+                }
                 static final class GURL {
                     final String value;
                     GURL(String value) { this.value = value; }
@@ -221,6 +297,8 @@ public final class NativeBrowserRecoveryHostTest {
                 static final class NavigationController {
                     int reloads;
                     boolean lastCheckForRepost;
+                    boolean canGoForward() { return false; }
+                    void goForward() { }
                     Runnable onReload;
                     void reload(boolean checkForRepost) {
                         reloads++; lastCheckForRepost = checkForRepost;
@@ -233,13 +311,18 @@ public final class NativeBrowserRecoveryHostTest {
                 }
                 static final class Visibility { static final int VISIBLE = 0, HIDDEN = 1; }
                 static final class WebContents {
-                    String url, title;
+                    String url, lastCommittedUrl, title;
                     boolean destroyed;
                     int visibility = Visibility.VISIBLE;
                     final NavigationController navigation = new NavigationController();
+                    final List<WebContentsObserver> observers = new ArrayList<>();
+                    boolean isDestroyed() { return destroyed; }
                     RenderWidgetHostView renderer = new RenderWidgetHostView();
-                    WebContents(String url, boolean ready) { this.url = url; title = url; renderer.ready = ready; }
+                    WebContents(String url, boolean ready) {
+                        this.url = url; lastCommittedUrl = url; title = url; renderer.ready = ready;
+                    }
                     GURL getVisibleUrl() { return new GURL(url); }
+                    GURL getLastCommittedUrl() { return new GURL(lastCommittedUrl); }
                     String getTitle() { return title; }
                     RenderWidgetHostView getRenderWidgetHostView() { return renderer; }
                     NavigationController getNavigationController() { return navigation; }
@@ -363,7 +446,8 @@ public final class NativeBrowserRecoveryHostTest {
                     static void d(String tag, String text) { }
                     static void w(String tag, String text) { }
                 }
-                static final class ShellHistoryObserver { boolean awaitingPaint; }
+                // Runtime permission routing is outside this recovery host's scope.
+                static final class MediaPermissionBridge { static void setHost(Object host) { } }
                 static class BaseActivity {
                     boolean finishing, destroyed;
                     int pauses, stops;
@@ -371,9 +455,11 @@ public final class NativeBrowserRecoveryHostTest {
                     boolean isDestroyed() { return destroyed; }
                     protected void onPause() { pauses++; }
                     protected void onStop() { stops++; }
+                    protected void onResume() { }
                 }
                 static final class Activity extends BaseActivity {
                     static final String TAG = "Host";
+                    static final int MAX_TABS = 10;
                     final Handler main = new Handler(), previewResults = new Handler();
                     final Frame browserFrame = new Frame();
                     final View splash = new View(), splashSpinner = new View(), progressBar = new View();
@@ -385,17 +471,23 @@ public final class NativeBrowserRecoveryHostTest {
                     final Runtime runtime = new Runtime();
                     final ContentViewRenderView renderView = new ContentViewRenderView();
                     SurfaceHolder.Callback previewSurfaceObserver;
-                    final Runnable chromeRefresh = () -> { chromeRefreshPosted = false; reconcilePageRestoring(); };
+                    final Runnable chromeRefresh = () -> { chromeRefreshPosted = false; refreshChrome(); };
                     ShellManager manager = new ShellManager();
                     Popup overflowMenu;
                     long generation = 7;
-                    boolean resumed = true, uiBuilt = true, closed, quiescing, chromeRefreshPosted;
+                    boolean resumed = true, uiBuilt = true, closed, quiescing, chromeRefreshPosted, ntpRenderDirty;
+                    Shell loadingShell;
                     int switcherRefreshes, focusCancellations;
                     Activity(boolean ready) {
+                        android.os.SystemClock.now = 0;
                         splash.visibility = View.GONE; restoreRetry.visibility = View.GONE;
                         newTab.visibility = View.GONE; historyPanel.visibility = View.GONE;
                         manager.retain("https://a.invalid/page", ready);
                         installShellObserverHooks(); installPreviewSurfaceHooks();
+                        observeShell(manager.active);
+                        // Start from settled bootstrap, with the real production observer installed.
+                        previewRequested = false; browserFrame.removeCallbacks(previewCapture);
+                        main.queue.clear(); chromeRefreshPosted = false;
                     }
                     void cancelNavigationFocus() { focusCancellations++; }
                     void hideUrlSuggestions() { }
@@ -404,9 +496,14 @@ public final class NativeBrowserRecoveryHostTest {
                     void requestChromeRefresh() {
                         if (!chromeRefreshPosted) { chromeRefreshPosted = true; main.post(chromeRefresh); }
                     }
-                    // Observer installation needs Chromium; completion is delivered directly to the
-                    // extracted completePageRestoring method, without faking that method itself.
-                    void observeShell(Shell shell) { requestChromeRefresh(); }
+                    // These non-recovery destinations have dedicated suites; only their menu seams are fake.
+                    void createBlankTab() { manager.retain("about:blank", true); }
+                    void showTabSwitcher() { tabSwitcher.showing = true; }
+                    void showHistoryPanel() { historyPanel.visibility = View.VISIBLE; }
+                    void closeTab(Shell shell) { manager.closeShell(shell); }
+                    void returnToList() { }
+                    void requestEnvironmentExit() { quiescing = true; cancelUiWork(); }
+                    void refreshChrome() { trackHistory(); reconcilePageRestoring(); }
                     Window getWindow() { return new Window(); }
                     @ACTUAL@
                 }
@@ -584,6 +681,16 @@ public final class NativeBrowserRecoveryHostTest {
                     check(!a.browserFrame.has(renewed), "hide removes pending deadline from frame scheduler");
                     renewed.run();
                     uncovered(a, "hidden owner's manually fired deadline is inert");
+
+                    Activity readyRace = new Activity(false);
+                    readyRace.reconcilePageRestoring(); readyRace.browserFrame.advance(8000);
+                    readyRace.manager.active.contents.renderer.ready = true;
+                    readyRace.manager.active.contents.navigation.onReload = () -> check(
+                            readyRace.restoreSplashShown && readyRace.restoreRetry.visibility == View.GONE,
+                            "ordinary retry ready-before-click race still enters busy before reload");
+                    readyRace.retryPageRestoring();
+                    check(readyRace.manager.active.contents.navigation.reloads == 1,
+                            "ordinary explicit retry is not silently skipped when readiness races the tap");
 
                     Activity busy = new Activity(false);
                     busy.reconcilePageRestoring(); busy.retryPageRestoring();
@@ -775,8 +882,8 @@ public final class NativeBrowserRecoveryHostTest {
                             (a, s) -> a.renderView.surface.shown = false,
                             (a, s) -> a.renderView.surface.width = 0,
                             (a, s) -> {
-                                ShellHistoryObserver observer = new ShellHistoryObserver(); observer.awaitingPaint = true;
-                                a.historyObservers.put(s, observer);
+                                Activity.ShellHistoryObserver observer = a.historyObservers.get(s);
+                                observer.awaitingPaint = true;
                             });
                     for (int i = 0; i < unavailable.size(); i++) {
                         PixelCopy.reset();
@@ -787,16 +894,538 @@ public final class NativeBrowserRecoveryHostTest {
                                 "unready/unavailable/awaiting-paint source cannot submit or publish " + i);
                     }
                 }
+            """, """
+                static Activity.ShellHistoryObserver lose(Activity a, Shell shell) {
+                    a.observeShell(shell);
+                    Activity.ShellHistoryObserver observer = a.historyObservers.get(shell);
+                    check(observer != null && observer.getWebContents() == shell.contents,
+                            "real extracted observer is installed on exact contents");
+                    observer.primaryMainFrameRenderProcessGone(1);
+                    return observer;
+                }
+                static void rendererLossIsImmediate() {
+                    Activity a = new Activity(true);
+                    Shell shell = a.manager.active;
+                    WebContents original = shell.contents;
+                    a.reconcilePageRestoring();
+                    uncovered(a, "ordinary ready page remains uncovered before renderer loss");
+                    a.tabPreviews.put(shell, new Bitmap(10, 10)); a.previewUrls.put(shell, original.url);
+                    Activity.ShellHistoryObserver observer = lose(a, shell);
+                    covered(a, shell, "real renderer loss immediately covers same ready Shell and WebContents");
+                    check(shell.contents == original && original.renderer.ready && a.pageInterruption(shell) == observer,
+                            "saved-frame readiness does not suppress exact-owner interruption");
+                    check(a.splashStatus.text.equals("页面已中断，可重新加载或切换标签页")
+                            && a.splashSpinner.visibility == View.GONE && a.restoreRetry.visibility == View.VISIBLE
+                            && a.restoreTimeout == null, "known loss is an honest interruption with one immediate reload action");
+                    check(original.navigation.reloads == 0 && !a.tabPreviews.containsKey(shell)
+                            && !a.previewUrls.containsKey(shell) && observer.awaitingPaint,
+                            "death never replays requests or preserves a dead preview");
+                    for (int i = 0; i < 5; i++) a.reconcilePageRestoring();
+                    observer.didFirstVisuallyNonEmptyPaint();
+                    observer.didStopLoading(new GURL(original.url), true);
+                    a.completePageRestoring(shell, original);
+                    covered(a, shell, "old paint/load-stop and saved-ready frame cannot retire interruption");
+                    check(observer.awaitingPaint && original.navigation.reloads == 0,
+                            "stale renderer events cannot unlock dead preview or replay a POST");
+                    a.browserFrame.advance(12000);
+                    covered(a, shell, "known-dead page does not fake automatic recovery after eight seconds");
+                    check(a.restoreTimeout == null && original.navigation.reloads == 0,
+                            "known-dead idle interruption has no recovery timer or automatic reload");
+                }
+                static void rendererLossRetainedOffscreen() {
+                    Activity a = new Activity(true);
+                    Shell first = a.manager.active;
+                    Shell second = a.manager.retain("https://b.invalid/live", true);
+                    a.manager.selectShell(second); a.main.all();
+                    Activity.ShellHistoryObserver firstObserver = lose(a, first);
+                    uncovered(a, "inactive A renderer loss does not cover active ready B");
+                    check(a.pageInterruption(first) == firstObserver && second.contents.navigation.reloads == 0,
+                            "inactive death retains only A interruption and never reloads B");
+                    a.manager.selectShell(first); a.main.all();
+                    covered(a, first, "selecting previously dead A exposes immediate interruption despite ready frame");
+                    a.manager.selectShell(second); a.main.all();
+                    uncovered(a, "switching back to B preserves usable page area");
+                    Activity.ShellHistoryObserver secondObserver = lose(a, second);
+                    covered(a, second, "B has its own independent interruption");
+                    firstObserver.didFirstVisuallyNonEmptyPaint();
+                    firstObserver.didStopLoading(new GURL(first.contents.url), true);
+                    covered(a, second, "A stale callbacks cannot clear B interruption");
+                    check(a.pageInterruption(first) == firstObserver && a.pageInterruption(second) == secondObserver,
+                            "two tabs retain separate exact-owner interruption markers");
+                    a.onPause();
+                    uncovered(a, "background hides only visible recovery work");
+                    a.browserFrame.advance(20000);
+                    a.onResume(); a.main.all();
+                    covered(a, second, "background/foreground retains dead B instead of trusting saved readiness");
+                    check(second.contents.navigation.reloads == 0 && first.contents.navigation.reloads == 0,
+                            "foregrounding never reloads either interrupted tab");
+
+                    Activity background = new Activity(true);
+                    Shell owner = background.manager.active;
+                    background.onPause();
+                    Activity.ShellHistoryObserver observer = lose(background, owner);
+                    uncovered(background, "renderer death delivered while paused does not show foreground UI");
+                    check(background.pageInterruption(owner) == observer, "paused death retains durable marker");
+                    background.onResume(); background.main.all();
+                    covered(background, owner, "loss first delivered in background is visible on resume");
+                }
+                static void rendererRetryAndFreshCompletion() {
+                    Activity a = new Activity(true);
+                    Shell shell = a.manager.active;
+                    Activity.ShellHistoryObserver observer = lose(a, shell);
+                    shell.contents.navigation.onReload = () -> {
+                        check(a.splashSpinner.visibility == View.VISIBLE && a.restoreRetry.visibility == View.GONE
+                                && a.restoreTimeout != null && observer.retryBusy,
+                                "known-dead retry establishes busy state and timer before reload");
+                        a.retryPageRestoring(); a.performMenuAction("刷新");
+                    };
+                    a.retryPageRestoring();
+                    check(shell.contents.navigation.reloads == 1 && shell.contents.navigation.lastCheckForRepost,
+                            "dead-page button and reentrant menu share one repost-checking reload gate");
+                    a.performMenuAction("刷新"); a.retryPageRestoring(); a.reconcilePageRestoring();
+                    covered(a, shell, "saved-ready frame does not prematurely finish explicit retry");
+                    check(shell.contents.navigation.reloads == 1, "button/menu repeated taps cannot replay a busy retry");
+                    observer.didFirstVisuallyNonEmptyPaint();
+                    observer.didStopLoading(new GURL(shell.contents.url), true);
+                    covered(a, shell, "pre-navigation callbacks cannot complete retry");
+                    NavigationHandle navigation = new NavigationHandle(shell.contents.url);
+                    observer.didStartNavigationInPrimaryMainFrame(navigation);
+                    observer.didStopLoading(new GURL(shell.contents.url), true);
+                    covered(a, shell, "pre-commit load-stop cannot complete retry");
+                    observer.didFinishNavigationInPrimaryMainFrame(navigation);
+                    a.reconcilePageRestoring();
+                    covered(a, shell, "committed navigation plus old isReady alone is not completion");
+                    check(observer.retryNavigation == null && observer.retryCommitted,
+                            "finished retry releases native handle but retains fresh commit proof");
+                    observer.didStopLoading(new GURL("https://stale.invalid/old"), true);
+                    observer.didStopLoading(new GURL(shell.contents.url), false);
+                    covered(a, shell, "wrong-URL or unknown-validity load-stop cannot complete interrupted owner");
+                    observer.didStopLoading(new GURL(shell.contents.url), true);
+                    uncovered(a, "fresh committed URL-correct known-valid stop completes exact owner");
+                    check(a.pageInterruption(shell) == null && !observer.awaitingPaint,
+                            "genuine recovery retires interruption and permits fresh previews");
+
+                    // Ordinary menu refresh on a known-dead saved-ready page must use the same busy path.
+                    Activity menu = new Activity(true);
+                    Shell target = menu.manager.active;
+                    Activity.ShellHistoryObserver menuObserver = lose(menu, target);
+                    menu.performMenuAction("刷新");
+                    check(target.contents.navigation.reloads == 1 && menuObserver.retryBusy
+                            && menu.restoreTimeout != null && menu.restoreRetry.visibility == View.GONE,
+                            "actual menu refresh of known-dead page establishes bounded busy recovery");
+                    NavigationHandle redirected = new NavigationHandle(target.contents.url);
+                    menuObserver.didStartNavigationInPrimaryMainFrame(redirected);
+                    redirected.url = "https://redirect.invalid/fresh"; target.contents.url = redirected.url;
+                    menu.reconcilePageRestoring();
+                    covered(menu, target, "expected retry redirect preserves exact navigation ownership");
+                    menuObserver.didFinishNavigationInPrimaryMainFrame(redirected);
+                    target.contents.renderer.ready = false;
+                    menuObserver.didFirstVisuallyNonEmptyPaint();
+                    covered(menu, target, "fresh paint without renderer readiness still waits");
+                    target.contents.renderer.ready = true;
+                    menuObserver.didFirstVisuallyNonEmptyPaint();
+                    uncovered(menu, "fresh post-commit paint can also retire exact redirected interruption");
+                }
+                static void rendererRetryForegroundBudget() {
+                    Activity a = new Activity(true);
+                    Shell shell = a.manager.active;
+                    Activity.ShellHistoryObserver observer = lose(a, shell);
+                    a.retryPageRestoring();
+                    Runnable beforePause = a.restoreTimeout;
+                    a.browserFrame.advance(3000);
+                    a.onPause();
+                    check(observer.retryBusy && observer.retryDeadline == 0 && a.pageInterruption(shell) == observer,
+                            "pause preserves duplicate-request gate and interruption but cancels UI deadline");
+                    a.browserFrame.advance(20000); beforePause.run();
+                    uncovered(a, "background beyond eight seconds cannot run cancelled feedback");
+                    a.onResume(); a.main.all();
+                    covered(a, shell, "retry foregrounding restores busy feedback on saved-ready page");
+                    Runnable resumedTimeout = a.restoreTimeout;
+                    check(a.splashSpinner.visibility == View.VISIBLE && a.restoreRetry.visibility == View.GONE
+                            && a.browserFrame.deadline(resumedTimeout) == a.browserFrame.now + 8000
+                            && shell.contents.navigation.reloads == 1,
+                            "resume rearms full foreground budget without reissuing reload");
+                    beforePause.run(); a.performMenuAction("刷新"); a.retryPageRestoring();
+                    check(a.restoreTimeout == resumedTimeout && shell.contents.navigation.reloads == 1,
+                            "old deadline and resumed taps cannot expire feedback or duplicate reload");
+                    for (int i = 0; i < 4; i++) a.reconcilePageRestoring();
+                    a.browserFrame.advance(7999);
+                    check(a.restoreRetry.visibility == View.GONE && observer.retryBusy,
+                            "retry remains gated until complete visible foreground budget");
+                    a.browserFrame.advance(1);
+                    covered(a, shell, "foreground retry timeout cannot uncover ready old frame");
+                    check(a.restoreRetry.visibility == View.VISIBLE && a.splashSpinner.visibility == View.GONE
+                            && !observer.retryBusy && shell.contents.navigation.reloads == 1,
+                            "foreground budget expires to one honest action with no extra request");
+                    for (int i = 0; i < 3; i++) a.reconcilePageRestoring();
+                    check(a.restoreTimeout == null && a.restoreRetry.visibility == View.VISIBLE,
+                            "ordinary refresh cannot rearm interrupted timed-out recovery forever");
+
+                    // A retained inactive retry has the same cancel/rearm policy, not a cross-tab timer.
+                    a.retryPageRestoring();
+                    Runnable beforeSwitch = a.restoreTimeout;
+                    Shell other = a.manager.retain("https://b.invalid/alive", true);
+                    a.manager.selectShell(other); a.main.all();
+                    uncovered(a, "pending retry cover is absent from other ready tab");
+                    a.browserFrame.advance(9000); beforeSwitch.run();
+                    uncovered(a, "old A retry deadline cannot cover or expire active B");
+                    a.manager.selectShell(shell); a.main.all();
+                    covered(a, shell, "reselected interrupted retry resumes its own busy feedback");
+                    check(observer.retryBusy && a.browserFrame.deadline(a.restoreTimeout) == a.browserFrame.now + 8000
+                            && shell.contents.navigation.reloads == 2,
+                            "tab reentry rearms only the visible wait and never reloads again");
+                }
+                static void rendererBackgroundCompletionAndFailedRetry() {
+                    Activity a = new Activity(true);
+                    Shell shell = a.manager.active;
+                    Activity.ShellHistoryObserver observer = lose(a, shell);
+                    a.retryPageRestoring();
+                    NavigationHandle navigation = new NavigationHandle(shell.contents.url);
+                    observer.didStartNavigationInPrimaryMainFrame(navigation);
+                    a.onPause();
+                    observer.didFinishNavigationInPrimaryMainFrame(navigation);
+                    observer.didStopLoading(new GURL(shell.contents.url), true);
+                    check(a.pageInterruption(shell) == null, "genuine exact-owner completion may retire loss while backgrounded");
+                    a.onResume(); a.main.all();
+                    uncovered(a, "genuinely completed background retry does not show stale error on resume");
+                    check(shell.contents.navigation.reloads == 1, "background completion adds no request");
+
+                    observer = lose(a, shell); a.retryPageRestoring();
+                    NavigationHandle failed = new NavigationHandle(shell.contents.url);
+                    observer.didStartNavigationInPrimaryMainFrame(failed);
+                    failed.error = true;
+                    observer.didFinishNavigationInPrimaryMainFrame(failed);
+                    observer.didFirstVisuallyNonEmptyPaint();
+                    observer.didStopLoading(new GURL(shell.contents.url), true);
+                    covered(a, shell, "error-page commit and paint cannot pretend interrupted document recovered");
+                    check(!observer.retryBusy && !observer.retryCommitted && observer.retryNavigation == null
+                            && a.restoreRetry.visibility == View.VISIBLE,
+                            "failed retry releases handle and returns to actionable interruption without replay");
+                    a.retryPageRestoring();
+                    NavigationHandle aborted = new NavigationHandle(shell.contents.url);
+                    observer.didStartNavigationInPrimaryMainFrame(aborted);
+                    aborted.committed = false;
+                    observer.didFinishNavigationInPrimaryMainFrame(aborted);
+                    observer.didStopLoading(new GURL(shell.contents.url), true);
+                    covered(a, shell, "uncommitted retry cannot retire interruption");
+                    check(observer.retryNavigation == null && a.restoreRetry.visibility == View.VISIBLE
+                            && shell.contents.navigation.reloads == 3,
+                            "aborted retry remains explicit-action-only and never self-reloads");
+                }
+                static void rendererRedirectFailureAndBlankOwnership() {
+                    Activity late = new Activity(true);
+                    Shell lateOwner = late.manager.active;
+                    Activity.ShellHistoryObserver lateObserver = lose(late, lateOwner);
+                    late.retryPageRestoring();
+                    NavigationHandle lateRedirect = new NavigationHandle(lateOwner.contents.url);
+                    lateObserver.didStartNavigationInPrimaryMainFrame(lateRedirect);
+                    lateRedirect.url = "https://redirect.invalid/pending-late";
+                    lateOwner.contents.url = lateRedirect.url;
+                    late.browserFrame.advance(9000); // Old-URL timeout is stale before chrome can rebind.
+                    late.reconcilePageRestoring();
+                    check(late.restoreRetry.visibility == View.VISIBLE && !lateObserver.retryBusy
+                            && late.restoreTimeout == null && lateObserver.retryDeadline == 0,
+                            "overdue same-owner URL rebind exposes an enabled action, not a sticky request gate");
+                    late.performMenuAction("刷新");
+                    check(lateOwner.contents.navigation.reloads == 2 && lateObserver.retryBusy,
+                            "overdue redirected owner remains explicitly reloadable after missed stale deadline");
+
+                    for (boolean error : List.of(false, true)) {
+                        Activity a = new Activity(true);
+                        Shell shell = a.manager.active;
+                        String deadUrl = shell.contents.url;
+                        Activity.ShellHistoryObserver observer = lose(a, shell);
+                        a.performMenuAction("刷新");
+                        NavigationHandle redirected = new NavigationHandle(deadUrl);
+                        observer.didStartNavigationInPrimaryMainFrame(redirected);
+                        a.browserFrame.advance(7000);
+                        redirected.url = "https://redirect.invalid/failed";
+                        shell.contents.url = redirected.url;
+                        a.reconcilePageRestoring();
+                        check(a.browserFrame.deadline(a.restoreTimeout) == 8000,
+                                "pending redirect cannot renew original foreground retry budget " + error);
+                        redirected.error = error; redirected.committed = error;
+                        observer.didFinishNavigationInPrimaryMainFrame(redirected);
+                        a.reconcilePageRestoring();
+                        observer.didFirstVisuallyNonEmptyPaint();
+                        observer.didStopLoading(new GURL(shell.contents.url), true);
+                        covered(a, shell, "redirected error/abort retains original dead document interruption " + error);
+                        check(a.pageInterruption(shell) == observer && observer.interruptedUrl.equals(deadUrl)
+                                && observer.retryNavigation == null && !observer.retryCommitted && !observer.retryBusy
+                                && a.restoreRetry.visibility == View.VISIBLE,
+                                "redirected failure releases handle but remains actionable and never saved-ready " + error);
+                        a.performMenuAction("刷新");
+                        check(shell.contents.navigation.reloads == 2 && observer.retryBusy,
+                                "redirected failed recovery can explicitly retry current visible target " + error);
+                    }
+
+                    Activity blank = new Activity(true);
+                    Shell webBlank = blank.manager.active;
+                    webBlank.contents.url = webBlank.contents.lastCommittedUrl = "about:blank";
+                    Activity.ShellHistoryObserver observer = lose(blank, webBlank);
+                    covered(blank, webBlank, "web-created plain about:blank renderer loss is an actual interruption");
+                    blank.performMenuAction("刷新"); blank.performMenuAction("刷新"); blank.retryPageRestoring();
+                    check(webBlank.contents.navigation.reloads == 1 && observer.retryBusy
+                            && blank.restoreTimeout != null && blank.restoreRetry.visibility == View.GONE,
+                            "unowned web blank has working guarded explicit reload, not sticky busy without request");
+                    blank.browserFrame.advance(8000);
+                    check(blank.restoreRetry.visibility == View.VISIBLE && !observer.retryBusy,
+                            "web blank reload remains bounded without promising document.write reconstruction");
+
+                    Activity ntp = new Activity(true);
+                    Shell owned = ntp.manager.active;
+                    owned.contents.url = owned.contents.lastCommittedUrl = "about:blank#abs-new-tab-owned";
+                    ntp.newTabUrls.put(owned, owned.contents.url);
+                    Activity.ShellHistoryObserver nativeObserver = lose(ntp, owned);
+                    ntp.reconcilePageRestoring();
+                    uncovered(ntp, "browser-owned native new-tab overlay stays usable after blank renderer loss");
+                    check(ntp.pageInterruption(owned) == null && nativeObserver.interruptedUrl == null
+                            && !nativeObserver.retryBusy, "native NTP ownership does not retain sticky renderer interruption");
+                    ntp.performMenuAction("刷新");
+                    uncovered(ntp, "native NTP menu refresh does not spuriously cover its native UI");
+                    check(owned.contents.navigation.reloads == 1 && !nativeObserver.retryBusy,
+                            "native owned blank preserves ordinary menu reload without dead-page gate");
+                }
+                static void rendererDeathDuringPendingNativeNavigation() {
+                    for (boolean repeated : List.of(false, true)) {
+                        Activity a = new Activity(true);
+                        Shell shell = a.manager.active;
+                        String deadDocument = shell.contents.lastCommittedUrl;
+                        String nativeEntry = "about:blank#abs-new-tab-earlier-owned-entry";
+                        a.newTabUrls.put(shell, nativeEntry);
+                        Activity.ShellHistoryObserver observer = a.historyObservers.get(shell);
+                        if (repeated) {
+                            observer = lose(a, shell);
+                            a.performMenuAction("刷新");
+                            check(observer.retryBusy, "first real loss has an active retry before second death");
+                        }
+                        NavigationHandle pendingNative = new NavigationHandle(nativeEntry);
+                        observer.didStartNavigationInPrimaryMainFrame(pendingNative);
+                        shell.contents.url = nativeEntry;
+                        int requests = shell.contents.navigation.reloads;
+                        Activity.ShellHistoryObserver delivered = lose(a, shell);
+                        check(delivered == observer && shell.contents.renderer.ready
+                                && a.pageInterruption(shell) == observer
+                                && observer.interruptedUrl.equals(deadDocument)
+                                && shell.contents.lastCommittedUrl.equals(deadDocument),
+                                "actual loss during pending owned-native URL retains committed web interruption " + repeated);
+                        check(!observer.retryBusy && !observer.retryCommitted && observer.retryNavigation == null
+                                && shell.contents.navigation.reloads == requests,
+                                "first/repeated loss invalidates retry proof without silently replaying requests " + repeated);
+                        pendingNative.committed = false;
+                        shell.contents.url = deadDocument;
+                        observer.didFinishNavigationInPrimaryMainFrame(pendingNative);
+                        a.reconcilePageRestoring();
+                        observer.didFirstVisuallyNonEmptyPaint();
+                        observer.didStopLoading(new GURL(deadDocument), true);
+                        covered(a, shell, "aborting pending native entry cannot reveal saved-ready dead web document " + repeated);
+                        check(a.restoreRetry.visibility == View.VISIBLE && !observer.retryBusy,
+                                "dead web document retains enabled explicit recovery after native-entry abort " + repeated);
+                        a.performMenuAction("刷新"); a.performMenuAction("刷新"); a.retryPageRestoring();
+                        check(shell.contents.navigation.reloads == requests + 1 && observer.retryBusy,
+                                "first/repeated pending-native loss is explicitly reloadable exactly once " + repeated);
+                    }
+                }
+                static void rendererFreshReplacementRouterCompletion() {
+                    for (boolean paint : List.of(false, true)) {
+                        Activity a = new Activity(true);
+                        Shell shell = a.manager.active;
+                        Activity.ShellHistoryObserver observer = lose(a, shell);
+                        String deadUrl = shell.contents.url;
+                        a.performMenuAction("刷新");
+                        NavigationHandle replacement = new NavigationHandle(deadUrl);
+                        observer.didStartNavigationInPrimaryMainFrame(replacement);
+                        replacement.url = "https://router.invalid/fresh-document";
+                        shell.contents.url = shell.contents.lastCommittedUrl = replacement.url;
+                        observer.didFinishNavigationInPrimaryMainFrame(replacement);
+                        check(observer.retryCommitted && observer.interruptedUrl.equals(replacement.url),
+                                "fresh cross-document replacement has proof before router, but no completion " + paint);
+                        long serial = observer.navigationSerial;
+                        NavigationHandle router = new NavigationHandle(replacement.url + "/route");
+                        router.sameDocument = true;
+                        observer.didStartNavigationInPrimaryMainFrame(router);
+                        shell.contents.url = router.url;
+                        a.reconcilePageRestoring();
+                        observer.didStopLoading(new GURL(router.url), true);
+                        covered(a, shell, "pending router URL is not yet a committed completion target " + paint);
+                        NavigationHandle staleRouter = new NavigationHandle(replacement.url + "/stale");
+                        staleRouter.sameDocument = true;
+                        observer.didFinishNavigationInPrimaryMainFrame(staleRouter);
+                        check(observer.interruptedUrl.equals(replacement.url),
+                                "stale same-document finish cannot follow a different current router URL " + paint);
+                        shell.contents.lastCommittedUrl = router.url;
+                        observer.didFinishNavigationInPrimaryMainFrame(router);
+                        check(observer.retryCommitted && observer.navigationSerial == serial
+                                && observer.interruptedNavigation == serial && observer.interruptedUrl.equals(router.url),
+                                "fresh committed replacement proof follows its successful same-document router URL " + paint);
+                        observer.didStopLoading(new GURL(replacement.url), true);
+                        covered(a, shell, "pre-router load-stop cannot complete current replacement route " + paint);
+                        if (paint) observer.didFirstVisuallyNonEmptyPaint();
+                        else observer.didStopLoading(new GURL(router.url), true);
+                        uncovered(a, "fresh replacement plus committed router finishes from current paint/valid-stop " + paint);
+                        check(a.pageInterruption(shell) == null && !observer.awaitingPaint
+                                && shell.contents.navigation.reloads == 1,
+                                "router completion retires exact owner without another cross-document request " + paint);
+                    }
+                }
+                static void rendererNavigationAndOwnerPruning() {
+                    Activity a = new Activity(true);
+                    Shell shell = a.manager.active;
+                    Activity.ShellHistoryObserver observer = lose(a, shell);
+                    a.retryPageRestoring();
+                    NavigationHandle oldAttempt = new NavigationHandle(shell.contents.url);
+                    observer.didStartNavigationInPrimaryMainFrame(oldAttempt);
+                    a.browserFrame.advance(8000); a.retryPageRestoring();
+                    Runnable renewed = a.restoreTimeout;
+                    observer.didFinishNavigationInPrimaryMainFrame(oldAttempt);
+                    observer.didStopLoading(new GURL(shell.contents.url), true);
+                    covered(a, shell, "finished old retry cannot complete renewed same-URL attempt");
+                    check(!observer.retryCommitted && a.restoreTimeout == renewed,
+                            "retry commit belongs to exact navigation handle, not URL alone");
+                    NavigationHandle currentAttempt = new NavigationHandle(shell.contents.url);
+                    observer.didStartNavigationInPrimaryMainFrame(currentAttempt);
+                    observer.didFinishNavigationInPrimaryMainFrame(currentAttempt);
+                    observer.didFirstVisuallyNonEmptyPaint();
+                    uncovered(a, "renewed attempt completes only from its genuine navigation");
+
+                    observer = lose(a, shell);
+                    String interruptedUrl = shell.contents.url;
+                    NavigationHandle sameUrlNewDocument = new NavigationHandle(interruptedUrl);
+                    observer.didStartNavigationInPrimaryMainFrame(sameUrlNewDocument);
+                    a.reconcilePageRestoring();
+                    observer.didFirstVisuallyNonEmptyPaint();
+                    observer.didStopLoading(new GURL(interruptedUrl), true);
+                    covered(a, shell, "same-URL navigation start is not proof of a replacement document");
+                    sameUrlNewDocument.committed = false;
+                    observer.didFinishNavigationInPrimaryMainFrame(sameUrlNewDocument);
+                    check(a.pageInterruption(shell) == observer && !observer.retryCommitted,
+                            "aborted same-URL navigation retains dead document interruption");
+
+                    NavigationHandle sameDocument = new NavigationHandle(interruptedUrl + "#fragment");
+                    sameDocument.sameDocument = true;
+                    shell.contents.url = sameDocument.url;
+                    observer.didStartNavigationInPrimaryMainFrame(sameDocument);
+                    observer.didFinishNavigationInPrimaryMainFrame(sameDocument);
+                    a.reconcilePageRestoring();
+                    observer.didFirstVisuallyNonEmptyPaint();
+                    observer.didStopLoading(new GURL(shell.contents.url), true);
+                    covered(a, shell, "same-document URL change plus stale paint/stop cannot retire renderer loss");
+                    check(a.pageInterruption(shell) == observer && observer.interruptedUrl.equals(interruptedUrl),
+                            "same-document change is not a fresh replacement commit");
+
+                    shell.contents.url = "https://new.invalid/pending";
+                    a.reconcilePageRestoring();
+                    observer.didFirstVisuallyNonEmptyPaint();
+                    observer.didStopLoading(new GURL(shell.contents.url), true);
+                    covered(a, shell, "pending visible URL drift alone cannot discard dead document marker");
+                    NavigationHandle pending = new NavigationHandle(shell.contents.url);
+                    observer.didStartNavigationInPrimaryMainFrame(pending);
+                    pending.committed = false;
+                    observer.didFinishNavigationInPrimaryMainFrame(pending);
+                    a.reconcilePageRestoring();
+                    check(a.pageInterruption(shell) == observer && observer.retryNavigation == null,
+                            "pending other-URL abort retains interruption and releases candidate handle");
+                    covered(a, shell, "pending other-URL abort cannot uncover saved-ready dead frame");
+
+                    String nativeEntry = "about:blank#abs-new-tab-earlier-entry";
+                    a.newTabUrls.put(shell, nativeEntry);
+                    NavigationHandle pendingNative = new NavigationHandle(nativeEntry);
+                    observer.didStartNavigationInPrimaryMainFrame(pendingNative);
+                    shell.contents.url = nativeEntry;
+                    a.reconcilePageRestoring();
+                    check(a.pageInterruption(shell) == observer,
+                            "pending owned native-entry URL cannot prune an already interrupted web document");
+                    pendingNative.committed = false;
+                    shell.contents.url = interruptedUrl;
+                    observer.didFinishNavigationInPrimaryMainFrame(pendingNative);
+                    a.reconcilePageRestoring();
+                    covered(a, shell, "aborted native-entry escape retains cover when original dead document returns");
+
+                    int requestsBeforeEscape = shell.contents.navigation.reloads;
+                    NavigationHandle escape = new NavigationHandle("https://new.invalid/real-document");
+                    observer.didStartNavigationInPrimaryMainFrame(escape);
+                    shell.contents.url = escape.url;
+                    a.reconcilePageRestoring();
+                    observer.didFinishNavigationInPrimaryMainFrame(escape);
+                    observer.didStopLoading(new GURL(interruptedUrl), true);
+                    covered(a, shell, "other-URL replacement still requires its own URL-correct completion");
+                    observer.didStopLoading(new GURL(escape.url), true);
+                    uncovered(a, "explicit successful other-URL navigation genuinely escapes dead document");
+                    check(a.pageInterruption(shell) == null && shell.contents.navigation.reloads == requestsBeforeEscape,
+                            "navigation escape adds no implicit reload or POST replay");
+
+                    Activity replacement = new Activity(true);
+                    Shell owned = replacement.manager.active;
+                    Activity.ShellHistoryObserver old = lose(replacement, owned);
+                    WebContents oldContents = owned.contents;
+                    owned.contents = new WebContents(oldContents.url, true);
+                    replacement.observeShell(owned); replacement.reconcilePageRestoring();
+                    check(old.getWebContents() == null && old.interruptedUrl == null,
+                            "contents replacement detaches old observer and clears marker");
+                    Activity.ShellHistoryObserver current = lose(replacement, owned);
+                    old.primaryMainFrameRenderProcessGone(1); old.didFirstVisuallyNonEmptyPaint();
+                    old.didStopLoading(new GURL(oldContents.url), true); old.webContentsDestroyed();
+                    covered(replacement, owned, "detached contents callbacks cannot clear replacement interruption");
+                    check(replacement.pageInterruption(owned) == current, "old destroy cannot remove new observer map entry");
+                    replacement.generation++; replacement.runtime.ownerGeneration++;
+                    check(replacement.pageInterruption(owned) == null,
+                            "generation mismatch prunes marker before replacing observer");
+                    current.primaryMainFrameRenderProcessGone(1);
+                    check(current.interruptedUrl == null,
+                            "same map entry with stale immutable observer generation rejects late death");
+                    replacement.observeShell(owned); replacement.reconcilePageRestoring();
+                    current.primaryMainFrameRenderProcessGone(1);
+                    uncovered(replacement, "previous runtime-generation death cannot mark current document");
+                    check(current.interruptedUrl == null && current.getWebContents() == null,
+                            "generation replacement retires old observer and interruption");
+
+                    Activity close = new Activity(true);
+                    Shell first = close.manager.active;
+                    Shell survivor = close.manager.retain("https://b.invalid/survivor", true);
+                    Activity.ShellHistoryObserver closed = lose(close, first);
+                    close.manager.closeShell(first); close.main.all();
+                    check(!close.historyObservers.containsKey(first) && closed.interruptedUrl == null
+                            && closed.getWebContents() == null, "native close prunes and detaches observer-owned marker");
+                    closed.primaryMainFrameRenderProcessGone(1); closed.didFirstVisuallyNonEmptyPaint();
+                    closed.didStopLoading(new GURL(first.contents.url), true);
+                    uncovered(close, "late closed-tab callbacks cannot cover ready survivor");
+                    check(close.manager.active == survivor, "stale callbacks do not switch active owner");
+                    Activity.ShellHistoryObserver destroyed = lose(close, survivor);
+                    destroyed.webContentsDestroyed();
+                    check(!close.historyObservers.containsKey(survivor) && destroyed.interruptedUrl == null,
+                            "contents destruction immediately prunes durable interruption");
+                    uncovered(close, "destroyed contents do not leave stale page cover");
+
+                    for (boolean quiesce : List.of(false, true)) {
+                        Activity exit = new Activity(true);
+                        Shell target = exit.manager.active;
+                        Activity.ShellHistoryObserver exiting = lose(exit, target);
+                        if (quiesce) exit.quiescing = true; else exit.closed = true;
+                        exit.cancelUiWork();
+                        check(exiting.interruptedUrl == null, "runtime/Activity exit clears durable loss state " + quiesce);
+                        exiting.primaryMainFrameRenderProcessGone(1);
+                        uncovered(exit, "late exit callbacks cannot recreate interruption " + quiesce);
+                    }
+                }
                 public static int run() {
                     restorationDeadline();
                     restorationTransitions();
                     restorationOwnership();
                     restorationRetryAndCancellation();
+                    rendererLossIsImmediate();
+                    rendererLossRetainedOffscreen();
+                    rendererRetryAndFreshCompletion();
+                    rendererRetryForegroundBudget();
+                    rendererBackgroundCompletionAndFailedRetry();
+                    rendererRedirectFailureAndBlankOwnership();
+                    rendererDeathDuringPendingNativeNavigation();
+                    rendererFreshReplacementRouterCompletion();
+                    rendererNavigationAndOwnerPruning();
                     previewNoDataAndBounds();
                     previewStaleResults();
                     previewSourceAndOverlays();
                     return checks;
                 }
             }
-            """;
+            """);
 }

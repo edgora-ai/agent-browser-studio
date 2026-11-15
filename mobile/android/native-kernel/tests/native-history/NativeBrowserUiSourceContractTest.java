@@ -644,38 +644,97 @@ public final class NativeBrowserUiSourceContractTest {
     }
 
     private static void pageRestoreCover() {
-        String show = method("NativeBrowserActivity", "showPageRestoring");
+        has(method("NativeBrowserActivity", "showPageRestoring"), "beginPageRestoring(shell, false)",
+                "non-reload recovery shares the page-area presenter");
+        String show = method("NativeBrowserActivity", "beginPageRestoring");
         has(show, "restoreSplashShown = true", "reclaimed renderer gets honest page-area loading state");
         has(show, "splash.setVisibility(View.VISIBLE)", "reuse the startup splash without touching the renderer");
-        has(show, "isPageReady(shell)", "a ready page is never covered");
+        has(show, "!reloading && interrupted == null && isPageReady(shell)",
+                "only ordinary ready pages can skip recovery; a dead saved frame cannot");
         has(show, "restoreShell = shell", "restore state is Shell-owned");
         has(show, "restoreContents = contents", "restore state is WebContents-owned");
         has(show, "restoreUrl = visibleUrl(shell)", "navigation URL belongs to restore state");
         has(show, "restoreEpoch != epoch", "retired deadline cannot alter a new restore");
         has(show, "restoreRetry.setVisibility(View.VISIBLE)", "deadline exposes a real reload action, not an empty page");
         has(show, "splashSpinner.setVisibility(View.GONE)", "a long recovery is not an endless spinner");
-        has(show, "postOnAnimationDelayed(restoreTimeout, 8000)", "deadline changes state at8s, not fake readiness");
+        has(show, "interrupted == null ? 8000", "ordinary unready recovery retains eight-second budget");
+        has(show, "now + 8000", "interrupted retry reentry gets bounded foreground budget");
+        has(show, "interrupted.retryDeadline = priorDeadline", "pending URL rebind cannot renew foreground retry budget");
+        has(show, "interrupted == null && isBlankPage(shell, visibleUrl(shell))",
+                "unowned dead about:blank receives recovery instead of being skipped as native NTP");
+        String marker = method("NativeBrowserActivity", "pageInterruption");
+        lacks(marker, "visibleUrl(shell)", "even a pending native-NTP URL cannot erase an existing dead document marker");
+        lacks(marker, "!observer.interruptedUrl.equals(visibleUrl(shell))",
+                "pending visible URL drift cannot erase an interrupted document");
+        String start = method("ShellHistoryObserver", "didStartNavigationInPrimaryMainFrame");
+        lacks(start, "clearInterruption()", "navigation start is not proof that dead document was replaced");
+        has(start, "!navigation.isSameDocument()", "same-document navigation cannot acquire fresh replacement proof");
+        has(start, "retryCommitted = false", "a new candidate invalidates earlier committed replacement proof");
+        has(show, "postOnAnimationDelayed(restoreTimeout, remaining)", "deadline changes state, not fake readiness");
+        has(methodDeclarations.get("NativeBrowserActivity#beginPageRestoring"),
+                "页面已中断，可重新加载或切换标签页", "known loss has honest immediate interruption copy");
         lacks(show, "bringToFront()", "recovery stays below chrome/native destinations");
         String owns = method("NativeBrowserActivity", "ownsPageRestoring");
         for (String guard : List.of("restoreGeneration == generation", "manager.getActiveShell() == shell",
                 "restoreShell == shell", "restoreContents == contents", "shell.getWebContents() == contents",
-                "restoreUrl.equals(visibleUrl(shell))", "interactive()")) {
+                "restoreUrl.equals(visibleUrl(shell))", "interactive()", "!contents.isDestroyed()")) {
             has(owns, guard, "recovery ownership guard: " + guard);
         }
         String reconcile = method("NativeBrowserActivity", "reconcilePageRestoring");
         has(reconcile, "active != chromeShell || contents != chromeContents", "all active-owner transitions are reconciled");
         has(reconcile, "changed || stale", "ordinary refresh cannot reset delayed recovery");
+        has(reconcile, "interrupted && !restoreSplashShown", "same-owner renderer death does not require identity change");
+        has(reconcile, "!interrupted && isPageReady(active)", "saved-ready dead frame cannot remove cover");
         has(method("NativeBrowserActivity", "refreshChrome"), "reconcilePageRestoring()", "close/native-close/new-tab paths share reconciliation");
-        has(method("NativeBrowserActivity", "hidePageRestoring"), "removeCallbacks(restoreTimeout)", "cancel stale deadlines explicitly");
-        has(method("NativeBrowserActivity", "cancelUiWork"), "hidePageRestoring()", "pause/shutdown retires recovery state");
+        String hide = method("NativeBrowserActivity", "hidePageRestoring");
+        has(hide, "removeCallbacks(restoreTimeout)", "cancel stale deadlines explicitly");
+        has(hide, "interrupted.retryDeadline = 0", "hide cancels UI budget without issuing another reload");
+        has(method("NativeBrowserActivity", "cancelUiWork"), "hidePageRestoring()", "pause/shutdown retires visible recovery work");
         String retry = method("NativeBrowserActivity", "retryPageRestoring");
         has(retry, "ownsPageRestoring(shell, contents)", "retry validates current live owner");
-        before(retry, "showPageRestoring(shell)", "reload(true)", "reset state before reload prevents repeat taps");
+        has(retry, "reloadPage(shell)", "page action shares guarded reload with menu");
+        String reload = method("NativeBrowserActivity", "reloadPage");
+        has(reload, "interrupted.retryBusy", "retained observer gate blocks duplicate reloads across screen reentry");
+        before(reload, "beginPageRestoring(shell, true)", "reload(true)", "reset busy state before repost-checking reload prevents repeat taps");
+        has(method("NativeBrowserActivity", "performMenuAction"), "reloadPage(manager.getActiveShell())",
+                "ordinary menu refresh on dead page reconciles interruption through shared busy path");
         String complete = method("NativeBrowserActivity", "completePageRestoring");
+        has(complete, "pageInterruption(shell) == null", "known interruption must retire before readiness can uncover page");
         has(complete, "ownsPageRestoring(shell, contents) && isPageReady(shell)", "load-stop alone is not success evidence");
         for (String event : List.of("didFirstVisuallyNonEmptyPaint", "didStopLoading")) {
-            has(method("ShellHistoryObserver", event), "completePageRestoring(shell, contents)", "observer callback has exact identity: " + event);
+            String callback = method("ShellHistoryObserver", event);
+            has(callback, "completePageRestoring(shell, contents)", "observer callback has exact identity: " + event);
+            has(callback, "ownsContents()", "completion checks observer ownership: " + event);
+            has(callback, "finishInterruptedPage(", "completion requires fresh interrupted document proof: " + event);
         }
+        String death = method("ShellHistoryObserver", "primaryMainFrameRenderProcessGone");
+        has(death, "ownsContents()", "real Chromium renderer-death callback validates owner");
+        has(death, "visibleUrl(shell).equals(newTabUrls.get(shell))",
+                "renderer loss native exemption requires visible explicitly owned NTP");
+        has(death, "deadDocumentUrl.equals(newTabUrls.get(shell))",
+                "pending native-entry URL cannot exempt a still-committed web document");
+        has(death, "contents.getLastCommittedUrl().getSpec()", "renderer-loss identity uses actual committed document URL");
+        has(death, "interruptedUrl = deadDocumentUrl.isEmpty() ? visibleUrl(shell) : deadDocumentUrl",
+                "death records committed interrupted URL, falling back only before any commit");
+        has(death, "interruptedNavigation = ++navigationSerial", "death retires earlier navigation proof");
+        has(death, "showPageRestoring(shell)", "known active death gets immediate page-only interruption");
+        lacks(death, "reload(", "death never silently reloads or replays POST");
+        String observerOwns = method("ShellHistoryObserver", "ownsContents");
+        for (String guard : List.of("ownerGeneration == generation", "historyObservers.get(shell) == this",
+                "shell.getWebContents() == contents", "!contents.isDestroyed()", "validTab(shell)")) {
+            has(observerOwns, guard, "durable observer ownership guard: " + guard);
+        }
+        String genuine = method("ShellHistoryObserver", "finishInterruptedPage");
+        for (String guard : List.of("!retryCommitted", "interruptedNavigation != navigationSerial",
+                "!interruptedUrl.equals(url)", "!url.equals(visibleUrl(shell))", "!isPageReady(shell)")) {
+            has(genuine, guard, "fresh interrupted completion proof: " + guard);
+        }
+        String finish = method("ShellHistoryObserver", "didFinishNavigationInPrimaryMainFrame");
+        has(finish, "retryNavigation == navigation", "fresh retry commits require exact handle identity");
+        has(finish, "retryNavigation = null", "native navigation handle is released at finish");
+        has(finish, "navigation.isSameDocument() && interruptedUrl != null && retryCommitted",
+                "same-document router may follow existing fresh proof, never create it");
+        has(finish, "url.equals(visibleUrl(shell))", "only current successful router URL can follow replacement proof");
         has(method("NativeBrowserActivity", "initializeBrowserUi"), "reparentSplashToPageArea()", "startup cover becomes page-area-only after startup");
         has(method("NativeBrowserActivity", "reparentSplashToPageArea"), "pageContainer.addView(splash", "chrome remains reachable throughout recovery");
         String capture = method("NativeBrowserActivity", "captureActivePreview");
