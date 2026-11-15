@@ -563,6 +563,18 @@ public final class NativeBrowserUiSourceContractTest {
 
     private static void privateLifecycleStages() {
         String create = method("NativeBrowserActivity", "onCreate");
+        String beforeStartup = create.substring(0, create.indexOf("BrowserStartupController.getInstance()"));
+        lacks(beforeStartup, "pageContainer.addView(manager",
+                "renderer stays off-window before Chromium registers Chrome_UIThread");
+        String success = method("", "onSuccess");
+        before(success, "if (!current() || uiBuilt) return;", "pageContainer.addView(manager",
+                "stale or duplicate startup cannot attach the renderer");
+        has(success, "pageContainer.addView(manager, 0, new FrameLayout.LayoutParams(-1, -1))",
+                "successful startup inserts the renderer below existing native overlays");
+        before(success, "pageContainer.addView(manager", "initializeBrowserUi()",
+                "successful native startup owns renderer attachment before browser UI initialization");
+        lacks(method("", "onFailure"), "pageContainer.addView(manager",
+                "failed Chromium startup never attaches the renderer Surface");
         before(create, "Log.i(TAG, \"LIFECYCLE_ON_CREATE_INTENT_VALIDATE\")", "validateIntent(getIntent())", "intent stage is fixed and precedes validation");
         before(create, "Log.i(TAG, \"LIFECYCLE_ON_CREATE_SAVED_STATE_SESSION_CHECK\")", "savedState != null", "saved-state stage precedes session check");
         before(create, "Log.i(TAG, \"LIFECYCLE_ON_CREATE_RUNTIME_ATTACH\")", "runtime.attach(this)", "attach stage precedes runtime ownership");

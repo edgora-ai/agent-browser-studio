@@ -297,7 +297,6 @@ public final class NativeBrowserActivity extends Activity {
             window.setAnimationPlaceholderView(renderView.getSurfaceView());
             buildChrome();
             pageContainer = new FrameLayout(this);
-            pageContainer.addView(manager, new FrameLayout.LayoutParams(-1, -1));
             root.addView(pageContainer, new LinearLayout.LayoutParams(-1, 0, 1));
             attachHistorySurfaces(launch);
             attachTabSwitcher(launch);
@@ -307,6 +306,9 @@ public final class NativeBrowserActivity extends Activity {
                         @Override public void onSuccess(@Nullable StartupMetrics metrics) {
                             if (!current() || uiBuilt) return;
                             try {
+                                // Keep the renderer off-window until Chrome_UIThread is registered.
+                                // Native startup may create a Shell; insert below native overlays.
+                                pageContainer.addView(manager, 0, new FrameLayout.LayoutParams(-1, -1));
                                 initializeBrowserUi();
                             } catch (RuntimeException failure) {
                                 if (!current()) return;
