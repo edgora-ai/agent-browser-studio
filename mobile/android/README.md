@@ -1,6 +1,10 @@
 # ABS Android — internal capability candidate
 
-## Current native-product checkpoint — 2026-11-15, r13z rev7
+## Current native-product checkpoint — 2026-11-16, r13z rev10
+
+Read the [rev10 persistent-renderer fix and targeted physical-phone results](../../docs/review/android-r13z-rev10-closure-2026-11-16.md) first. The original-release-signature, non-debuggable ARM64 candidate was update-installed **without clearing data**, and its installed APK identity was independently verified. On two newly created, explicitly owned test tabs, six A/B alternations preserved both input drafts while timers advanced and buttons responded; the browser PID matched before and after the sequence. Actual A/B screenshots show the same ABS address/navigation chrome without a duplicate Chromium toolbar. Rev8 and rev9 were rejected for startup crashes, not successful runtime checkpoints. This is a **targeted runtime pass**, not full product, performance, accessibility or user-aesthetic acceptance; no release was published.
+
+## Historical native-product checkpoint — 2026-11-15, r13z rev7
 
 Read the [rev7 renderer-recovery checkpoint and remaining acceptance work](../../docs/review/android-r13z-rev7-closure-2026-11-15.md) first. The original-release-signature, non-debuggable ARM64 **candidate** was built and update-installed; its exact installed APK and frozen inputs were reverified during follow-up. Rev7 adds owner-bound renderer interruption and explicit, deduplicated manual recovery. Fresh host regressions pass; controlled device subcases have evidence, but the hidden-tab/Home retry-budget matrix, natural OS reclaim and final visual acceptance are **not complete**. This is a local source checkpoint, not a published or fully accepted release.
 

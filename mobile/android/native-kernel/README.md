@@ -1,12 +1,21 @@
 # Android native Chromium product adapter
 
+## Current signed candidate — 2026-11-16, r13z rev10 targeted runtime pass
+
+See the [rev10 fix, exact artifact and physical-phone evidence](../../../docs/review/android-r13z-rev10-closure-2026-11-16.md). Rev10 retains the fixed manager-owned renderer and binds live `WebContents` before replaying cached video-overlay state; the stock embedding path is unchanged. Rev8 and rev9 were subsequently installed and rejected for startup crashes. Rev10 was update-installed **without clearing data** and started successfully through the normal product entry.
+
+- Candidate: `.tmp-apk/proxy-fix-work/v13z-rev10/ABS-Browser-v1.0.0-r13z-rev10-arm64-release-candidate.apk` (372359928 bytes; repository-relative).
+- APK SHA-256: `7d3c0c32396b0f70b490c35b9a09424c95cf358768d47bb3305e73f063cfc585`.
+- Original certificate SHA-256: `0f186dd70f80892e04443b7105842eef2ac9e641e9ecefa15015158317f1402f`.
+- Two this-run-owned tabs passed six A/B alternations with advancing timers, responding buttons, preserved input drafts and the same live browser process. Real A/B screenshots show consistent ABS browser chrome and no duplicate stock toolbar. This is not full UI/performance/a11y or product acceptance, and nothing was published.
+
 ## Previous device checkpoint — 2026-11-15, r13z rev7 candidate
 
 The current product package is `com.ahoo.abs.browser`, version `1.0.0`, ARM64, non-debuggable and signed with the original release certificate. Rev7 was built and update-installed; follow-up independently reverified the installed APK identity. It retains native Chromium/Shell/WebContents and Java UI, not Android System WebView.
 
 See the [rev7 recovery/source/QA handoff](../../../docs/review/android-r13z-rev7-closure-2026-11-15.md) for exact hashes, fresh host results and remaining work. Known renderer death is now durable owner-bound state even when an old saved frame reports ready. Recovery is explicit, busy-gated and never automatic replay. Controlled device subcases are partial; hidden-tab/Home long-wait recovery, natural OS reclaim, reliable live web previews and final UI/a11y acceptance remain unaccepted. Later [r13q persistence evidence](../../../docs/review/android-r13q-closure-2026-11-14.md) supersedes the historical v5 cookie statement only within its documented scope. Full Chromium/DEPS/build-reproducibility and NOTICE/license closure are still open. This is not a published or fully accepted product release.
 
-## Latest signed candidate — 2026-11-15, r13z rev8 persistent tab compositor
+## Historical rejected candidate — 2026-11-15, r13z rev8 persistent tab compositor
 
 The product Activity now opts into a fixed `ContentViewRenderView` host before creating its first Shell. The shared renderer stays attached to `ShellManager` while retained Shell/ContentView layers change; selecting a tab must not move the renderer between holders. Product Shells keep the stock Chromium toolbar disabled even after fullscreen exit, while default content-shell embedding retains its toolbar behavior. Inactive tabs cache video-overlay state without touching the active renderer.
 
@@ -16,7 +25,7 @@ Rev8 packages the Java product changes from commit `ea8eda9`. Android incrementa
 - APK SHA-256: `efa101b539b251717847cc3041c5495ad47a5ffa15fcb9be9d74edebefe703f9`.
 - Certificate SHA-256: `0f186dd70f80892e04443b7105842eef2ac9e641e9ecefa15015158317f1402f`.
 
-These changes are **not part of the rev7 APK above**. Rev8 is a **signed candidate, not runtime-accepted**: it has not been installed or run on the phone, and this build made no device or tab changes. Host contracts and successful compilation do not establish physical Surface/input continuity, resolution of the reported tab freeze, navigation/system-bar consistency or visual polish. Cold tab restoration is not implemented; preserve pages before an explicitly authorized update, which can restart the app.
+These changes are **not part of the rev7 APK above**. Rev8 was subsequently update-installed with authorization and **rejected for a startup Chrome_UIThread fatal**. Rev9 corrected that ordering but was also rejected for a startup SIGSEGV before compositor initialization. Neither candidate created QA tabs. Rev10 supersedes both; see the current checkpoint above. Successful host tests or compilation alone did not establish runtime or visual acceptance. Cold tab restoration remains unimplemented; an authorized update can restart the app.
 
 Targeted JDK17 regression, using original Chromium Shell sources before the product patches (only temporary copies are patched):
 
