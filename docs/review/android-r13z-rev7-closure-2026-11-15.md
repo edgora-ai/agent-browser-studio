@@ -73,7 +73,21 @@ The crash mechanism was `am crash`, not a natural OS reclaim event. `matrix-fina
 
 The previous interruption receipt confirms owned QA A/B tabs were **not closed** (`qaTabsClosed=0`). It records restoration of reverse `17890→17890`, font scale 1.0 and night=no, and removal of contaminated owned captures. Do not claim device/UI cleanup is finished.
 
-During the fresh follow-up, a stricter XML-only/no-screenshot preflight refused acquisition because the exact native QA Activity was no longer focused. **No UI input, screenshot, fixture service, reverse change or QA-tab closure was performed in this follow-up.** It did not take over the foreground or dismiss notifications. New local helper controls reject unknown/missing/conflicting overlay metadata and unowned overviews; these offline guard checks are not device lifecycle evidence. Metadata-only SystemUI queries did not establish an authoritative empty heads-up state and must not be described as such.
+### Authorized foreground handoff and bounded continuation
+
+The **initial** XML-only/no-screenshot preflight refused acquisition because the exact native QA Activity was not focused; it made no UI inputs. After the human explicitly authorized restoring only the existing ABS Browser task, `am task focus 36957` brought that original task forward: **no Intent, URL, new Activity launch or page recreation was requested**. A fresh strict preflight then proved the exact QA B address and its original document token plus displayed tick/click counters. This is ownership/displayed-document evidence, not completion of the recovery matrix.
+
+The local QA helper initially rejected missing frame metadata. This device's ordinary `dumpsys window` omits frames; `dumpsys window -a` supplies a single lowercase `frame=`. The corrected helper accepts exactly one complete `mFrame=` or `frame=` rectangle and keeps the original fixed bounds, UID/type, visibility, noninteractive-panel, native-focus and exact-QA checks. All **14 offline guard controls** passed (8 earlier controls + 6 rectangle compatibility/negative controls); these are harness checks, not product acceptance. Screenshots remain disabled.
+
+| New guarded attempt | Actual outcome |
+| --- | --- |
+| First matrix attempt | Exactly one tap command targeted the QA B test button, then an unknown visible overlay interrupted the second XML read; its DOM counter increment was not verified and the temporary XML was discarded. No crash command or reverse change was reached. |
+| One fresh guarded restart | First guard rejected `native-activity-not-focused`; zero UI inputs. No automatic foreground takeover followed. |
+| Hidden-tab/Home busy-budget cases | **Still NOT COMPLETE**; neither attempt reached fault injection/retry or either lifecycle subcase. These stops establish no new Android product defect. |
+
+The uniquely identified localhost fixture was started as a managed job, its response gate was opened during independent cleanup, and only that exact job was stopped/collected. Reverse was never changed and was independently verified as `17890→17890`. All eight generated owned remote XML leaves were independently verified absent. The first outer scratch-cleanup error was a repeated cleanup after the inner XML cleanup had already removed its leaf, not a residual file; the next attempt's cleanup was fully successful. **QA A/B remain unclosed (`qaTabsClosed=0`)** because native foreground ownership was lost. No screenshots, reinstall, clear-data, settings changes or unrelated-tab interactions occurred. All 22 frozen source/host inputs and the candidate APK hash/size still match.
+
+Follow-up evidence in the directory from §3: `authorized-task-restore.json`, `complete-window-preflight.json`, `lifecycle-matrix-cdf5f47b74.json`, `lifecycle-matrix-18dad1ce1c.json`, `matrix-stop-action-audit.json` and `device-followup-resource-receipt.json`; managed fixture job `bash-8195867449924b23` was explicitly stopped and collected. The immediate restore receipt retains its metadata-guard PAUSED result; the later complete-window preflight is the separate successful ownership proof. Do not rewrite either receipt as lifecycle PASS. Metadata-only SystemUI queries are not an authoritative empty heads-up guarantee; the unknown overlay was not identified as a specific notification and no private window/notification contents were logged.
 
 ## 5. Safe continuation plan
 
@@ -97,4 +111,4 @@ Use a fresh run directory/id. Do **not** blindly rerun historical scripts: fixed
 - Full Chromium/DEPS source/build reproducibility and NOTICE/license closure remain open.
 - The earlier DSH `Attachment object is missing.` interruption is separate from Android product acceptance; no DSH repair is claimed here.
 
-Commit only the five scoped source/test/runner files plus this handoff and the two Android README checkpoint updates. Preserve unrelated `.build-source-sha.txt` and `release-1.0.1-20260926-preserved/`. Local commit only: no push, publish or formal-release claim.
+Source/test/runner and the initial handoff/README checkpoint were committed locally as `9366e31a92ea921f36e37ec87046245e60bd5d08` (`fix(android): recover interrupted renderers with explicit retry`). The authorized device continuation changed no frozen product/test input; its follow-up commit is documentation-only. Preserve unrelated `.build-source-sha.txt` and `release-1.0.1-20260926-preserved/`. No push, publish or formal-release claim.
