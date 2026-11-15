@@ -288,6 +288,9 @@ public final class NativeBrowserActivity extends Activity {
             intents = IntentRequestTracker.createFromActivity(this);
             window = new ActivityWindowAndroid(this, true, intents, null, true);
             manager.setWindow(window);
+            // Keep the shared compositor Surface attached while retained Shells change.
+            // Product mode also owns the stock Shell toolbar, including fullscreen exits.
+            manager.usePersistentTabContentViewHost();
             installShellObserverHooks();
             renderView = manager.getContentViewRenderView();
             installPreviewSurfaceHooks();

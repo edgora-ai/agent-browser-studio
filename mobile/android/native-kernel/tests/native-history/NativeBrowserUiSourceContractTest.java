@@ -573,6 +573,11 @@ public final class NativeBrowserUiSourceContractTest {
     }
 
     private static void eventDrivenForegroundVisibility() {
+        String create = method("NativeBrowserActivity", "onCreate");
+        before(create, "manager.setWindow(window)", "manager.usePersistentTabContentViewHost()",
+                "initialize compositor before opting into its fixed product host");
+        before(create, "manager.usePersistentTabContentViewHost()", "installShellObserverHooks()",
+                "product renderer and toolbar policy precede every retained Shell");
         String activity = source("NativeBrowserActivity.java");
         lacks(activity, "uiTick", "no perpetual UI polling runnable");
         lacks(activity, "postDelayed", "no periodic view/history/preview polling");
