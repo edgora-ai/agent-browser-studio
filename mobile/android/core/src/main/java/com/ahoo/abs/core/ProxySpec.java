@@ -30,7 +30,7 @@ public final class ProxySpec {
 
     /**
      * Resolver rules that short-circuit every local resolution to the proxy exit.
-     * The product is proxy-mandatory: proxied requests carry the hostname in
+     * In proxy mode, requests carry the hostname in
      * CONNECT, so nothing needs the system resolver, and mapped answers keep DNS
      * prefetch and preconnect hints from leaking destination hostnames to the
      * local ISP resolver. The proxy endpoint itself and loopback stay excluded so

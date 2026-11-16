@@ -1,7 +1,7 @@
 diff --git a/content/shell/android/agent_browser_product/chromium/agent_browser_android_product_policy.cc b/content/shell/android/agent_browser_product/chromium/agent_browser_android_product_policy.cc
 --- a/content/shell/android/agent_browser_product/chromium/agent_browser_android_product_policy.cc
 +++ b/content/shell/android/agent_browser_product/chromium/agent_browser_android_product_policy.cc
-@@ -15,11 +15,13 @@
+@@ -23,11 +23,13 @@
  #include "base/strings/string_number_conversions.h"
  #include "base/strings/string_util.h"
  #include "net/base/net_errors.h"
@@ -15,12 +15,20 @@ diff --git a/content/shell/android/agent_browser_product/chromium/agent_browser_
  #include "services/network/public/cpp/resource_request.h"
  #include "services/network/public/mojom/network_context.mojom.h"
  #include "third_party/blink/public/common/agent_browser_android_timezone_config.h"
-@@ -211,9 +213,33 @@
+@@ -285,15 +287,41 @@
    CHECK(!params->proxy_config_poller_client.is_valid());
    CHECK(!params->initial_custom_proxy_config);
    CHECK(!params->custom_proxy_config_client_receiver.is_valid());
 +  CHECK(!params->agent_browser_local_dns_policy);
-+
+   if (mode == AgentBrowserProductNetworkMode::kDirect) {
+     params->initial_proxy_config =
+         net::ProxyConfigWithAnnotation(config, kProductDirectTrafficAnnotation);
+     LOG(INFO) << "ABS_ANDROID_NETWORK_V1 mode=direct configured=1";
++    // Direct deliberately retains the stock/managed resolver path. Null is
++    // not a weakened proxy policy: this branch never promised proxy protection.
++    LOG(INFO) << "ABS_ANDROID_DNS_V1 mode=normal no-proxy-protection=1";
+     return;
+   }
 +  // A fixed proxy only covers URL loads. DNS-only callers (including WebRTC
 +  // STUN hostname resolution) still use this NetworkContext's HostResolver.
 +  // Install the existing native deny policy at that resolver, before cache,
@@ -52,19 +60,21 @@ diff --git a/content/shell/android/agent_browser_product/chromium/agent_browser_
 diff --git a/content/shell/android/agent_browser_product/chromium/agent_browser_android_product_policy_unittest.cc b/content/shell/android/agent_browser_product/chromium/agent_browser_android_product_policy_unittest.cc
 --- a/content/shell/android/agent_browser_product/chromium/agent_browser_android_product_policy_unittest.cc
 +++ b/content/shell/android/agent_browser_product/chromium/agent_browser_android_product_policy_unittest.cc
-@@ -4,17 +4,30 @@
+@@ -4,20 +4,32 @@
  #include "content/shell/android/agent_browser_product/chromium/agent_browser_android_product_policy.h"
  
  #include <initializer_list>
 +#include <memory>
 +#include <optional>
 +#include <string>
-+#include <utility>
+ #include <utility>
  
  #include "base/command_line.h"
  #include "base/test/gtest_util.h"
  #include "base/test/scoped_command_line.h"
 +#include "base/test/task_environment.h"
+ #include "mojo/public/cpp/bindings/pending_receiver.h"
+ #include "mojo/public/cpp/bindings/pending_remote.h"
 +#include "net/base/host_port_pair.h"
  #include "net/base/net_errors.h"
 +#include "net/base/network_anonymization_key.h"
@@ -83,7 +93,7 @@ diff --git a/content/shell/android/agent_browser_product/chromium/agent_browser_
  #include "services/network/public/mojom/network_context.mojom.h"
  #include "testing/gtest/include/gtest/gtest.h"
  #include "url/gurl.h"
-@@ -237,5 +250,128 @@
+@@ -407,5 +419,169 @@
        ConfigureAgentBrowserProductNetworkContextParams(params.get()));
  }
  
@@ -141,8 +151,6 @@ diff --git a/content/shell/android/agent_browser_product/chromium/agent_browser_
 +  command->AppendSwitchASCII("host-resolver-rules", "MAP * 192.0.2.42");
 +  command->AppendSwitchASCII("host-rules", "MAP * 192.0.2.43");
 +  command->AppendSwitchASCII(network::kAgentBrowserLocalDnsPolicySwitch, "off");
-+  command->AppendSwitchASCII(network::kAgentBrowserProxyBootstrapHostSwitch,
-+                             "*.d.ping0.cc");
 +  auto params = network::mojom::NetworkContextParams::New();
 +  ConfigureAgentBrowserProductNetworkContextParams(params.get());
 +  ASSERT_TRUE(params->agent_browser_local_dns_policy);
@@ -194,12 +202,15 @@ diff --git a/content/shell/android/agent_browser_product/chromium/agent_browser_
 +
 +TEST(AgentBrowserProductDnsDeathTest, RejectsExistingDnsPolicyOwner) {
 +  base::test::ScopedCommandLine scoped_command;
-+  *scoped_command.GetProcessCommandLine() = ProxyCommand("http://proxy.example:80");
-+  auto params = network::mojom::NetworkContextParams::New();
-+  params->agent_browser_local_dns_policy =
-+      network::mojom::AgentBrowserLocalDnsPolicy::New();
-+  EXPECT_CHECK_DEATH(
-+      ConfigureAgentBrowserProductNetworkContextParams(params.get()));
++  for (bool direct : {false, true}) {
++    *scoped_command.GetProcessCommandLine() =
++        direct ? DirectCommand() : ProxyCommand("http://proxy.example:80");
++    auto params = network::mojom::NetworkContextParams::New();
++    params->agent_browser_local_dns_policy =
++        network::mojom::AgentBrowserLocalDnsPolicy::New();
++    EXPECT_CHECK_DEATH(
++        ConfigureAgentBrowserProductNetworkContextParams(params.get()));
++  }
 +}
 +
 +TEST(AgentBrowserProductDnsDeathTest, RejectsWildcardProxyBootstrap) {
@@ -208,6 +219,46 @@ diff --git a/content/shell/android/agent_browser_product/chromium/agent_browser_
 +  auto params = network::mojom::NetworkContextParams::New();
 +  EXPECT_CHECK_DEATH(
 +      ConfigureAgentBrowserProductNetworkContextParams(params.get()));
++}
++
++TEST(AgentBrowserProductDnsTest, ExplicitDirectUsesNormalResolverWithoutDenyPolicy) {
++  base::test::TaskEnvironment task_environment;
++  base::test::ScopedCommandLine scoped_command;
++  *scoped_command.GetProcessCommandLine() = DirectCommand();
++  auto params = network::mojom::NetworkContextParams::New();
++  ConfigureAgentBrowserProductNetworkContextParams(params.get());
++  ASSERT_TRUE(params->initial_proxy_config.has_value());
++  EXPECT_TRUE(params->initial_proxy_config->value().Equals(net::ProxyConfig::CreateDirect()));
++  EXPECT_FALSE(params->agent_browser_local_dns_policy);
++  const auto rules = network::BuildAgentBrowserHostMappingRules(
++      params->agent_browser_local_dns_policy.get());
++  EXPECT_TRUE(rules.empty());
++  auto inner = std::make_unique<net::MockHostResolver>();
++  auto state = inner->state();
++  inner->set_synchronous_mode(true);
++  // Synthetic backend only: no product DNS substitution or real-network proof.
++  inner->rules()->AddRule("*", "192.0.2.42");
++  net::MappedHostResolver resolver(std::move(inner));
++  resolver.SetRulesFromString(rules);
++  auto request = resolver.CreateRequest(
++      net::HostPortPair("r-fresh.d.ping0.cc", 443), net::NetworkAnonymizationKey(),
++      net::handles::kInvalidNetworkHandle, net::NetLogWithSource(), std::nullopt);
++  net::TestCompletionCallback result;
++  EXPECT_EQ(net::OK, request->Start(result.callback()));
++  EXPECT_EQ(1u, state->num_resolve());
++}
++
++TEST(AgentBrowserProductDnsDeathTest, ProxyBootstrapFlagIsNotAnAlternativeOwner) {
++  base::test::ScopedCommandLine scoped_command;
++  for (bool direct : {false, true}) {
++    *scoped_command.GetProcessCommandLine() =
++        direct ? DirectCommand() : ProxyCommand("http://proxy.example:80");
++    scoped_command.GetProcessCommandLine()->AppendSwitchASCII(
++        network::kAgentBrowserProxyBootstrapHostSwitch, "*.d.ping0.cc");
++    auto params = network::mojom::NetworkContextParams::New();
++    EXPECT_CHECK_DEATH(
++        ConfigureAgentBrowserProductNetworkContextParams(params.get()));
++  }
 +}
 +
  }  // namespace

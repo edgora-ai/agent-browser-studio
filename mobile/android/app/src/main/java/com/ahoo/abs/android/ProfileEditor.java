@@ -75,7 +75,17 @@ final class ProfileEditor {
         name.setFilters(new android.text.InputFilter[]{new android.text.InputFilter.LengthFilter(80)});
         TextView nameError = errorLine(activity, nameCard);
 
-        LinearLayout proxyCard = card(activity, content, "代理");
+        LinearLayout proxyCard = card(activity, content, "网络连接");
+        boolean baselineDirect = original == null || original.isDirect();
+        CheckBox useDirect = new CheckBox(activity);
+        useDirect.setText("不使用代理（直连）");
+        useDirect.setTextSize(15);
+        useDirect.setMinHeight(Ui.dp(activity, 48));
+        useDirect.setTextColor(Ui.INK);
+        useDirect.setChecked(baselineDirect);
+        proxyCard.addView(useDirect, new LinearLayout.LayoutParams(-1, -2));
+        TextView directNote = hint(activity, "使用设备当前网络（包括系统 VPN），网站可看到该网络的公网 IP；不会提供代理出口隔离。");
+        proxyCard.addView(directNote);
         TextView proxySummary = new TextView(activity);
         proxySummary.setTextSize(14);
         proxySummary.setTextColor(Ui.INK);
@@ -86,7 +96,7 @@ final class ProfileEditor {
         Button newProxy = styledButton(activity, "新建代理", false);
         addActionPair(activity, proxyRow, pickProxy, newProxy);
         proxyCard.addView(proxyRow, actionParams(activity));
-        Button revertProxy = styledButton(activity, "恢复使用当前代理", false);
+        Button revertProxy = styledButton(activity, "恢复原网络设置", false);
         proxyCard.addView(revertProxy, actionParams(activity));
         revertProxy.setVisibility(View.GONE);
         TextView proxyError = errorLine(activity, proxyCard);
@@ -215,41 +225,66 @@ final class ProfileEditor {
             ManagedProxy selected = selectedProxy[0];
             String text;
             String note = "";
-            if (selected != null) {
+            if (useDirect.isChecked()) {
+                text = "已选择：不使用代理（直连）";
+                if (original != null && original.hasProxyCredentials()) {
+                    note = "保存后将解除代理关联并清除该环境已存的代理凭据。";
+                }
+            } else if (selected != null) {
                 text = "已选择：" + selected.name + " · " + endpoint(selected);
-                revertProxy.setVisibility(View.VISIBLE);
-                if (original != null && original.proxy.hasCredentials && boundProxyId == null) {
+                if (original != null && original.hasProxyCredentials() && boundProxyId == null) {
                     note = "保存后将改用所选管理代理并清除已存凭据（内核不支持认证）。";
                 }
-            } else if (original == null) {
-                text = "尚未选择代理（必填）";
-                revertProxy.setVisibility(View.GONE);
+            } else if (original == null || original.isDirect()) {
+                text = "请选择代理，或启用“不使用代理（直连）”";
             } else {
                 text = boundProxy != null
                         ? "当前：" + boundProxy.name + " · " + original.proxy.scheme.name() + " " + original.proxy.authority()
                         : "当前：旧版内嵌代理 " + original.proxy.scheme.name() + " " + original.proxy.authority()
-                                + (original.proxy.hasCredentials ? "（保存时保留已存凭据）" : "");
-                revertProxy.setVisibility(View.GONE);
+                                + (original.hasProxyCredentials() ? "（保存时保留已存凭据）" : "");
+                if (boundProxyId != null && boundProxy == null) {
+                    note = "原代理资源已不存在；请重新选择代理，或明确启用直连。不会自动转为直连。";
+                }
             }
+            directNote.setVisibility(useDirect.isChecked() ? View.VISIBLE : View.GONE);
+            revertProxy.setVisibility(useDirect.isChecked() != baselineDirect
+                    || (!useDirect.isChecked() && selected != null) ? View.VISIBLE : View.GONE);
             proxySummary.setText(text);
             legacyNote.setText(note);
             legacyNote.setVisibility(note.isEmpty() ? View.GONE : View.VISIBLE);
         };
+        useDirect.setOnCheckedChangeListener((button, checked) -> {
+            setError(proxyError, "");
+            updateProxySummary.run();
+        });
         pickProxy.setOnClickListener(button -> {
             Ui.haptic(button);
             try {
                 showProxyPicker(activity, repository,
-                        proxy -> { selectedProxy[0] = proxy; updateProxySummary.run(); });
+                        proxy -> {
+                            selectedProxy[0] = proxy;
+                            useDirect.setChecked(false);
+                            setError(proxyError, "");
+                            updateProxySummary.run();
+                        });
             } catch (RuntimeException failure) { showFailure(activity, failure); }
         });
         newProxy.setOnClickListener(button -> {
             Ui.haptic(button);
             ProxyEditor.showWithResult(activity, repository, null, proxy -> {
                 selectedProxy[0] = proxy;
+                useDirect.setChecked(false);
+                setError(proxyError, "");
                 updateProxySummary.run();
             });
         });
-        revertProxy.setOnClickListener(button -> { Ui.haptic(button); selectedProxy[0] = null; updateProxySummary.run(); });
+        revertProxy.setOnClickListener(button -> {
+            Ui.haptic(button);
+            selectedProxy[0] = null;
+            useDirect.setChecked(baselineDirect);
+            setError(proxyError, "");
+            updateProxySummary.run();
+        });
         zonePreset.setOnClickListener(button -> { Ui.haptic(button); showTimezonePicker(activity, id -> zone.setText(id)); });
         langPreset.setOnClickListener(button -> { Ui.haptic(button); showLanguagePicker(activity, tag -> appendLanguage(languages, tag)); });
         updateProxySummary.run();
@@ -263,7 +298,8 @@ final class ProfileEditor {
         BooleanSupplier dirty = () -> changed(name, baselineName) || changed(zone, baselineZone)
                 || changed(languages, baselineLanguages) || changed(country, baselineCountry)
                 || changed(model, baselineModel) || declaredModel.isChecked() != baselineDeclared
-                || selectedProxy[0] != null;
+                || useDirect.isChecked() != baselineDirect
+                || (!useDirect.isChecked() && selectedProxy[0] != null);
 
         TextView formError = errorLine(activity, null);
         Dialog[] holder = new Dialog[1];
@@ -287,8 +323,9 @@ final class ProfileEditor {
                 valid = false;
                 firstError = name;
             }
-            if (original == null && selectedProxy[0] == null) {
-                setError(proxyError, "请选择一个管理的代理");
+            if (!useDirect.isChecked() && selectedProxy[0] == null
+                    && (original == null || original.isDirect())) {
+                setError(proxyError, "请选择代理，或启用“不使用代理（直连）”");
                 valid = false;
                 if (firstError == null) firstError = pickProxy;
             }
@@ -355,7 +392,11 @@ final class ProfileEditor {
                     ? ProfileSpec.DeviceMode.DECLARED_ANDROID : ProfileSpec.DeviceMode.NATIVE;
             String modelValue = model.getText().toString().trim();
             try {
-                if (original == null) {
+                if (useDirect.isChecked()) {
+                    ProfileSpec candidate = new ProfileSpec(original == null ? UUID.randomUUID().toString() : original.id,
+                            revision, nameValue, null, countryValue, zoneValue, tags, mode, modelValue, "");
+                    repository.saveProfileWithoutProxy(candidate, original == null ? null : original.revision);
+                } else if (original == null) {
                     ManagedProxy selected = selectedProxy[0];
                     ProfileSpec candidate = new ProfileSpec(UUID.randomUUID().toString(), revision, nameValue,
                             selected.proxy, countryValue, zoneValue, tags, mode, modelValue, "");

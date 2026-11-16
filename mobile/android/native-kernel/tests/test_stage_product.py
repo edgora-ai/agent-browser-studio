@@ -244,6 +244,132 @@ class ProductStageTests(unittest.TestCase):
                         self.assertEqual(result.returncode, 0, result.stdout.decode(errors="replace"))
                         self.assertEqual(target.read_bytes(), expected_after)
 
+    def test_network_mode_dns_and_capture_overlays_roundtrip_without_fuzz(self):
+        patch_tool = shutil.which("patch")
+        self.assertIsNotNone(patch_tool, "patch is required for executable overlay regression")
+        repo = stage.ANDROID.parent.parent
+        native = stage.ANDROID / "native-kernel/chromium"
+        prefix = "content/shell/android/agent_browser_product/chromium/"
+        originals = {}
+        for name in ("agent_browser_android_product_policy.h",
+                     "agent_browser_android_product_policy.cc",
+                     "agent_browser_android_product_policy_unittest.cc"):
+            originals[prefix + name] = stage.read_source(native / name)
+        dns_patch = stage.read_source(native / "product-dns-release.patch")
+        capture_patch = stage.read_source(repo / "patches/chromium/patches/0063-android-product-capture-per-type.patch")
+        # The policy source is actual selected product code. For the unrelated
+        # shell delegate, use exact patch preimage hunks with neutral line gaps;
+        # this proves dependent -F0 patching, not a full Chromium compile/device run.
+        shell = []
+        shell_diff = capture_patch.decode().split("--- a/content/shell/browser/shell.cc\n", 1)[1]
+        for line in shell_diff.splitlines(keepends=True):
+            if line.startswith("@@ "):
+                start = int(line.split(" ")[1][1:].split(",")[0])
+                self.assertLessEqual(len(shell), start - 1)
+                shell.extend(["\n"] * (start - 1 - len(shell)))
+            elif line.startswith((" ", "-")) and not line.startswith("---"):
+                shell.append(line[1:])
+        originals["content/shell/browser/shell.cc"] = "".join(shell).encode()
+        work = self.root / "network-mode-overlays"
+        for relative, data in originals.items():
+            target = work / relative
+            target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            target.write_bytes(data)
+
+        def apply(data, reverse=False, dry=False):
+            options = ["--reverse" if reverse else "--forward"]
+            if dry:
+                options.append("--dry-run")
+            result = subprocess.run([patch_tool, "-p1", "-F", "0", "--batch", *options],
+                                    input=data, cwd=work, stdout=subprocess.PIPE,
+                                    stderr=subprocess.STDOUT, timeout=15, check=False)
+            self.assertEqual(result.returncode, 0, result.stdout.decode(errors="replace"))
+            self.assertNotIn(b"fuzz", result.stdout.lower())
+
+        def snapshot():
+            return {name: (work / name).read_bytes() for name in originals}
+
+        apply(dns_patch, dry=True)
+        self.assertEqual(snapshot(), originals)
+        apply(dns_patch)
+        dns_state = snapshot()
+        apply(capture_patch, dry=True)
+        self.assertEqual(snapshot(), dns_state)
+        apply(capture_patch)
+        final_state = snapshot()
+        cc = final_state[prefix + "agent_browser_android_product_policy.cc"].decode()
+        startup = cc.split("void VerifyAgentBrowserProductPreflightStartup()", 1)[1].split(
+            "bool ParseAgentBrowserProductProxyConfig", 1)[0]
+        self.assertIn("!product_network_mode", startup)
+        self.assertIn("if (product_profile || product_network_mode)", startup)
+        self.assertIn("CHECK(ParseAgentBrowserProductNetworkConfig(command))", startup)
+        for forbidden in ("no-sandbox", "disable-web-security", "ignore-certificate-errors",
+                          "remote-debugging-port", "remote-debugging-pipe", "remote-debugging-socket-name"):
+            self.assertIn('"' + forbidden + '"', startup)
+        parser = cc.split("bool ParseAgentBrowserProductNetworkConfig", 1)[1].split(
+            "void ConfigureAgentBrowserProductNetworkContextParams", 1)[0]
+        self.assertIn("if (!command.HasSwitch(kAgentBrowserProductProfileSwitch))", parser)
+        legacy = parser.split("if (!command.HasSwitch(kAgentBrowserProductNetworkModeSwitch))", 1)[1].split(
+            "} else {", 1)[0]
+        self.assertIn("if (!ParseAgentBrowserProductProxyConfig(command, &config))", legacy)
+        self.assertNotIn("CreateDirect", legacy)
+        self.assertIn('"direct"', parser)
+        for conflict in ('entry.first.find("proxy")', 'entry.first == "host-resolver-rules"',
+                         'entry.first == "host-rules"', 'entry.first == "agent-browser-local-dns-policy"'):
+            self.assertIn(conflict, parser)
+        self.assertIn("config = net::ProxyConfig::CreateDirect()", parser)
+        strict = cc.split("bool ParseAgentBrowserProductProxyConfig", 1)[1].split(
+            "bool ParseAgentBrowserProductNetworkConfig", 1)[0]
+        self.assertNotIn("CreateDirect", strict)
+        self.assertIn("rules.type = net::ProxyConfig::ProxyRules::Type::PROXY_LIST", strict)
+        self.assertIn("rules.single_proxies.SetSingleProxyServer(server)", strict)
+        network = cc.split("void ConfigureAgentBrowserProductNetworkContextParams", 1)[1].split(
+            "bool IsAgentBrowserProductPreflightUrlAllowed", 1)[0]
+        self.assertIn("CHECK(ParseAgentBrowserProductNetworkConfig(command, &config, &mode))", network)
+        branch = network.index("if (mode == AgentBrowserProductNetworkMode::kDirect)")
+        for owner in ("initial_proxy_config", "proxy_config_client_receiver.is_valid()",
+                      "proxy_config_poller_client.is_valid()", "initial_custom_proxy_config",
+                      "custom_proxy_config_client_receiver.is_valid()", "agent_browser_local_dns_policy"):
+            self.assertLess(network.index("CHECK(!params->" + owner + ")"), branch)
+        direct = cc.index("if (mode == AgentBrowserProductNetworkMode::kDirect)")
+        deny = cc.index("auto dns_policy = network::mojom::AgentBrowserLocalDnsPolicy::New();")
+        self.assertLess(cc.index("CHECK(!params->agent_browser_local_dns_policy)"), direct)
+        self.assertLess(direct, cc.index("return;", direct))
+        self.assertLess(cc.index("return;", direct), deny)
+        self.assertIn("mode=normal no-proxy-protection=1", cc[direct:deny])
+        self.assertIn("kProductDirectTrafficAnnotation", cc[direct:deny])
+        self.assertIn("kProxyLocalDnsDeny", cc[deny:])
+        self.assertIn("dns_policy->proxy_bootstrap_host = chain.First().GetHost()", cc[deny:])
+        self.assertIn("audio_granted = it->second.audio && OsCaptureGrantedViaJava(true, false)", cc)
+        self.assertIn("video_granted = it->second.video && OsCaptureGrantedViaJava(false, true)", cc)
+        unit = final_state[prefix + "agent_browser_android_product_policy_unittest.cc"].decode()
+        for name in ("ExplicitDirectIsNotAutomaticOrSystem", "AbsentModeStillRequiresStrictProxy",
+                     "DirectRejectsEveryProxyAndStaleDnsControl", "BothModesRejectExistingInitialOwner",
+                     "BothModesRejectForeignUpdateAndCustomOwners", "RejectsExistingDnsPolicyOwner",
+                     "DnsOnlyTargetsNeverReachTheResolverBackend",
+                     "ExplicitDirectUsesNormalResolverWithoutDenyPolicy"):
+            self.assertIn(name, unit)
+        self.assertIn("result.Fallback(net::ERR_PROXY_CONNECTION_FAILED", unit)
+        # Retain exact small poststates for a builder to compare, never execute.
+        poststates = self.root / "network-mode-poststates"
+        poststates.mkdir(mode=0o700)
+        manifest = {"proof": "SOURCE_AND_SYNTHETIC_PATCH_ROUNDTRIP_ONLY",
+                    "nativeExecution": "NOT_RUN", "files": {}}
+        for name, data in final_state.items():
+            if name.startswith(prefix):
+                (poststates / Path(name).name).write_bytes(data)
+                manifest["files"][Path(name).name] = hashlib.sha256(data).hexdigest()
+        (poststates / "sha256.json").write_text(json.dumps(manifest, indent=2) + "\n")
+        print("Network-mode poststates: " + str(poststates))
+        apply(capture_patch, reverse=True, dry=True)
+        self.assertEqual(snapshot(), final_state)
+        apply(capture_patch, reverse=True)
+        self.assertEqual(snapshot(), dns_state)
+        apply(dns_patch, reverse=True, dry=True)
+        self.assertEqual(snapshot(), dns_state)
+        apply(dns_patch, reverse=True)
+        self.assertEqual(snapshot(), originals)
+
     def test_generated_gni_has_exact_flat_asset_names_and_no_source_globs(self):
         rows = stage.collect_inputs()
         gni = stage.sources_gni(rows).decode()

@@ -319,7 +319,7 @@ public final class MainActivity extends Activity {
         if (selected == 0) {
             List<ProfileSpec> visible = new ArrayList<>();
             for (ProfileSpec profile : profiles) {
-                if (matches(query, profile.name, profile.proxy.authority(), profile.timeZoneId,
+                if (matches(query, profile.name, routeLabel(profile), profile.timeZoneId,
                         String.join(",", profile.languageTags))) visible.add(profile);
             }
             if (sortByName) {
@@ -348,7 +348,7 @@ public final class MainActivity extends Activity {
             LinearLayout empty = Ui.emptyState(this,
                     query.isEmpty() ? (selected == 0 ? "创建你的第一个环境" : "把代理集中管理") : "没有匹配结果",
                     query.isEmpty() ? (selected == 0
-                            ? "环境拥有独立的时区、语言与站点数据。从选择一个代理开始。"
+                            ? "环境拥有独立的时区、语言与站点数据，可选择直连或代理出口。"
                             : "添加一次代理，即可供多个环境复用。保存不代表出口实测通过。")
                             : "试试其他名称、地址或时区关键词。");
             if (!query.isEmpty()) {
@@ -373,10 +373,16 @@ public final class MainActivity extends Activity {
                 && active.launch.profile.id.equals(profile.id);
     }
 
+    /** Route labels never infer direct from a missing catalog reference. */
+    private static String routeLabel(ProfileSpec profile) {
+        return profile.isDirect() ? "不使用代理（直连）"
+                : profile.proxy.scheme.name() + " · " + profile.proxy.authority();
+    }
+
     /** Which non-name field matched, for a small reason chip on filtered results. */
     private String matchReason(String query, ProfileSpec profile) {
         if (profile.name.toLowerCase(Locale.ROOT).contains(query)) return null;
-        if (profile.proxy.authority().toLowerCase(Locale.ROOT).contains(query)) return "出口匹配";
+        if (routeLabel(profile).toLowerCase(Locale.ROOT).contains(query)) return "出口匹配";
         if (profile.timeZoneId.toLowerCase(Locale.ROOT).contains(query)) return "时区匹配";
         if (String.join(",", profile.languageTags).toLowerCase(Locale.ROOT).contains(query)) return "语言匹配";
         return null;
@@ -457,7 +463,7 @@ public final class MainActivity extends Activity {
                 || active.state == BootstrapStore.State.REVOKED);
         String ownedSession = active == null ? null : active.launch.sessionId;
         LinearLayout card = listRow(running || exiting || launching);
-        String proxyName = profile.proxy.scheme.name() + " · " + profile.proxy.authority();
+        String proxyName = routeLabel(profile);
         for (ManagedProxy proxy : proxies) {
             if (proxy.id.equals(proxyLinks.get(profile.id))) { proxyName = proxy.name; break; }
         }
@@ -520,16 +526,7 @@ public final class MainActivity extends Activity {
     private void createItem() {
         if (repository == null || !runtimeKnown) return;
         if (selected == 1) ProxyEditor.show(this, repository, null, this::reload);
-        else if (proxies.isEmpty()) {
-            Ui.Sheet sheet = Ui.Sheet.create(this, "先添加一个代理",
-                    "环境从代理资源中选择出口，添加后可供多个环境复用。");
-            sheet.actions("取消", null, "添加代理", () -> {
-                sheet.dialog().dismiss();
-                selected = 1;
-                render();
-                ProxyEditor.show(this, repository, null, this::reload);
-            }).show();
-        } else ProfileEditor.show(this, repository, null, this::reload);
+        else ProfileEditor.show(this, repository, null, this::reload);
     }
 
     private void openProfile(ProfileSpec profile) {
@@ -572,12 +569,13 @@ public final class MainActivity extends Activity {
             }
             return true;
         });
-        menu.getMenu().add("复制为新环境").setEnabled(runtimeKnown && !profile.proxy.hasCredentials).setOnMenuItemClickListener(item -> {
+        menu.getMenu().add("复制为新环境").setEnabled(runtimeKnown && !profile.hasProxyCredentials()).setOnMenuItemClickListener(item -> {
             duplicate(profile); return true;
         });
         menu.getMenu().add("查看配置摘要").setOnMenuItemClickListener(item -> {
             Ui.Sheet sheet = Ui.Sheet.create(this, profile.name, "环境配置摘要");
-            sheet.text("名称：" + profile.name + "\n代理：" + profile.proxy.proxyRule()
+            sheet.text("名称：" + profile.name + "\n网络：" + (profile.isDirect()
+                    ? "不使用代理（直连），使用设备当前网络（包括系统 VPN）的公网 IP" : profile.proxy.proxyRule())
                     + "\n时区：" + profile.timeZoneId + "\n语言：" + String.join(", ", profile.languageTags)
                     + "\n地区：" + (profile.countryCode.isEmpty() ? "未设置" : profile.countryCode + "（手动）")
                     + "\n型号：" + profile.deviceModel + "\n独立环境 ID：" + profile.id);
@@ -614,7 +612,9 @@ public final class MainActivity extends Activity {
             ProfileSpec copy = new ProfileSpec(UUID.randomUUID().toString(), UUID.randomUUID().toString(), name,
                     original.proxy, original.countryCode, original.timeZoneId, original.languageTags,
                     original.deviceMode, original.deviceModel, "");
-            repository.saveProfileWithProxy(copy, null, repository.proxyIdForProfile(original.id)); reload();
+            if (copy.isDirect()) repository.saveProfileWithoutProxy(copy, null);
+            else repository.saveProfileWithProxy(copy, null, repository.proxyIdForProfile(original.id));
+            reload();
             Ui.snackbar(this, "已创建副本 “" + copy.name + "”");
         } catch (RuntimeException failure) { showError(failure); }
     }

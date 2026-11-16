@@ -183,17 +183,22 @@ public final class NativeBrowserApplication extends Application implements Brows
         long fingerprintSeed = loadOrCreateFingerprintSeed(launch.directorySuffix(), seedContext);
         String[] timezone = frozen.commandLine();
         // Route A: ordinary browsing is enabled; the preflight-only switch is no longer forced.
-        String[] arguments = new String[]{timezone[0], timezone[1], timezone[2],
-                "--agent-browser-product-profile",
-                "--proxy-server=" + launch.profile.proxy.proxyRule(), "--proxy-bypass-list=<-loopback>",
-                "--host-resolver-rules=" + launch.profile.proxy.hostResolverRules(),
-                "--agent-browser-noise-seeds=" + fingerprintConfigPayload(fingerprintSeed),
+        List<String> arguments = new ArrayList<>(List.of(timezone[0], timezone[1], timezone[2],
+                "--agent-browser-product-profile"));
+        if (launch.profile.isDirect()) {
+            arguments.add("--agent-browser-product-network-mode=direct");
+        } else {
+            arguments.add("--proxy-server=" + launch.profile.proxy.proxyRule());
+            arguments.add("--proxy-bypass-list=<-loopback>");
+            arguments.add("--host-resolver-rules=" + launch.profile.proxy.hostResolverRules());
+        }
+        arguments.addAll(List.of("--agent-browser-noise-seeds=" + fingerprintConfigPayload(fingerprintSeed),
                 "--disable-quic", "--use-mobile-user-agent",
                 "--disable-features=ReduceAcceptLanguage,ReduceAcceptLanguageHTTP",
                 "--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
                 "--lang=" + launch.profile.languageTags.get(0),
-                "--accept-lang=" + String.join(",", launch.profile.languageTags)};
-        CommandLine.init(arguments);
+                "--accept-lang=" + String.join(",", launch.profile.languageTags)));
+        CommandLine.init(arguments.toArray(new String[0]));
         verifyFrozenCommandLineFor(seedContext);
         Log.i("AbsNativeBootstrap", "ABS_ANDROID_TIMEZONE_V1 frozen=1 input_sha256="
                 + frozen.inputSha256() + " pid=" + android.os.Process.myPid()
@@ -215,9 +220,7 @@ public final class NativeBrowserApplication extends Application implements Brows
                 || command.hasSwitch("agent-browser-product-preflight")
                 || !command.hasSwitch(NativeTimezoneLaunchConfig.REQUIRED_SWITCH)
                 || !frozen.encoded().equals(command.getSwitchValue(NativeTimezoneLaunchConfig.CONFIG_SWITCH))
-                || !launch.profile.proxy.proxyRule().equals(command.getSwitchValue("proxy-server"))
-                || !"<-loopback>".equals(command.getSwitchValue("proxy-bypass-list"))
-                || !launch.profile.proxy.hostResolverRules().equals(command.getSwitchValue("host-resolver-rules"))
+                || !frozenNetworkMatches(command)
                 || !fingerprintConfigPayload(
                 readPersistedFingerprintSeed(launch.directorySuffix(), seedContext))
                 .equals(command.getSwitchValue("agent-browser-noise-seeds"))
@@ -234,6 +237,27 @@ public final class NativeBrowserApplication extends Application implements Brows
                 "run-web-tests", "remote-debugging-port", "remote-debugging-pipe", "remote-debugging-socket-name"}) {
             if (command.hasSwitch(forbidden)) throw new IllegalStateException("NATIVE_UNSAFE_COMMAND_LINE");
         }
+    }
+
+    /** The explicit mode is frozen too: missing proxy fields must never imply direct. */
+    private boolean frozenNetworkMatches(CommandLine command) {
+        if (!launch.profile.isDirect()) {
+            return !command.hasSwitch("agent-browser-product-network-mode")
+                    && launch.profile.proxy.proxyRule().equals(command.getSwitchValue("proxy-server"))
+                    && "<-loopback>".equals(command.getSwitchValue("proxy-bypass-list"))
+                    && launch.profile.proxy.hostResolverRules().equals(command.getSwitchValue("host-resolver-rules"));
+        }
+        if (!command.hasSwitch("agent-browser-product-network-mode")
+                || !"direct".equals(command.getSwitchValue("agent-browser-product-network-mode"))) {
+            return false;
+        }
+        for (String forbidden : new String[]{"proxy-server", "proxy-bypass-list", "no-proxy-server",
+                "proxy-pac-url", "proxy-auto-detect", "use-system-proxy-resolver", "winhttp-proxy-resolver",
+                "proxy-resolver-v8-tracing", "host-resolver-rules", "host-rules",
+                "agent-browser-local-dns-policy", "agent-browser-proxy-bootstrap-host"}) {
+            if (command.hasSwitch(forbidden)) return false;
+        }
+        return true;
     }
 
     @Override

@@ -69,6 +69,19 @@ final class StoredProxies {
         }
     }
 
+    /** A missing link is corruption for an uncredentialed proxy, never an implicit direct mode. */
+    static void requireAssociation(SQLiteDatabase db, ProfileSpec profile) {
+        String proxyId = association(db, profile.id);
+        if (profile.isDirect() || profile.hasProxyCredentials()) {
+            if (proxyId != null) throw StoredProfiles.integrity();
+            return;
+        }
+        ManagedProxy selected = proxyId == null ? null : find(db, proxyId);
+        if (selected == null || !sameEndpoint(profile.proxy, selected.proxy)) {
+            throw StoredProfiles.integrity();
+        }
+    }
+
     static int usage(SQLiteDatabase db, String proxyId) {
         try (Cursor cursor = db.rawQuery("SELECT count(*) FROM profile_proxy_links WHERE proxy_id=?",
                 new String[]{proxyId})) {
@@ -83,7 +96,7 @@ final class StoredProxies {
                 new String[]{proxyId})) {
             while (cursor.moveToNext()) {
                 ProfileSpec profile = StoredProfiles.find(db, cursor.getString(0));
-                if (profile == null || profile.proxy.hasCredentials) throw StoredProfiles.integrity();
+                if (profile == null || profile.isDirect() || profile.hasProxyCredentials()) throw StoredProfiles.integrity();
                 result.add(profile);
             }
         }
@@ -92,12 +105,12 @@ final class StoredProxies {
 
     /** Import only metadata: never rewrites existing profile revisions, launch snapshots or paths. */
     static void importLegacy(SQLiteDatabase db) {
-        for (ProfileSpec profile : StoredProfiles.list(db)) syncAssociation(db, profile);
+        for (ProfileSpec profile : StoredProfiles.snapshots(db)) syncAssociation(db, profile);
     }
 
     /** Also keeps legacy repository callers' inline edits and the catalog consistent atomically. */
     static void syncAssociation(SQLiteDatabase db, ProfileSpec profile) {
-        if (profile.proxy.hasCredentials) {
+        if (profile.isDirect() || profile.hasProxyCredentials()) {
             db.delete("profile_proxy_links", "profile_id=?", new String[]{profile.id});
             return;
         }

@@ -1,6 +1,12 @@
 # ABS Android — internal capability candidate
 
-## Current native-product checkpoint — 2026-11-16, r13z rev10
+## Current native-product checkpoint — 2026-11-16, r13z rev11 direct connections
+
+Read the [rev11 explicit-direct implementation, artifact and bounded phone evidence](../../docs/review/android-r13z-rev11-direct-2026-11-16.md). New profiles default to **不使用代理（直连）**; no proxy catalog entry is required. Existing HTTP/HTTPS/SOCKS5 proxy profiles remain explicit proxy profiles. This is implemented through storage and native Chromium, not just an editor checkbox or a Java-only APK repack: actual policy C++ compilation and native SOLINK completed.
+
+The original-release-signature, non-debuggable ARM64 candidate was update-installed with explicit authorization **without clearing data**; the installed APK SHA-256 was independently verified. On one newly created owned profile, default direct, missing-route validation, restore/save/reopen, direct→existing proxy→direct save/reopen, normal native startup, live HTTP rendering/button response and public HTTPS rendering passed. Detailed observations and limits are recorded in the handoff. Direct uses the device's current network **including any system VPN**, exposes that network's public IP and does not provide proxy exit isolation. It is not anonymity, DNS/leak-proof, full product or visual acceptance; nothing was published.
+
+## Previous native-product checkpoint — 2026-11-16, r13z rev10
 
 Read the [rev10 persistent-renderer fix and targeted physical-phone results](../../docs/review/android-r13z-rev10-closure-2026-11-16.md) first. The original-release-signature, non-debuggable ARM64 candidate was update-installed **without clearing data**, and its installed APK identity was independently verified. On two newly created, explicitly owned test tabs, six A/B alternations preserved both input drafts while timers advanced and buttons responded; the browser PID matched before and after the sequence. Actual A/B screenshots show the same ABS address/navigation chrome without a duplicate Chromium toolbar. Rev8 and rev9 were rejected for startup crashes, not successful runtime checkpoints. This is a **targeted runtime pass**, not full product, performance, accessibility or user-aesthetic acceptance; no release was published.
 

@@ -1,6 +1,16 @@
 # Android native Chromium product adapter
 
-## Current signed candidate — 2026-11-16, r13z rev10 targeted runtime pass
+## Current signed candidate — 2026-11-16, r13z rev11 explicit direct connections
+
+See the [rev11 implementation/build/device evidence and boundaries](../../../docs/review/android-r13z-rev11-direct-2026-11-16.md). Explicit `proxy: null` is a direct connection, not a malformed proxy or a fake DIRECT endpoint. The product emits `--agent-browser-product-network-mode=direct` only for direct profiles; native policy validates it and creates a direct NetworkContext with the ordinary resolver. Missing mode retains the strict legacy proxy path. Product ownership/debugging/sandbox/certificate/permission/QUIC/WebRTC restrictions remain in force.
+
+- Candidate: `.tmp-apk/proxy-fix-work/v13z-rev11/ABS-Browser-v1.0.0-r13z-rev11-arm64-release-candidate.apk`, **372355843 bytes**; APK SHA-256 `3e071863ee44fc85fd180970b7950a175f02aa29d26688dd7d49f18ab0e90997`.
+- Original signer SHA-256 `0f186dd70f80892e04443b7105842eef2ac9e641e9ecefa15015158317f1402f`; native library SHA-256 `0cab3e92d4c385c31dbb13b6c27c3d664365a4e139783c306cdd6776c56382de`.
+- Actual policy CXX and native SOLINK completed; the standalone C++ unit object compiled but **its tests were not executed**. Fresh exact stage and postbuild guards passed. This is not a Java-only repack.
+- Update-installed with authorization and no data clear; installed APK identity verified. The owned-profile direct↔proxy persistence roundtrip and fresh native startup passed on PKG110 / Android 16. Exact HTTP/HTTPS observations are in the handoff rather than inferred from compilation.
+- Direct includes the current device/VPN network and public IP; no anonymity, VPN bypass, exact-DNS, no-leak or full acceptance claim. This is a local candidate, not a published release. Rev10 renderer/tab fixes remain in the selected source; rev11 is not a rerun of the complete tab/lifecycle matrix.
+
+## Previous signed candidate — 2026-11-16, r13z rev10 targeted runtime pass
 
 See the [rev10 fix, exact artifact and physical-phone evidence](../../../docs/review/android-r13z-rev10-closure-2026-11-16.md). Rev10 retains the fixed manager-owned renderer and binds live `WebContents` before replaying cached video-overlay state; the stock embedding path is unchanged. Rev8 and rev9 were subsequently installed and rejected for startup crashes. Rev10 was update-installed **without clearing data** and started successfully through the normal product entry.
 

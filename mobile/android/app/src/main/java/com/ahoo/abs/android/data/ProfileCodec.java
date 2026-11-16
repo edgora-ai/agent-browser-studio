@@ -37,11 +37,15 @@ final class ProfileCodec {
     static String toJson(ProfileSpec value) {
         try {
             validateIdentity(value);
-            JSONObject proxy = new JSONObject();
-            proxy.put("scheme", value.proxy.scheme.name());
-            proxy.put("host", value.proxy.host);
-            proxy.put("port", value.proxy.port);
-            proxy.put("hasCredentials", value.proxy.hasCredentials);
+            Object proxy = JSONObject.NULL;
+            if (!value.isDirect()) {
+                JSONObject endpoint = new JSONObject();
+                endpoint.put("scheme", value.proxy.scheme.name());
+                endpoint.put("host", value.proxy.host);
+                endpoint.put("port", value.proxy.port);
+                endpoint.put("hasCredentials", value.proxy.hasCredentials);
+                proxy = endpoint;
+            }
             JSONArray languages = new JSONArray();
             for (String tag : value.languageTags) languages.put(tag);
             JSONObject json = new JSONObject();
@@ -68,13 +72,20 @@ final class ProfileCodec {
             if (encoded == null || encoded.length() > 65536) throw invalid();
             JSONObject json = new JSONObject(encoded);
             keys(json, PROFILE_KEYS);
-            JSONObject proxyJson = json.getJSONObject("proxy");
-            keys(proxyJson, PROXY_KEYS);
-            Object port = proxyJson.get("port");
-            Object authentication = proxyJson.get("hasCredentials");
-            if (!(port instanceof Integer) || !(authentication instanceof Boolean)) throw invalid();
-            ProxySpec proxy = new ProxySpec(ProxySpec.Scheme.valueOf(text(proxyJson, "scheme")),
-                    text(proxyJson, "host"), (Integer) port, (Boolean) authentication);
+            // keys() requires proxy. Only the explicit JSON null token selects direct;
+            // missing data, scalars and malformed objects must never become direct.
+            Object proxyValue = json.get("proxy");
+            ProxySpec proxy = null;
+            if (proxyValue != JSONObject.NULL) {
+                if (!(proxyValue instanceof JSONObject)) throw invalid();
+                JSONObject proxyJson = (JSONObject) proxyValue;
+                keys(proxyJson, PROXY_KEYS);
+                Object port = proxyJson.get("port");
+                Object authentication = proxyJson.get("hasCredentials");
+                if (!(port instanceof Integer) || !(authentication instanceof Boolean)) throw invalid();
+                proxy = new ProxySpec(ProxySpec.Scheme.valueOf(text(proxyJson, "scheme")),
+                        text(proxyJson, "host"), (Integer) port, (Boolean) authentication);
+            }
             JSONArray tags = json.getJSONArray("languageTags");
             List<String> languages = new ArrayList<>();
             // Storable must equal launchable: the editor, IdentityReport and the native launch
@@ -97,10 +108,10 @@ final class ProfileCodec {
     }
 
     private static void validateIdentity(ProfileSpec value) {
-        if (value == null || value.proxy == null || value.credentialRevision == null) throw invalid();
+        if (value == null || value.credentialRevision == null) throw invalid();
         StoreChecks.uuid(value.id);
         StoreChecks.uuid(value.revision);
-        if (value.proxy.hasCredentials) StoreChecks.uuid(value.credentialRevision);
+        if (value.hasProxyCredentials()) StoreChecks.uuid(value.credentialRevision);
         else if (!value.credentialRevision.isEmpty()) throw invalid();
         if (!value.fingerprint().matches("[0-9a-f]{64}")) throw invalid();
         if (!value.dataDirectorySuffix().matches("[a-zA-Z0-9_-]{1,128}")) throw invalid();

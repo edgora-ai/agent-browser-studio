@@ -14,7 +14,7 @@ import java.io.File;
 /** Database transactions and the controller's process-lifetime file lock are independent. */
 final class StoreDatabase implements AutoCloseable {
     static final String DEFAULT_NAME = "abs_profiles_v1.sqlite";
-    private static final int VERSION = 2;
+    private static final int VERSION = 3;
     private static final DatabaseErrorHandler FAIL_CORRUPTION = db -> {
         throw new StorageException(StorageException.Code.DATABASE_CORRUPT);
     };
@@ -205,11 +205,15 @@ final class StoreDatabase implements AutoCloseable {
 
         @Override
         public void onUpgrade(SQLiteDatabase db, int oldVersion, int newVersion) {
-            if (oldVersion != 1 || newVersion != 2) {
+            if ((oldVersion != 1 && oldVersion != 2) || newVersion != 3) {
                 throw new StorageException(StorageException.Code.UNSUPPORTED_SCHEMA);
             }
-            SchemaLoader.upgradeProxyCatalog(context, db);
-            StoredProxies.importLegacy(db);
+            if (oldVersion == 1) {
+                SchemaLoader.upgradeProxyCatalog(context, db);
+                StoredProxies.importLegacy(db);
+            }
+            // 2 -> 3 is a semantic fence only: older readers cannot open direct rows.
+            // Do not rewrite rows, hashes, revisions, credential envelopes or catalog links.
         }
 
         @Override

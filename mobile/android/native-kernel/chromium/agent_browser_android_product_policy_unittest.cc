@@ -4,10 +4,13 @@
 #include "content/shell/android/agent_browser_product/chromium/agent_browser_android_product_policy.h"
 
 #include <initializer_list>
+#include <utility>
 
 #include "base/command_line.h"
 #include "base/test/gtest_util.h"
 #include "base/test/scoped_command_line.h"
+#include "mojo/public/cpp/bindings/pending_receiver.h"
+#include "mojo/public/cpp/bindings/pending_remote.h"
 #include "net/base/net_errors.h"
 #include "net/base/proxy_chain.h"
 #include "net/base/proxy_server.h"
@@ -32,6 +35,173 @@ base::CommandLine ProxyCommand(const char* endpoint) {
   command.AppendSwitchASCII("force-webrtc-ip-handling-policy",
                             "disable_non_proxied_udp");
   return command;
+}
+
+base::CommandLine DirectCommand() {
+  base::CommandLine command(base::CommandLine::NO_PROGRAM);
+  command.AppendSwitch(kAgentBrowserProductProfileSwitch);
+  command.AppendSwitchASCII(kAgentBrowserProductNetworkModeSwitch, "direct");
+  command.AppendSwitch("disable-quic");
+  command.AppendSwitchASCII("force-webrtc-ip-handling-policy",
+                            "disable_non_proxied_udp");
+  return command;
+}
+
+TEST(AgentBrowserProductNetworkTest, ExplicitDirectIsNotAutomaticOrSystem) {
+  net::ProxyConfig config = net::ProxyConfig::CreateAutoDetect();
+  AgentBrowserProductNetworkMode mode = AgentBrowserProductNetworkMode::kProxy;
+  ASSERT_TRUE(ParseAgentBrowserProductNetworkConfig(DirectCommand(), &config,
+                                                    &mode));
+  EXPECT_EQ(AgentBrowserProductNetworkMode::kDirect, mode);
+  EXPECT_TRUE(config.Equals(net::ProxyConfig::CreateDirect()));
+  EXPECT_FALSE(config.HasAutomaticSettings());
+  EXPECT_FALSE(config.from_system());
+  EXPECT_FALSE(config.has_pac_url());
+  EXPECT_EQ(net::ProxyConfig::ProxyRules::Type::EMPTY, config.proxy_rules().type);
+  for (const char* url : {"http://example.test/", "https://example.test/",
+                          "ws://example.test/", "wss://example.test/",
+                          "http://localhost/", "http://127.0.0.1/"}) {
+    net::ProxyInfo result;
+    config.proxy_rules().Apply(GURL(url), &result);
+    EXPECT_TRUE(result.is_direct());
+  }
+  // Direct is deliberately a separate policy, not an endpoint the proxy parser accepts.
+  EXPECT_FALSE(ParseAgentBrowserProductProxyConfig(DirectCommand()));
+}
+
+TEST(AgentBrowserProductNetworkTest, AbsentModeStillRequiresStrictProxy) {
+  auto command = ProxyCommand("http://proxy.example:80");
+  net::ProxyConfig config;
+  AgentBrowserProductNetworkMode mode = AgentBrowserProductNetworkMode::kDirect;
+  ASSERT_TRUE(ParseAgentBrowserProductNetworkConfig(command, &config, &mode));
+  EXPECT_EQ(AgentBrowserProductNetworkMode::kProxy, mode);
+  EXPECT_FALSE(config.proxy_rules().single_proxies.First().is_direct());
+  command.RemoveSwitch("proxy-server");
+  EXPECT_FALSE(ParseAgentBrowserProductNetworkConfig(command));
+  command = base::CommandLine(base::CommandLine::NO_PROGRAM);
+  command.AppendSwitch(kAgentBrowserProductProfileSwitch);
+  EXPECT_FALSE(ParseAgentBrowserProductNetworkConfig(command));
+}
+
+TEST(AgentBrowserProductNetworkTest, RejectsMissingMarkerAndUnknownModeWithoutMutatingOutputs) {
+  auto command = DirectCommand();
+  command.RemoveSwitch(kAgentBrowserProductProfileSwitch);
+  EXPECT_FALSE(ParseAgentBrowserProductNetworkConfig(command));
+  for (const char* value : {"", "proxy", "DIRECT", " direct", "direct ",
+                            "system", "auto", "direct,proxy", "direct://"}) {
+    SCOPED_TRACE(value);
+    for (bool proxy : {false, true}) {
+      command = proxy ? ProxyCommand("http://proxy.example:80") : DirectCommand();
+      command.AppendSwitchASCII(kAgentBrowserProductNetworkModeSwitch, value);
+      net::ProxyConfig config = net::ProxyConfig::CreateAutoDetect();
+      const net::ProxyConfig original(config);
+      AgentBrowserProductNetworkMode mode = AgentBrowserProductNetworkMode::kProxy;
+      EXPECT_FALSE(ParseAgentBrowserProductNetworkConfig(command, &config, &mode));
+      EXPECT_TRUE(config.Equals(original));
+      EXPECT_EQ(AgentBrowserProductNetworkMode::kProxy, mode);
+    }
+  }
+}
+
+TEST(AgentBrowserProductNetworkTest, DirectRejectsEveryProxyAndStaleDnsControl) {
+  for (const char* name : {"proxy-server", "proxy-bypass-list", "no-proxy-server",
+                          "proxy-pac-url", "proxy-auto-detect",
+                          "use-system-proxy-resolver", "winhttp-proxy-resolver",
+                          "proxy-resolver-v8-tracing", "proxy-unknown",
+                          "host-resolver-rules", "host-rules",
+                          "agent-browser-local-dns-policy",
+                          "agent-browser-proxy-bootstrap-host"}) {
+    SCOPED_TRACE(name);
+    for (const char* value : {"", "stale"}) {
+      auto command = DirectCommand();
+      command.AppendSwitchASCII(name, value);
+      EXPECT_FALSE(ParseAgentBrowserProductNetworkConfig(command));
+    }
+  }
+  auto command = ProxyCommand("http://proxy.example:80");
+  command.AppendSwitchASCII(kAgentBrowserProductNetworkModeSwitch, "direct");
+  EXPECT_FALSE(ParseAgentBrowserProductNetworkConfig(command));
+}
+
+TEST(AgentBrowserProductNetworkTest, InstallsImmutableAnnotatedDirectInitialConfig) {
+  base::test::ScopedCommandLine scoped_command;
+  *scoped_command.GetProcessCommandLine() = DirectCommand();
+  auto params = network::mojom::NetworkContextParams::New();
+  ConfigureAgentBrowserProductNetworkContextParams(params.get());
+  ASSERT_TRUE(params->initial_proxy_config.has_value());
+  EXPECT_TRUE(params->initial_proxy_config->value().Equals(net::ProxyConfig::CreateDirect()));
+  EXPECT_FALSE(params->proxy_config_client_receiver.is_valid());
+  EXPECT_FALSE(params->proxy_config_poller_client.is_valid());
+  EXPECT_FALSE(params->initial_custom_proxy_config);
+  EXPECT_FALSE(params->custom_proxy_config_client_receiver.is_valid());
+  EXPECT_NE(net::ProxyConfigWithAnnotation::CreateDirect().traffic_annotation().unique_id_hash_code,
+            params->initial_proxy_config->traffic_annotation().unique_id_hash_code);
+  const auto direct_annotation = params->initial_proxy_config->traffic_annotation().unique_id_hash_code;
+  *scoped_command.GetProcessCommandLine() = ProxyCommand("http://proxy.example:80");
+  auto proxy_params = network::mojom::NetworkContextParams::New();
+  ConfigureAgentBrowserProductNetworkContextParams(proxy_params.get());
+  EXPECT_NE(direct_annotation,
+            proxy_params->initial_proxy_config->traffic_annotation().unique_id_hash_code);
+}
+
+TEST(AgentBrowserProductNetworkDeathTest, InvalidDirectCannotReachNetworkContext) {
+  base::test::ScopedCommandLine scoped_command;
+  auto* command = scoped_command.GetProcessCommandLine();
+  *command = DirectCommand();
+  command->RemoveSwitch(kAgentBrowserProductProfileSwitch);
+  auto params = network::mojom::NetworkContextParams::New();
+  EXPECT_CHECK_DEATH(ConfigureAgentBrowserProductNetworkContextParams(params.get()));
+  for (const char* value : {"", "proxy", "DIRECT", "unknown"}) {
+    *command = DirectCommand();
+    command->AppendSwitchASCII(kAgentBrowserProductNetworkModeSwitch, value);
+    EXPECT_CHECK_DEATH(ConfigureAgentBrowserProductNetworkContextParams(params.get()));
+  }
+  for (const char* name : {"proxy-server", "proxy-bypass-list", "no-proxy-server",
+                          "proxy-pac-url", "proxy-auto-detect", "use-system-proxy-resolver",
+                          "host-resolver-rules", "host-rules", "agent-browser-local-dns-policy",
+                          "agent-browser-proxy-bootstrap-host"}) {
+    *command = DirectCommand();
+    command->AppendSwitch(name);
+    EXPECT_CHECK_DEATH(ConfigureAgentBrowserProductNetworkContextParams(params.get()));
+  }
+}
+
+TEST(AgentBrowserProductNetworkDeathTest, BothModesRejectExistingInitialOwner) {
+  base::test::ScopedCommandLine scoped_command;
+  for (bool direct : {false, true}) {
+    *scoped_command.GetProcessCommandLine() =
+        direct ? DirectCommand() : ProxyCommand("http://proxy.example:80");
+    auto params = network::mojom::NetworkContextParams::New();
+    params->initial_proxy_config = net::ProxyConfigWithAnnotation::CreateDirect();
+    EXPECT_CHECK_DEATH(ConfigureAgentBrowserProductNetworkContextParams(params.get()));
+  }
+}
+
+TEST(AgentBrowserProductNetworkDeathTest, BothModesRejectForeignUpdateAndCustomOwners) {
+  base::test::ScopedCommandLine scoped_command;
+  for (bool direct : {false, true}) {
+    SCOPED_TRACE(direct);
+    *scoped_command.GetProcessCommandLine() =
+        direct ? DirectCommand() : ProxyCommand("http://proxy.example:80");
+    for (int owner = 0; owner < 4; ++owner) {
+      SCOPED_TRACE(owner);
+      auto params = network::mojom::NetworkContextParams::New();
+      mojo::PendingRemote<network::mojom::ProxyConfigClient> client;
+      mojo::PendingRemote<network::mojom::ProxyConfigPollerClient> poller;
+      mojo::PendingRemote<network::mojom::CustomProxyConfigClient> custom_client;
+      auto poller_receiver = poller.InitWithNewPipeAndPassReceiver();
+      ASSERT_TRUE(poller_receiver.is_valid());
+      if (owner == 0)
+        params->proxy_config_client_receiver = client.InitWithNewPipeAndPassReceiver();
+      else if (owner == 1)
+        params->proxy_config_poller_client = std::move(poller);
+      else if (owner == 2)
+        params->initial_custom_proxy_config = network::mojom::CustomProxyConfig::New();
+      else
+        params->custom_proxy_config_client_receiver = custom_client.InitWithNewPipeAndPassReceiver();
+      EXPECT_CHECK_DEATH(ConfigureAgentBrowserProductNetworkContextParams(params.get()));
+    }
+  }
 }
 
 TEST(AgentBrowserProductProxyTest, OneEndpointForAllSchemesIncludingLoopback) {

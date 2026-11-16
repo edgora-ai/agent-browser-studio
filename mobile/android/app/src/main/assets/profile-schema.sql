@@ -1,4 +1,5 @@
--- Version 2. SQLiteOpenHelper executes these exact statements, separated by markers.
+-- Version 3. SQLiteOpenHelper executes these exact statements, separated by markers.
+-- Version 2 -> 3 is a no-op semantic fence for explicit direct rows; no data rewrite.
 -- Version 1 upgrades execute only the two catalog tables below, then import existing endpoints.
 -- Python executes this original file with executescript; it is not an Android execution.
 -- @statement

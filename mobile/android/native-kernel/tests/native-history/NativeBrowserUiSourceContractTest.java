@@ -63,7 +63,7 @@ public final class NativeBrowserUiSourceContractTest {
         pageRestoreCover();
         popupAndHistorySemantics();
         overlaySafetyAndWarnings();
-        frozenProxyOnlyResolverChain();
+        frozenModeSpecificResolverChain();
         perProfileFingerprintSeeds();
         System.out.println(checks + " UI source-contract checks, " + failures + " failures");
         if (failures != 0) throw new AssertionError("Native browser UI source regressions: " + failures);
@@ -863,17 +863,41 @@ public final class NativeBrowserUiSourceContractTest {
         has(payload, "schemaVersion", "payload keeps the engine schema version");
     }
 
-    private static void frozenProxyOnlyResolverChain() {
+    private static void frozenModeSpecificResolverChain() {
         String freeze = method("NativeBrowserApplication", "freezeCommandLine");
+        has(freeze, "if (launch.profile.isDirect())", "direct requires explicit profile mode");
+        has(freeze, "arguments.add(\"--agent-browser-product-network-mode=direct\")",
+                "direct emits the native explicit mode rather than no-proxy-server");
+        before(freeze, "arguments.add(\"--agent-browser-product-network-mode=direct\")", "} else {",
+                "direct branch is distinct from proxy-only endpoint and DNS rules");
+        has(freeze, "\"--proxy-server=\" + launch.profile.proxy.proxyRule()",
+                "proxy branch retains the fixed endpoint");
         has(freeze, "\"--host-resolver-rules=\" + launch.profile.proxy.hostResolverRules()",
-                "frozen argv must carry proxy-exit-only resolver rules");
+                "proxy branch retains proxy-exit-only resolver rules");
         has(freeze, "verifyFrozenCommandLineFor(seedContext);",
                 "frozen argv is verified before native library load");
+        has(freeze, "\"--disable-quic\"", "both modes keep QUIC restriction");
+        has(freeze, "\"--force-webrtc-ip-handling-policy=disable_non_proxied_udp\"",
+                "both modes keep WebRTC non-proxied UDP restriction");
         String verify = method("NativeBrowserApplication", "verifyFrozenCommandLineFor");
-        has(verify, "launch.profile.proxy.hostResolverRules()",
-                "verification reads the same resolver rules builder as the freeze");
-        has(verify, "\"host-resolver-rules\"",
-                "resolver rules belong to the verified frozen switch set");
+        has(verify, "frozenNetworkMatches(command)", "freeze verification checks the mode-specific contract");
+        String network = method("NativeBrowserApplication", "frozenNetworkMatches");
+        has(network, "!launch.profile.isDirect()", "proxy verification does not dereference null direct proxy");
+        has(network, "!command.hasSwitch(\"agent-browser-product-network-mode\")",
+                "proxy cannot drift into explicit direct");
+        has(network, "launch.profile.proxy.hostResolverRules()",
+                "proxy verification reads the same resolver rules builder as the freeze");
+        has(network, "\"direct\".equals(command.getSwitchValue(\"agent-browser-product-network-mode\"))",
+                "direct verification requires the exact explicit value");
+        for (String rejected : List.of("proxy-server", "proxy-bypass-list", "no-proxy-server", "proxy-pac-url",
+                "proxy-auto-detect", "use-system-proxy-resolver", "host-resolver-rules", "host-rules",
+                "agent-browser-local-dns-policy", "agent-browser-proxy-bootstrap-host")) {
+            has(network, "\"" + rejected + "\"", "direct rejects stale or competing switch " + rejected);
+        }
+        String runtime = method("NativeBrowserRuntime", "<init>");
+        has(runtime, "launch.profile.hasProxyCredentials()", "native admission is safe for direct profiles");
+        has(runtime, "launch.profile.isDirect()", "initial runtime status is mode-aware");
+        has(source("NativeBrowserRuntime.java"), "不提供代理保护", "direct status does not claim fixed-proxy protection");
         String spec = method("ProxySpec", "hostResolverRules");
         has(spec, "MAP * ~NOTFOUND", "mapped names never reach the system resolver");
         has(spec, "EXCLUDE 127.0.0.1", "loopback proxy endpoints stay reachable");

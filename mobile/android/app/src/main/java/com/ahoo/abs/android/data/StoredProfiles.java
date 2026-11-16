@@ -16,6 +16,16 @@ final class StoredProfiles {
     private StoredProfiles() {}
 
     static ProfileSpec find(SQLiteDatabase db, String id) {
+        ProfileSpec profile = snapshot(db, id);
+        if (profile != null) {
+            StoredProxies.requireAssociation(db, profile);
+            envelope(db, profile);
+        }
+        return profile;
+    }
+
+    /** Raw snapshot for a migration or an in-flight writer; not an external read boundary. */
+    static ProfileSpec snapshot(SQLiteDatabase db, String id) {
         try (Cursor cursor = db.rawQuery(SELECT + " WHERE id=?", new String[]{id})) {
             if (!cursor.moveToFirst()) return null;
             ProfileSpec profile = decode(cursor);
@@ -25,6 +35,16 @@ final class StoredProfiles {
     }
 
     static List<ProfileSpec> list(SQLiteDatabase db) {
+        List<ProfileSpec> result = snapshots(db);
+        for (ProfileSpec profile : result) {
+            StoredProxies.requireAssociation(db, profile);
+            envelope(db, profile);
+        }
+        return result;
+    }
+
+    /** Version-1 import reads before catalog associations exist. */
+    static List<ProfileSpec> snapshots(SQLiteDatabase db) {
         List<ProfileSpec> result = new ArrayList<>();
         try (Cursor cursor = db.rawQuery(SELECT + " ORDER BY name_key,id", null)) {
             while (cursor.moveToNext()) result.add(decode(cursor));
@@ -38,7 +58,7 @@ final class StoredProfiles {
         StoreChecks.same(cursor.getString(1), profile.revision);
         StoreChecks.same(cursor.getString(2), profile.name);
         StoreChecks.same(cursor.getString(3), StoreChecks.nameKey(profile.name));
-        if (cursor.getInt(4) != (profile.proxy.hasCredentials ? 1 : 0)) throw integrity();
+        if (cursor.getInt(4) != (profile.hasProxyCredentials() ? 1 : 0)) throw integrity();
         StoreChecks.same(cursor.isNull(5) ? "" : cursor.getString(5), profile.credentialRevision);
         StoreChecks.same(cursor.getString(7), profile.fingerprint());
         StoreChecks.same(cursor.getString(8), profile.dataDirectorySuffix());
@@ -52,8 +72,8 @@ final class StoredProfiles {
         values.put("revision", profile.revision);
         values.put("name", profile.name);
         values.put("name_key", StoreChecks.nameKey(profile.name));
-        values.put("has_credentials", profile.proxy.hasCredentials ? 1 : 0);
-        if (profile.proxy.hasCredentials) values.put("credential_revision", profile.credentialRevision);
+        values.put("has_credentials", profile.hasProxyCredentials() ? 1 : 0);
+        if (profile.hasProxyCredentials()) values.put("credential_revision", profile.credentialRevision);
         else values.putNull("credential_revision");
         values.put("spec_json", ProfileCodec.toJson(profile));
         values.put("config_hash", profile.fingerprint());
@@ -78,10 +98,10 @@ final class StoredProfiles {
         try (Cursor cursor = db.rawQuery("SELECT credential_revision,iv,ciphertext "
                 + "FROM credential_envelopes WHERE profile_id=?", new String[]{profile.id})) {
             if (!cursor.moveToFirst()) {
-                if (profile.proxy.hasCredentials) throw integrity();
+                if (profile.hasProxyCredentials()) throw integrity();
                 return null;
             }
-            if (!profile.proxy.hasCredentials) throw integrity();
+            if (!profile.hasProxyCredentials()) throw integrity();
             StoreChecks.same(profile.credentialRevision, cursor.getString(0));
             CredentialCipher.Envelope result = new CredentialCipher.Envelope(
                     cursor.getBlob(1), cursor.getBlob(2));

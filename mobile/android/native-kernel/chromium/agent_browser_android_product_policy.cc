@@ -67,6 +67,32 @@ constexpr net::NetworkTrafficAnnotationTag kProductProxyTrafficAnnotation =
           "service; the product profile supplies the mandatory proxy."
       })");
 
+constexpr net::NetworkTrafficAnnotationTag kProductDirectTrafficAnnotation =
+    net::DefineNetworkTrafficAnnotation("agent_browser_android_product_direct", R"(
+      semantics {
+        sender: "Agent Browser Android Product Direct"
+        description:
+          "Connects browser requests directly using the device network and "
+          "normal hostname resolution, as explicitly selected in the Android "
+          "product profile. No product proxy or proxy DNS protection applies."
+        trigger:
+          "A network request in an explicitly direct Android product profile."
+        data:
+          "The explicit direct routing selection, without proxy credentials. "
+          "Individual requests have their own traffic annotations."
+        destination: OTHER
+        destination_other: "The destination selected by each browser request."
+      }
+      policy {
+        cookies_allowed: NO
+        setting:
+          "Direct routing is selected in the product profile before browser "
+          "startup and cannot change during that browser process's lifetime."
+        policy_exception_justification:
+          "This content_shell-based product has no Chrome enterprise policy "
+          "service; the user explicitly selected an unproxied product profile."
+      })");
+
 class ProductPreflightThrottle final : public blink::URLLoaderThrottle {
  public:
   void WillStartRequest(network::ResourceRequest* request, bool*) override {
@@ -101,7 +127,10 @@ void VerifyAgentBrowserProductPreflightStartup() {
   const auto& command = *base::CommandLine::ForCurrentProcess();
   const bool product_profile =
       command.HasSwitch(kAgentBrowserProductProfileSwitch);
-  if (!IsAgentBrowserProductPreflight() && !product_profile)
+  const bool product_network_mode =
+      command.HasSwitch(kAgentBrowserProductNetworkModeSwitch);
+  if (!IsAgentBrowserProductPreflight() && !product_profile &&
+      !product_network_mode)
     return;
   const auto& timezone = blink::AgentBrowserAndroidTimezoneConfig::Get();
   CHECK(timezone.valid() && timezone.timezone_only());
@@ -116,10 +145,10 @@ void VerifyAgentBrowserProductPreflightStartup() {
                                 "remote-debugging-socket-name"}) {
     CHECK(!command.HasSwitch(forbidden));
   }
-  // Keep preflight-only startup unchanged. Product browsing must also have its
-  // complete fixed proxy validated before any NetworkContext can be created.
-  if (product_profile)
-    CHECK(ParseAgentBrowserProductProxyConfig(command));
+  // Keep preflight-only startup unchanged. Validate the same frozen network
+  // selection here and at every NetworkContext; direct also requires the marker.
+  if (product_profile || product_network_mode)
+    CHECK(ParseAgentBrowserProductNetworkConfig(command));
 }
 
 bool ParseAgentBrowserProductProxyConfig(const base::CommandLine& command,
@@ -204,21 +233,64 @@ bool ParseAgentBrowserProductProxyConfig(const base::CommandLine& command,
   return true;
 }
 
+bool ParseAgentBrowserProductNetworkConfig(
+    const base::CommandLine& command,
+    net::ProxyConfig* out_config,
+    AgentBrowserProductNetworkMode* out_mode) {
+  if (!command.HasSwitch(kAgentBrowserProductProfileSwitch))
+    return false;
+  net::ProxyConfig config;
+  AgentBrowserProductNetworkMode mode = AgentBrowserProductNetworkMode::kProxy;
+  if (!command.HasSwitch(kAgentBrowserProductNetworkModeSwitch)) {
+    // Legacy means proxy, never an implicit direct fallback.
+    if (!ParseAgentBrowserProductProxyConfig(command, &config))
+      return false;
+  } else {
+    if (command.GetSwitchValueUTF8(kAgentBrowserProductNetworkModeSwitch) !=
+        "direct") {
+      return false;
+    }
+    for (const auto& entry : command.GetSwitches()) {
+      if (entry.first.find("proxy") != std::string::npos ||
+          entry.first == "host-resolver-rules" || entry.first == "host-rules" ||
+          entry.first == "agent-browser-local-dns-policy") {
+        return false;
+      }
+    }
+    config = net::ProxyConfig::CreateDirect();
+    mode = AgentBrowserProductNetworkMode::kDirect;
+  }
+  if (out_config)
+    *out_config = std::move(config);
+  if (out_mode)
+    *out_mode = mode;
+  return true;
+}
+
 void ConfigureAgentBrowserProductNetworkContextParams(
     network::mojom::NetworkContextParams* params) {
   const auto& command = *base::CommandLine::ForCurrentProcess();
-  if (!command.HasSwitch(kAgentBrowserProductProfileSwitch))
+  if (!command.HasSwitch(kAgentBrowserProductProfileSwitch) &&
+      !command.HasSwitch(kAgentBrowserProductNetworkModeSwitch)) {
     return;
+  }
   CHECK(params);
   net::ProxyConfig config;
-  CHECK(ParseAgentBrowserProductProxyConfig(command, &config));
-  // This product has one frozen source of proxy settings. Do not allow another
-  // source to override it after startup or to restore system/direct routing.
+  AgentBrowserProductNetworkMode mode = AgentBrowserProductNetworkMode::kProxy;
+  CHECK(ParseAgentBrowserProductNetworkConfig(command, &config, &mode));
+  // Both modes have one immutable source. Never replace a foreign owner or
+  // install an update channel that could restore system/alternative routing.
   CHECK(!params->initial_proxy_config);
   CHECK(!params->proxy_config_client_receiver.is_valid());
   CHECK(!params->proxy_config_poller_client.is_valid());
   CHECK(!params->initial_custom_proxy_config);
   CHECK(!params->custom_proxy_config_client_receiver.is_valid());
+  if (mode == AgentBrowserProductNetworkMode::kDirect) {
+    params->initial_proxy_config =
+        net::ProxyConfigWithAnnotation(config, kProductDirectTrafficAnnotation);
+    LOG(INFO) << "ABS_ANDROID_NETWORK_V1 mode=direct configured=1";
+    return;
+  }
   params->initial_proxy_config =
       net::ProxyConfigWithAnnotation(config, kProductProxyTrafficAnnotation);
   LOG(INFO) << "ABS_ANDROID_PROXY_V1 configured=1";

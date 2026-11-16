@@ -26,6 +26,10 @@ inline constexpr char kAgentBrowserProductPreflightSwitch[] =
     "agent-browser-product-preflight";
 inline constexpr char kAgentBrowserProductProfileSwitch[] =
     "agent-browser-product-profile";
+inline constexpr char kAgentBrowserProductNetworkModeSwitch[] =
+    "agent-browser-product-network-mode";
+
+enum class AgentBrowserProductNetworkMode { kProxy, kDirect };
 
 bool IsAgentBrowserProductPreflight();
 // Checks preflight and product-profile startup before network contexts exist.
@@ -40,8 +44,17 @@ bool ParseAgentBrowserProductProxyConfig(
     const base::CommandLine& command,
     net::ProxyConfig* out_config = nullptr);
 
-// No-op for ordinary content_shell. Product-profile mode CHECKs configuration
-// and installs a fixed initial proxy, without a config-update client.
+// Requires the product marker. An absent mode switch selects the unchanged
+// strict proxy parser; only the exact explicit value "direct" selects direct.
+// Direct rejects proxy/DNS controls. Outputs are unchanged on failure.
+bool ParseAgentBrowserProductNetworkConfig(
+    const base::CommandLine& command,
+    net::ProxyConfig* out_config = nullptr,
+    AgentBrowserProductNetworkMode* out_mode = nullptr);
+
+// No-op for ordinary content_shell without a product network-mode switch.
+// Product mode CHECKs configuration and installs a fixed initial proxy/direct
+// config, without config-update clients or a system configuration source.
 void ConfigureAgentBrowserProductNetworkContextParams(
     network::mojom::NetworkContextParams* params);
 
