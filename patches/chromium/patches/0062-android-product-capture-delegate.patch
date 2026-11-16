@@ -1,0 +1,41 @@
+From: Agent Browser contributors
+Subject: [PATCH] Android product capture: Shell delegate Run() struct fix (0062 v2)
+
+v1 was applied on the build server before the compile failed: the delegate
+callback signature is OnceCallback<void(const blink::mojom::StreamDevicesSet&,
+...)>, so the answer must pass the struct by const reference, not a mojom
+Ptr. v2 carries only that correction on top of the applied v1 state (the
+shell.h declaration hunk is already present remotely and is dropped here):
+empty answers pass a default StreamDevicesSet, the OK answer builds
+StreamDevicesSet by value and emplaces the StreamDevicesPtr.
+
+--- a/content/shell/browser/shell.cc
++++ b/content/shell/browser/shell.cc
+@@ -533,7 +533,7 @@
+            bool video_granted) {
+           if (!audio_granted && !video_granted) {
+             std::move(callback).Run(
+-                blink::mojom::StreamDevicesSet::New(),
++                blink::mojom::StreamDevicesSet(),
+                 blink::mojom::MediaStreamRequestResult::PERMISSION_DENIED,
+                 std::unique_ptr<MediaStreamUI>());
+             return;
+@@ -556,14 +556,14 @@
+           if (!devices->audio_device.has_value() &&
+               !devices->video_device.has_value()) {
+             std::move(callback).Run(
+-                blink::mojom::StreamDevicesSet::New(),
++                blink::mojom::StreamDevicesSet(),
+                 blink::mojom::MediaStreamRequestResult::NO_HARDWARE,
+                 std::unique_ptr<MediaStreamUI>());
+             return;
+           }
+-          auto devices_set = blink::mojom::StreamDevicesSet::New();
+-          devices_set->stream_devices.emplace_back(std::move(devices));
+-          std::move(callback).Run(std::move(devices_set),
++          blink::mojom::StreamDevicesSet devices_set;
++          devices_set.stream_devices.emplace_back(std::move(devices));
++          std::move(callback).Run(devices_set,
+                                   blink::mojom::MediaStreamRequestResult::OK,
+                                   std::unique_ptr<MediaStreamUI>());
+         },

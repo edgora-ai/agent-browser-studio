@@ -18,6 +18,7 @@ import com.ahoo.abs.core.NativeTimezoneLaunchConfig;
 import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.List;
 import java.util.Locale;
 import java.util.UUID;
@@ -66,7 +67,7 @@ public final class NativeBrowserApplication extends Application implements Brows
             try (BootstrapStore bootstrap = new BootstrapStore(base)) {
                 launch = bootstrap.claim(incarnation);
                 frozen = NativeTimezoneLaunchConfig.fromLaunch(launch, incarnation, System.currentTimeMillis());
-                freezeCommandLine();
+                freezeCommandLine(base);
                 List<Locale> locales = new ArrayList<>();
                 for (String tag : launch.profile.languageTags) locales.add(Locale.forLanguageTag(tag));
                 LocaleList list = new LocaleList(locales.toArray(new Locale[0]));
@@ -78,7 +79,7 @@ public final class NativeBrowserApplication extends Application implements Brows
             }
         } catch (IOException | RuntimeException failure) {
             startupFailure = "BOOTSTRAP_" + failure.getClass().getSimpleName();
-            Log.e("AbsNativeBootstrap", "NATIVE_BOOTSTRAP_ATTACH_FAILED");
+            Log.e("AbsNativeBootstrap", "NATIVE_BOOTSTRAP_ATTACH_FAILED detail=" + String.valueOf(failure));
         }
         super.attachBaseContext(configured);
         if (startupFailure != null) return;
@@ -127,25 +128,90 @@ public final class NativeBrowserApplication extends Application implements Brows
                 ? LibraryProcessType.PROCESS_BROWSER : LibraryProcessType.PROCESS_CHILD);
     }
 
-    private void freezeCommandLine() {
+    /** Per-env random seed, generated once with a CSPRNG and persisted under
+     *  the app's files dir so it is stable across restarts and distinct per
+     *  environment. Predictable suffix-derived seeds are gone: an attacker
+     *  who can guess the env name can no longer reproduce the noise. */
+    /** Per-env random seed, generated once with a CSPRNG and persisted under
+     *  the app's files dir so it is stable across restarts and distinct per
+     *  environment. Predictable suffix-derived seeds are gone: an attacker
+     *  who can guess the env name can no longer reproduce the noise. */
+    static java.io.File fingerprintSeedFile(String directorySuffix, Context context) {
+        // attachBaseContext hands us the framework's already-valid base Context:
+        // this Application has not been attached yet, but the ContextImpl is
+        // fully usable (BootstrapStore and ProcessLifecycle already do file IO
+        // through it in the same block).
+        if (context == null) throw new IllegalStateException("FINGERPRINT_SEED_CONTEXT_MISSING");
+        return FingerprintSeedStore.seedFile(directorySuffix, context.getFilesDir());
+    }
+
+    /** Read-or-create the per-env seed. Safe from attachBaseContext when the
+     *  framework's base Context is passed. */
+    static long loadOrCreateFingerprintSeed(String directorySuffix, Context context) {
+        return FingerprintSeedStore.loadOrCreate(directorySuffix, context.getFilesDir());
+    }
+
+    /** Read-only seed access for the bootstrap verification: freeze has just
+     *  persisted the file, so a missing file means the frozen argv drifted. */
+    static long readPersistedFingerprintSeed(String directorySuffix, Context context) {
+        return FingerprintSeedStore.readPersisted(directorySuffix, context.getFilesDir());
+    }
+
+    /** Canvas/audio noise payload for the engine fingerprint differentiation. */
+    static String fingerprintConfigPayload(long seed) {
+        long canvasSeed = (seed ^ 0x9e3779b97f4a7c15L) & 0x7fffffffffffffffL;
+        long audioSeed = (seed + 0x51ed270bL) & 0x7fffffffffffffffL;
+        // Seeds are decimal strings: the engine parses them with exact
+        // uint64 conversion, because JSON numbers lose precision above 2^53.
+        String json = "{\"schemaVersion\":1,\"seed\":\"" + seed + "\""
+                + ",\"canvas\":{\"enabled\":true,\"seed\":\"" + canvasSeed + "\"}"
+                + ",\"audio\":{\"enabled\":true,\"seed\":\"" + audioSeed + "\",\"amplitude\":0.0001}}";
+        return Base64.getUrlEncoder().withoutPadding()
+                .encodeToString(json.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+    }
+
+    /** Hex digest of the seed bytes for logs: lets a release build prove seed
+     *  stability across restarts without writing the seed itself anywhere. */
+    static String fingerprintSeedDigest(long seed) {
+        return FingerprintSeedStore.fingerprint(seed);
+    }
+
+    private void freezeCommandLine(Context seedContext) {
+        // Runs inside attachBaseContext: this Application is not attached yet,
+        // so seed access must use the framework's base Context parameter.
         if (CommandLine.isInitialized()) throw new IllegalStateException("NATIVE_COMMAND_LINE_ALREADY_INITIALIZED");
+        long fingerprintSeed = loadOrCreateFingerprintSeed(launch.directorySuffix(), seedContext);
         String[] timezone = frozen.commandLine();
         // Route A: ordinary browsing is enabled; the preflight-only switch is no longer forced.
-        String[] arguments = new String[]{timezone[0], timezone[1], timezone[2],
-                "--agent-browser-product-profile",
-                "--proxy-server=" + launch.profile.proxy.proxyRule(), "--proxy-bypass-list=<-loopback>",
+        List<String> arguments = new ArrayList<>(List.of(timezone[0], timezone[1], timezone[2],
+                "--agent-browser-product-profile"));
+        if (launch.profile.isDirect()) {
+            arguments.add("--agent-browser-product-network-mode=direct");
+        } else {
+            arguments.add("--proxy-server=" + launch.profile.proxy.proxyRule());
+            arguments.add("--proxy-bypass-list=<-loopback>");
+            arguments.add("--host-resolver-rules=" + launch.profile.proxy.hostResolverRules());
+        }
+        arguments.addAll(List.of("--agent-browser-noise-seeds=" + fingerprintConfigPayload(fingerprintSeed),
                 "--disable-quic", "--use-mobile-user-agent",
                 "--disable-features=ReduceAcceptLanguage,ReduceAcceptLanguageHTTP",
                 "--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
                 "--lang=" + launch.profile.languageTags.get(0),
-                "--accept-lang=" + String.join(",", launch.profile.languageTags)};
-        CommandLine.init(arguments);
-        verifyFrozenCommandLine();
+                "--accept-lang=" + String.join(",", launch.profile.languageTags)));
+        CommandLine.init(arguments.toArray(new String[0]));
+        verifyFrozenCommandLineFor(seedContext);
         Log.i("AbsNativeBootstrap", "ABS_ANDROID_TIMEZONE_V1 frozen=1 input_sha256="
-                + frozen.inputSha256() + " pid=" + android.os.Process.myPid());
+                + frozen.inputSha256() + " pid=" + android.os.Process.myPid()
+                + " seed_fp=" + fingerprintSeedDigest(fingerprintSeed));
     }
 
     public void verifyFrozenCommandLine() {
+        verifyFrozenCommandLineFor(this);
+    }
+
+    /** Verification needs the same Context source as the freeze: the base
+     *  Context during attachBaseContext, `this` once attached. */
+    private void verifyFrozenCommandLineFor(Context seedContext) {
         if (frozen == null || !CommandLine.isInitialized()) {
             throw new IllegalStateException("NATIVE_FROZEN_CONFIG_MISSING");
         }
@@ -154,8 +220,10 @@ public final class NativeBrowserApplication extends Application implements Brows
                 || command.hasSwitch("agent-browser-product-preflight")
                 || !command.hasSwitch(NativeTimezoneLaunchConfig.REQUIRED_SWITCH)
                 || !frozen.encoded().equals(command.getSwitchValue(NativeTimezoneLaunchConfig.CONFIG_SWITCH))
-                || !launch.profile.proxy.proxyRule().equals(command.getSwitchValue("proxy-server"))
-                || !"<-loopback>".equals(command.getSwitchValue("proxy-bypass-list"))
+                || !frozenNetworkMatches(command)
+                || !fingerprintConfigPayload(
+                readPersistedFingerprintSeed(launch.directorySuffix(), seedContext))
+                .equals(command.getSwitchValue("agent-browser-noise-seeds"))
                 || !command.hasSwitch("disable-quic")
                 || !command.hasSwitch("use-mobile-user-agent")
                 || !"ReduceAcceptLanguage,ReduceAcceptLanguageHTTP".equals(command.getSwitchValue("disable-features"))
@@ -169,6 +237,27 @@ public final class NativeBrowserApplication extends Application implements Brows
                 "run-web-tests", "remote-debugging-port", "remote-debugging-pipe", "remote-debugging-socket-name"}) {
             if (command.hasSwitch(forbidden)) throw new IllegalStateException("NATIVE_UNSAFE_COMMAND_LINE");
         }
+    }
+
+    /** The explicit mode is frozen too: missing proxy fields must never imply direct. */
+    private boolean frozenNetworkMatches(CommandLine command) {
+        if (!launch.profile.isDirect()) {
+            return !command.hasSwitch("agent-browser-product-network-mode")
+                    && launch.profile.proxy.proxyRule().equals(command.getSwitchValue("proxy-server"))
+                    && "<-loopback>".equals(command.getSwitchValue("proxy-bypass-list"))
+                    && launch.profile.proxy.hostResolverRules().equals(command.getSwitchValue("host-resolver-rules"));
+        }
+        if (!command.hasSwitch("agent-browser-product-network-mode")
+                || !"direct".equals(command.getSwitchValue("agent-browser-product-network-mode"))) {
+            return false;
+        }
+        for (String forbidden : new String[]{"proxy-server", "proxy-bypass-list", "no-proxy-server",
+                "proxy-pac-url", "proxy-auto-detect", "use-system-proxy-resolver", "winhttp-proxy-resolver",
+                "proxy-resolver-v8-tracing", "host-resolver-rules", "host-rules",
+                "agent-browser-local-dns-policy", "agent-browser-proxy-bootstrap-host"}) {
+            if (command.hasSwitch(forbidden)) return false;
+        }
+        return true;
     }
 
     @Override

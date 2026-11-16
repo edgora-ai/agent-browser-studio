@@ -57,7 +57,7 @@ public class SQLiteDatabase {
  public void setTransactionSuccessful() { events.add("success"); if (successFailure != null) throw successFailure; }
  public void endTransaction() { events.add("end"); if (endFailure != null) throw endFailure; }
  public void close() { events.add("close"); }
- public int getVersion() { return 2; }
+ public int getVersion() { return 3; }
  public boolean isWriteAheadLoggingEnabled() { return true; }
  public void setForeignKeyConstraintsEnabled(boolean enabled) { throw new AssertionError("SQL not exercised"); }
  public void execSQL(String sql) { throw new AssertionError("SQL not exercised"); }

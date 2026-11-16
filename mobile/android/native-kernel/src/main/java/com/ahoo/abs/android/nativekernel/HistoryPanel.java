@@ -3,6 +3,7 @@ package com.ahoo.abs.android.nativekernel;
 import android.app.Dialog;
 import android.content.Context;
 import android.graphics.Typeface;
+import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.GradientDrawable;
 import android.view.Gravity;
 import android.view.View;
@@ -19,12 +20,21 @@ import java.util.List;
  */
 final class HistoryPanel extends FrameLayout {
     // Palette resolved from the activity's night mode (NativeBrowserActivity.resolvePalette).
-    private final int PAGE;
-    private final int CARD;
-    private final int INK;
-    private final int MUTED;
-    private final int ACCENT;
-    private final int STROKE;
+    private int PAGE;
+    private int CARD;
+    private int INK;
+    private int MUTED;
+    private int ACCENT;
+    private int ACCENT_SOFT;
+    private int STROKE;
+    private int PILL;
+    private final NativeBrowserActivity.PaletteBindings staticPaletteBindings =
+            new NativeBrowserActivity.PaletteBindings();
+    private final NativeBrowserActivity.PaletteBindings rowPaletteBindings =
+            new NativeBrowserActivity.PaletteBindings();
+
+    private final NativeBrowserActivity.FontBindings staticFonts = new NativeBrowserActivity.FontBindings();
+    private final NativeBrowserActivity.FontBindings rowFonts = new NativeBrowserActivity.FontBindings();
 
     /** Opens a stored origin; {@code newTab} selects a fresh tab instead of the active one. */
     interface Listener {
@@ -37,7 +47,7 @@ final class HistoryPanel extends FrameLayout {
     private final Listener listener;
     private final LinearLayout list;
     private final TextView emptyTitle;
-    private android.widget.EditText searchField;
+    private final android.widget.EditText searchField;
     private String searchQuery = "";
     private Dialog clearDialog;
     private Dialog rowDialog;
@@ -45,14 +55,15 @@ final class HistoryPanel extends FrameLayout {
 
     HistoryPanel(Context context, BrowserHistoryStore store, Listener listener) {
         super(context);
-        PAGE = NativeBrowserActivity.C_CANVAS; CARD = NativeBrowserActivity.C_SURFACE;
-        INK = NativeBrowserActivity.C_INK; MUTED = NativeBrowserActivity.C_MUTED;
-        ACCENT = NativeBrowserActivity.C_ACCENT; STROKE = NativeBrowserActivity.C_STROKE;
+        readPalette();
 
         this.store = store;
         this.listener = listener;
-        setBackgroundColor(PAGE);
+        ColorDrawable pageBackground = new ColorDrawable();
+        setBackground(pageBackground);
+        staticPaletteBindings.add(() -> pageBackground.setColor(PAGE));
         setClickable(true);
+        setFocusableInTouchMode(true);
 
         LinearLayout column = new LinearLayout(context);
         column.setOrientation(LinearLayout.VERTICAL);
@@ -61,14 +72,16 @@ final class HistoryPanel extends FrameLayout {
         LinearLayout header = new LinearLayout(context);
         header.setOrientation(LinearLayout.HORIZONTAL);
         header.setGravity(Gravity.CENTER_VERTICAL);
-        header.setBackgroundColor(CARD);
-        header.setElevation(dp(1.5f));
-        header.setPadding(dp(8), dp(8), dp(14), dp(8));
+        ColorDrawable headerBackground = new ColorDrawable();
+        header.setBackground(headerBackground);
+        staticPaletteBindings.add(() -> headerBackground.setColor(CARD));
+        header.setPadding(dp(4), dp(4), dp(4), dp(4));
+        header.setMinimumHeight(dp(56));
 
         TextView back = new TextView(context);
         back.setText("‹");
-        back.setTextSize(23);
-        back.setTextColor(INK);
+        staticFonts.bind(back, 23);
+        staticPaletteBindings.add(() -> back.setTextColor(INK));
         back.setGravity(Gravity.CENTER);
         back.setMinimumWidth(dp(48));
         back.setMinimumHeight(dp(48));
@@ -81,18 +94,18 @@ final class HistoryPanel extends FrameLayout {
 
         TextView title = new TextView(context);
         title.setText("历史记录");
-        title.setTextSize(18);
+        staticFonts.bind(title, 18);
         title.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
-        title.setTextColor(INK);
+        staticPaletteBindings.add(() -> title.setTextColor(INK));
         LinearLayout.LayoutParams titleLayout = new LinearLayout.LayoutParams(0, -2, 1);
         titleLayout.setMargins(dp(6), 0, 0, 0);
         header.addView(title, titleLayout);
 
         TextView clear = new TextView(context);
         clear.setText("清空");
-        clear.setTextSize(13);
+        staticFonts.bind(clear, 13);
         clear.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
-        clear.setTextColor(ACCENT);
+        staticPaletteBindings.add(() -> clear.setTextColor(ACCENT));
         clear.setGravity(Gravity.CENTER);
         clear.setMinimumWidth(dp(48));
         clear.setMinimumHeight(dp(48));
@@ -104,18 +117,24 @@ final class HistoryPanel extends FrameLayout {
         column.addView(header, new LinearLayout.LayoutParams(-1, -2));
 
         View divider = new View(context);
-        divider.setBackgroundColor(STROKE);
+        ColorDrawable dividerBackground = new ColorDrawable();
+        divider.setBackground(dividerBackground);
+        staticPaletteBindings.add(() -> dividerBackground.setColor(STROKE));
         column.addView(divider, new LinearLayout.LayoutParams(-1, dp(1)));
 
         // Search over the aggregated sites; filtering is local and never touches the store.
         searchField = new android.widget.EditText(context);
         searchField.setSingleLine(true);
+        searchField.setContentDescription("搜索历史站点");
+        searchField.setMinimumHeight(dp(48));
         searchField.setHint("搜索历史站点");
-        searchField.setHintTextColor(MUTED);
-        searchField.setTextColor(INK);
-        searchField.setTextSize(14);
+        staticPaletteBindings.add(() -> searchField.setHintTextColor(MUTED));
+        staticPaletteBindings.add(() -> searchField.setTextColor(INK));
+        staticFonts.bind(searchField, 14);
         searchField.setImeOptions(android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH);
-        searchField.setBackground(rounded(NativeBrowserActivity.C_PILL, 14));
+        GradientDrawable searchBackground = rounded(PILL, 14);
+        searchField.setBackground(searchBackground);
+        staticPaletteBindings.add(() -> searchBackground.setColor(PILL));
         searchField.setPadding(dp(14), dp(9), dp(14), dp(9));
         searchField.setVisibility(View.GONE);
         LinearLayout.LayoutParams searchLayout = new LinearLayout.LayoutParams(-1, -2);
@@ -143,16 +162,16 @@ final class HistoryPanel extends FrameLayout {
 
         emptyTitle = new TextView(context);
         emptyTitle.setText("暂无历史记录\n\n浏览过的网站会记录在这里");
-        emptyTitle.setTextSize(13);
-        emptyTitle.setTextColor(MUTED);
+        staticFonts.bind(emptyTitle, 13);
+        staticPaletteBindings.add(() -> emptyTitle.setTextColor(MUTED));
         emptyTitle.setGravity(Gravity.CENTER);
         emptyTitle.setPadding(0, dp(48), 0, 0);
         emptyTitle.setVisibility(View.GONE);
 
         TextView hint = new TextView(context);
         hint.setText("点按在当前标签页打开 · 长按在新标签页打开 · × 删除该站点");
-        hint.setTextSize(11);
-        hint.setTextColor(MUTED);
+        staticFonts.bind(hint, 11);
+        staticPaletteBindings.add(() -> hint.setTextColor(MUTED));
         hint.setGravity(Gravity.CENTER);
         hint.setPadding(0, dp(8), 0, dp(12));
         column.addView(hint, new LinearLayout.LayoutParams(-1, -2));
@@ -160,16 +179,50 @@ final class HistoryPanel extends FrameLayout {
         setVisibility(View.GONE);
     }
 
+    private void readPalette() {
+        PAGE = NativeBrowserActivity.C_CANVAS; CARD = NativeBrowserActivity.C_SURFACE;
+        INK = NativeBrowserActivity.C_INK; MUTED = NativeBrowserActivity.C_MUTED;
+        ACCENT = NativeBrowserActivity.C_ACCENT; ACCENT_SOFT = NativeBrowserActivity.C_ACCENT_SOFT;
+        STROKE = NativeBrowserActivity.C_STROKE; PILL = NativeBrowserActivity.C_PILL;
+    }
+
+    /** Recolors existing controls, rows and dialogs without querying or rebuilding data. */
+    void applyPalette() {
+        readPalette();
+        staticPaletteBindings.apply();
+        rowPaletteBindings.apply();
+        if (clearDialog != null) BrowserDialogs.applyPalette(clearDialog);
+        if (rowDialog != null) BrowserDialogs.applyPalette(rowDialog);
+    }
+
+    /** Preserve query, selection and row identities while refreshing system-scaled SP. */
+    void applyFontScale() {
+        if (quiescing) return;
+        staticFonts.apply();
+        rowFonts.apply();
+        if (clearDialog != null) BrowserDialogs.applyFontScale(clearDialog);
+        if (rowDialog != null) BrowserDialogs.applyFontScale(rowDialog);
+    }
+
     /** Makes the panel visible and rebuilds its rows from the store. */
     void show() {
         if (quiescing) return;
         setVisibility(View.VISIBLE);
         searchField.setVisibility(View.VISIBLE);
+        // Opening history never implicitly opens the keyboard; its filter remains opt-in.
+        requestFocus();
         rebuild();
     }
 
     void dismiss() {
         boolean wasShowing = getVisibility() == View.VISIBLE;
+        if (wasShowing) {
+            searchField.clearFocus();
+            clearFocus();
+            android.view.inputmethod.InputMethodManager keyboard =
+                    (android.view.inputmethod.InputMethodManager) getContext().getSystemService(Context.INPUT_METHOD_SERVICE);
+            if (keyboard != null) keyboard.hideSoftInputFromWindow(searchField.getWindowToken(), 0);
+        }
         setVisibility(View.GONE);
         if (clearDialog != null) clearDialog.dismiss();
         if (rowDialog != null) rowDialog.dismiss();
@@ -182,6 +235,8 @@ final class HistoryPanel extends FrameLayout {
     }
 
     private void rebuild() {
+        rowPaletteBindings.clear();
+        rowFonts.clear();
         list.removeAllViews();
         List<BrowserHistory.SiteVisit> ranked = store.ranked();
         List<BrowserHistory.SiteVisit> visible = new java.util.ArrayList<>();
@@ -203,9 +258,9 @@ final class HistoryPanel extends FrameLayout {
             if (!group.equals(previousGroup)) {
                 TextView header = new TextView(getContext());
                 header.setText(group);
-                header.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 12.5f);
+                rowFonts.bind(header, 12.5f);
                 header.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
-                header.setTextColor(MUTED);
+                rowPaletteBindings.add(() -> header.setTextColor(MUTED));
                 header.setLetterSpacing(0.04f);
                 header.setPadding(dp(8), dp(previousGroup == null ? 2 : 16), dp(8), dp(8));
                 list.addView(header, new LinearLayout.LayoutParams(-1, -2));
@@ -243,20 +298,26 @@ final class HistoryPanel extends FrameLayout {
         LinearLayout row = new LinearLayout(context);
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(Gravity.CENTER_VERTICAL);
-        row.setBackground(stroked(CARD, 16));
-        row.setElevation(dp(1.5f));
+        GradientDrawable rowBackground = stroked(CARD, 16);
+        row.setBackground(rowBackground);
+        rowPaletteBindings.add(() -> {
+            rowBackground.setColor(CARD);
+            rowBackground.setStroke(dp(1), STROKE);
+        });
+        row.setElevation(0);
         row.setPadding(dp(16), dp(12), dp(10), dp(12));
         row.setMinimumHeight(dp(56));
 
         String host = NewTabPage.displayHostFor(visit.origin);
         TextView badge = new TextView(context);
         badge.setText(host.isEmpty() ? "•" : host.substring(0, 1).toUpperCase(java.util.Locale.ROOT));
-        badge.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 14);
+        rowFonts.bind(badge, 14);
         badge.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
-        int hue = AVATAR_HUES[Math.floorMod(host.hashCode(), AVATAR_HUES.length)];
-        badge.setTextColor(hue);
+        rowPaletteBindings.add(() -> badge.setTextColor(ACCENT));
         badge.setGravity(Gravity.CENTER);
-        badge.setBackground(rounded((hue & 0x00FFFFFF) | 0x1F000000, 18));
+        GradientDrawable badgeBackground = rounded(ACCENT_SOFT, 18);
+        badge.setBackground(badgeBackground);
+        rowPaletteBindings.add(() -> badgeBackground.setColor(ACCENT_SOFT));
         LinearLayout.LayoutParams badgeLayout = new LinearLayout.LayoutParams(dp(36), dp(36));
         badgeLayout.rightMargin = dp(12);
         row.addView(badge, badgeLayout);
@@ -265,16 +326,16 @@ final class HistoryPanel extends FrameLayout {
         text.setOrientation(LinearLayout.VERTICAL);
         TextView title = new TextView(context);
         title.setText(label);
-        title.setTextSize(14);
+        rowFonts.bind(title, 14);
         title.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
-        title.setTextColor(INK);
+        rowPaletteBindings.add(() -> title.setTextColor(INK));
         title.setSingleLine(true);
         title.setEllipsize(android.text.TextUtils.TruncateAt.END);
         text.addView(title, new LinearLayout.LayoutParams(-1, -2));
         TextView sub = new TextView(context);
         sub.setText(host + " · " + visit.visitCount + " 次");
-        sub.setTextSize(12.5f);
-        sub.setTextColor(MUTED);
+        rowFonts.bind(sub, 12.5f);
+        rowPaletteBindings.add(() -> sub.setTextColor(MUTED));
         sub.setSingleLine(true);
         sub.setEllipsize(android.text.TextUtils.TruncateAt.END);
         LinearLayout.LayoutParams subLayout = new LinearLayout.LayoutParams(-1, -2);
@@ -284,20 +345,20 @@ final class HistoryPanel extends FrameLayout {
 
         TextView time = new TextView(context);
         time.setText(rowTime(visit.lastVisitMillis));
-        time.setTextSize(11.5f);
-        time.setTextColor(MUTED);
+        rowFonts.bind(time, 11.5f);
+        rowPaletteBindings.add(() -> time.setTextColor(MUTED));
         LinearLayout.LayoutParams timeLayout = new LinearLayout.LayoutParams(-2, -2);
         timeLayout.setMargins(dp(8), 0, 0, 0);
         row.addView(time, timeLayout);
 
         TextView remove = new TextView(context);
         remove.setText("×");
-        remove.setTextSize(15);
+        rowFonts.bind(remove, 15);
         remove.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
-        remove.setTextColor(MUTED);
+        rowPaletteBindings.add(() -> remove.setTextColor(MUTED));
         remove.setGravity(Gravity.CENTER);
-        remove.setMinimumWidth(dp(36));
-        remove.setMinimumHeight(dp(36));
+        remove.setMinimumWidth(dp(48));
+        remove.setMinimumHeight(dp(48));
         remove.setContentDescription("删除站点记录：" + label);
         remove.setOnClickListener(view -> {
             if (quiescing) return;
@@ -370,9 +431,6 @@ final class HistoryPanel extends FrameLayout {
             if (clearDialog == pending) clearDialog = null;
         });
     }
-
-    private static final int[] AVATAR_HUES = {0xFF4F46E5, 0xFF0D9488, 0xFFDB2777, 0xFFD97706,
-            0xFF0284C7, 0xFF7C3AED, 0xFF059669, 0xFF64748B};
 
     private int dp(float value) {
         return Math.round(getResources().getDisplayMetrics().density * value);

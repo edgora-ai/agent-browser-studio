@@ -27,6 +27,7 @@ public final class ProfileSpec {
     public final String deviceModel;
     public final String credentialRevision;
     public final List<String> languageTags;
+    /** Null means explicitly selected direct, never an absent or invalid endpoint. */
     public final ProxySpec proxy;
     public final DeviceMode deviceMode;
     private final String canonicalFingerprint;
@@ -38,7 +39,6 @@ public final class ProfileSpec {
         this.revision = CoreValidation.uuid(revision);
         this.name = CoreValidation.boundedText(name, 1, 80, "INVALID_NAME");
         if (isBlank(this.name)) throw CoreValidation.error("INVALID_NAME", "A nonblank profile name is required");
-        if (proxy == null) throw CoreValidation.error("INVALID_PROXY", "An explicit proxy is required");
         this.proxy = proxy;
         this.countryCode = country(countryCode);
         this.timeZoneId = zone(timeZoneId);
@@ -47,15 +47,23 @@ public final class ProfileSpec {
         this.deviceMode = deviceMode;
         this.deviceModel = CoreValidation.boundedText(deviceModel, 0, 128, "INVALID_DEVICE_MODEL");
         CoreValidation.text(credentialRevision, "INVALID_CREDENTIAL_REVISION");
-        if (proxy.hasCredentials) {
+        if (hasProxyCredentials()) {
             this.credentialRevision = CoreValidation.uuid(credentialRevision);
         } else {
             if (!credentialRevision.isEmpty()) {
-                throw CoreValidation.error("INVALID_CREDENTIAL_REVISION", "A credential-free proxy cannot have a credential revision");
+                throw CoreValidation.error("INVALID_CREDENTIAL_REVISION", "A direct or credential-free profile cannot have a credential revision");
             }
             this.credentialRevision = "";
         }
         canonicalFingerprint = computeFingerprint();
+    }
+
+    public boolean isDirect() {
+        return proxy == null;
+    }
+
+    public boolean hasProxyCredentials() {
+        return proxy != null && proxy.hasCredentials;
     }
 
     /** A single relative basename; never derived from user-visible names or external paths. */
@@ -69,6 +77,13 @@ public final class ProfileSpec {
     }
 
     private String computeFingerprint() {
+        if (isDirect()) {
+            CanonicalHash hash = new CanonicalHash("abs.profile.direct.v1");
+            hash.add(id).add(revision).add(name).add(countryCode).add(timeZoneId).add(languageTags.size());
+            for (String tag : languageTags) hash.add(tag);
+            return hash.add(deviceMode.name()).add(deviceModel).add(credentialRevision).finish();
+        }
+        // Preserve the exact v1 field stream for every existing proxied profile.
         CanonicalHash hash = new CanonicalHash("abs.profile.v1");
         hash.add(id).add(revision).add(name).add(proxy.scheme.name()).add(proxy.host).add(proxy.port)
                 .add(proxy.hasCredentials).add(countryCode).add(timeZoneId).add(languageTags.size());

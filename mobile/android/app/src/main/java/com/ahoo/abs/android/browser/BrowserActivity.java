@@ -42,7 +42,11 @@ public final class BrowserActivity extends Activity implements BrowserRuntime.Li
                 throw new IllegalStateException("STALE_SAVED_STATE");
             }
             root.addView(Ui.text(this, launch.profile.name + " · 内核能力验证", 20), 0);
-            if (launch.profile.proxy.hasCredentials || launch.profile.deviceMode != ProfileSpec.DeviceMode.NATIVE
+            if (launch.profile.isDirect()) {
+                status.setText("此历史 WebView 验证路径不支持直连，请使用原生内核版本。未初始化网页。");
+                return;
+            }
+            if (launch.profile.hasProxyCredentials() || launch.profile.deviceMode != ProfileSpec.DeviceMode.NATIVE
                     || !launch.profile.deviceModel.equals(Build.MODEL)) {
                 status.setText("此配置被阻止：代理认证或设备模拟尚无安全实现。未初始化网页，也没有去掉密码或改用本机配置。");
                 return;

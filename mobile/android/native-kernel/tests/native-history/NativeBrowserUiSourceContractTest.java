@@ -31,9 +31,11 @@ public final class NativeBrowserUiSourceContractTest {
             "mobile/android/native-kernel/src/main/java/com/ahoo/abs/android/nativekernel";
     private static final List<String> FILES = List.of(
             "NativeBrowserActivity.java", "TabSwitcherView.java", "NewTabPage.java",
-            "BrowserHistoryStore.java", "HistoryPanel.java", "NativeBrowserRuntime.java");
+            "BrowserHistoryStore.java", "HistoryPanel.java", "NativeBrowserRuntime.java", "BrowserDialogs.java",
+            "NativeBrowserApplication.java", "FingerprintSeedStore.java");
     private static final Map<String, String> sources = new HashMap<>();
     private static final Map<String, String> methods = new HashMap<>();
+    private static final Map<String, String> methodDeclarations = new HashMap<>();
     private static int checks;
     private static int failures;
 
@@ -47,24 +49,46 @@ public final class NativeBrowserUiSourceContractTest {
         Path root = args.length == 0 ? Path.of("") : Path.of(args[0]);
         parseSources(root.toAbsolutePath());
         retainedActivityAndFrozenReuse();
+        explicitEnvironmentExit();
+        quietManagerList();
+        quietComponentsAndEditors();
+        shortSearchAndIndependentHeader();
+        nativePaletteContinuity();
+        nativeFontContinuity();
         nonDestructiveQuiescence();
         drainAndRejectedActivityRecords();
         privateLifecycleStages();
         eventDrivenForegroundVisibility();
         realPreviewOwnership();
+        pageRestoreCover();
         popupAndHistorySemantics();
         overlaySafetyAndWarnings();
+        frozenModeSpecificResolverChain();
+        perProfileFingerprintSeeds();
         System.out.println(checks + " UI source-contract checks, " + failures + " failures");
         if (failures != 0) throw new AssertionError("Native browser UI source regressions: " + failures);
     }
 
     private static void parseSources(Path root) throws IOException {
+        sources.put("AndroidManifest.xml.jinja2", Files.readString(root.resolve(
+                "mobile/android/native-kernel/AndroidManifest.xml.jinja2"), StandardCharsets.UTF_8));
         JavaCompiler compiler = ToolProvider.getSystemJavaCompiler();
         if (compiler == null) throw new IllegalStateException("A full JDK is required");
         List<Path> paths = new ArrayList<>();
         for (String name : FILES) {
             Path path = root.resolve(SOURCE_DIR).resolve(name);
             sources.put(name, Files.readString(path, StandardCharsets.UTF_8));
+            paths.add(path);
+        }
+        for (String relative : List.of(
+                "mobile/android/app/src/main/java/com/ahoo/abs/android/Ui.java",
+                "mobile/android/app/src/main/java/com/ahoo/abs/android/MainActivity.java",
+                "mobile/android/app/src/main/java/com/ahoo/abs/android/ProfileEditor.java",
+                "mobile/android/app/src/main/java/com/ahoo/abs/android/ProxyEditor.java",
+                "mobile/android/app/src/main/java/com/ahoo/abs/android/process/LaunchCoordinator.java",
+                "mobile/android/core/src/main/java/com/ahoo/abs/core/ProxySpec.java")) {
+            Path path = root.resolve(relative);
+            sources.put(path.getFileName().toString(), Files.readString(path, StandardCharsets.UTF_8));
             paths.add(path);
         }
         DiagnosticCollector<JavaFileObject> diagnostics = new DiagnosticCollector<>();
@@ -76,6 +100,8 @@ public final class NativeBrowserUiSourceContractTest {
             int parsed = 0;
             for (CompilationUnitTree unit : task.parse()) {
                 parsed++;
+                String unitSource = unit.getSourceFile().getCharContent(true).toString();
+                var positions = com.sun.source.util.Trees.instance(task).getSourcePositions();
                 new TreeScanner<Void, Void>() {
                     private final ArrayDeque<String> classes = new ArrayDeque<>();
                     @Override public Void visitMethodInvocation(MethodInvocationTree node, Void unused) {
@@ -98,12 +124,19 @@ public final class NativeBrowserUiSourceContractTest {
                     @Override public Void visitMethod(MethodTree node, Void unused) {
                         if (!classes.isEmpty() && node.getBody() != null) {
                             methods.put(classes.getLast() + "#" + node.getName(), node.getBody().toString());
+                            long start = positions.getStartPosition(unit, node.getBody());
+                            long end = positions.getEndPosition(unit, node.getBody());
+                            if (start < 0 || end <= start || end > unitSource.length()) {
+                                throw new AssertionError("Missing actual method source positions: " + node.getName());
+                            }
+                            methodDeclarations.put(classes.getLast() + "#" + node.getName(),
+                                    unitSource.substring(Math.toIntExact(start), Math.toIntExact(end)));
                         }
                         return super.visitMethod(node, unused);
                     }
                 }.scan(unit, null);
             }
-            check(parsed == FILES.size(), "all five Android UI sources parsed with JDK 17");
+            check(parsed == paths.size(), "all browser and manager sources parsed with JDK 17");
         }
         for (Diagnostic<? extends JavaFileObject> diagnostic : diagnostics.getDiagnostics()) {
             check(diagnostic.getKind() != Diagnostic.Kind.ERROR,
@@ -126,6 +159,332 @@ public final class NativeBrowserUiSourceContractTest {
         lacks(reuse, "runtime.attach", "Continue cannot attach a second native runtime");
         lacks(reuse, "prepareInitialTab", "Continue cannot recreate the initial blank tab");
         lacks(reuse, "new ShellManager", "Continue cannot recreate retained shells");
+    }
+
+    private static void explicitEnvironmentExit() {
+        has(source("NativeBrowserActivity.java"), "\"关闭当前标签页\", \"返回环境列表（保留运行）\", \"退出当前环境\"}", "owned popup menu includes explicit exit after retained return");
+        has(method("NativeBrowserActivity", "performMenuAction"), "requestEnvironmentExit()", "exit menu invokes manager handoff");
+        has(method("NativeBrowserActivity", "showMenu"), "performMenuAction(title)", "menu delegates unchanged action semantics");
+        String request = method("NativeBrowserActivity", "requestEnvironmentExit");
+        has(request, "MainActivity.ACTION_REQUEST_ENVIRONMENT_EXIT", "exit routed to manager process");
+        has(request, "launch.sessionId", "exit request bound to current session");
+        has(request, "launch.nonce", "exit request bound to current nonce");
+        lacks(request, "finish()", "browser does not fake exit with Activity finish");
+        String consume = method("MainActivity", "consumeExitRequest");
+        has(consume, "intent.setAction(null)", "exit action consumed before handling");
+        has(consume, "observed.launch.sessionId.equals(session)", "reject stale exit session");
+        has(consume, "observed.launch.nonce.equals(nonce)", "reject unauthenticated exit request");
+        has(consume, "confirmEnvironmentExit", "exported launcher requires user confirmation");
+        lacks(consume, "coordinator.stop()", "external Intent cannot stop environment directly");
+        String confirm = method("MainActivity", "confirmEnvironmentExit");
+        before(confirm, "expectedSession.equals(observed.launch.sessionId)", "coordinator.stop()",
+                "revalidate session at confirmation before stopping");
+        before(confirm, "expectedSession.equals(target.launch.sessionId)", "sheet.actions",
+                "exit dialog first identifies the current target");
+        has(method("MainActivity", "onNewIntent"), "consumeExitRequest(intent)", "retained manager handles exit");
+        has(method("MainActivity", "onBackPressed"), "moveTaskToBack(true)", "manager back cannot reveal browser");
+        has(method("MainActivity", "onCreate"), "registerOnBackInvokedCallback", "gesture back handles retained task");
+        String card = method("MainActivity", "profileCard");
+        has(card, "boolean exiting", "exit-unconfirmed card has a retry state");
+        has(card, "confirmEnvironmentExit(ownedSession)", "card exit bound to its rendered session");
+        lacks(card, "if (running || launching)", "running exit button cannot inherit edit-disabled condition");
+        has(method("LaunchCoordinator", "reconcile"), "!stopping", "refresh cannot overwrite actionable exit failure");
+        String bind = method("LaunchCoordinator", "bindControl");
+        before(bind, "unbindControl()", "context.bindService", "disconnected binding is replaced on explicit retry");
+        has(method("Connection", "onBindingDied"), "recoverInvalidBinding()", "dead binding is handled");
+        has(method("Connection", "onNullBinding"), "unbindControl()", "null binding does not remain stuck bound");
+        String timeout = method("LaunchCoordinator", "watchExitControl");
+        has(timeout, "attempt != exitControlGeneration", "timeout is owned by control generation");
+        has(timeout, "session.equals(current.sessionId)", "timeout cannot affect another session");
+        has(timeout, "confirmAbsent(active)", "timeout checks actual process exit");
+        has(timeout, "unbindControl()", "timeout allows explicit retry with fresh HELLO");
+        lacks(timeout, "recordConfirmedExit", "timeout never clears environment gate");
+    }
+
+    private static void quietManagerList() {
+        String home = method("MainActivity", "onCreate");
+        lacks(home, "Ui.gradient", "home has no gradient branding");
+        String heading = method("MainActivity", "itemHeading");
+        lacks(heading, "Ui.avatar", "list uses line icons instead of colored avatars");
+        has(heading, "Ui.Glyph.FOLDER", "list uses shared folder glyph");
+        has(heading, "setMaxLines(2)", "long names and summaries have wrapping space");
+        String profile = method("MainActivity", "profileCard");
+        lacks(profile, "Ui.card(this)", "environment is a lightweight row, not a boxed card");
+        lacks(profile, "Ui.primary", "each environment does not repeat a primary button");
+        lacks(profile, "chipFlow", "metadata is not squeezed into pill rows");
+        has(profile, "card.setOnClickListener", "environment row remains actionable");
+        lacks(method("MainActivity", "proxyCard"), "Ui.tonal", "proxy rows do not repeat edit buttons");
+        has(source("Ui.java"), "BG = 0xFFF7F7F7", "light canvas follows neutral reference");
+        has(method("Ui", "positionSegmentIndicator"), "tab.getHeight()", "segmented indicator follows measured text height");
+    }
+
+    private static void quietComponentsAndEditors() {
+        String buttons = method("Ui", "baseButton");
+        has(buttons, "setMinHeight(dp(context, 48))", "button touch minimum is 48dp");
+        has(buttons, "setSingleLine(false)", "action text may wrap");
+        lacks(buttons, "TruncateAt.END", "critical actions never silently ellipsize");
+        has(method("Ui", "iconButton"), "dp(context, 48)", "icon target is independent from glyph");
+        has(method("Ui", "root"), "WindowInsets.Type.ime()", "root handles keyboard insets");
+        has(source("Ui.java"), "MUTED = 0xFF6A6A6A", "secondary text is not decorative gray");
+        has(method("Ui", "danger"), "ON_DANGER", "danger foreground has separate semantic token");
+        has(method("Sheet", "dangerActions"), "true", "sheet exposes destructive variant");
+        has(source("Ui.java"), "body.addView(heading", "long sheet titles scroll with content");
+        has(method("MainActivity", "onCreate"), "runtime.setMaxLines(2)", "runtime summary cannot consume list viewport");
+        String actions = method("Sheet", "buildActions");
+        has(actions, "LinearLayout.VERTICAL", "sheet stacks actions at narrow/large text sizes");
+        has(actions, "if (onPrimary != null) onPrimary.run(); else dialog.dismiss()",
+                "callback retains explicit dismissal ownership");
+        lacks(actions, "dp(activity, 46)", "sheet actions are content-height rather than fixed");
+        String discard = method("ProfileEditor", "confirmDiscard");
+        has(discard, "sheet.dangerActions", "discard uses danger semantics");
+        before(discard, "sheet.dialog().dismiss()", "target.dismiss()", "discard closes both overlay levels");
+        has(method("ProfileEditor", "setError"), "View.VISIBLE", "nonempty field errors become visible");
+        has(method("ProfileEditor", "errorLine"), "ACCESSIBILITY_LIVE_REGION_POLITE", "feedback has live region");
+        has(method("ProfileEditor", "focusError"), "setFocusableInTouchMode(true)", "action error target can receive touch-mode focus");
+        has(method("ProfileEditor", "configureWindow"), "SOFT_INPUT_ADJUST_RESIZE", "editor requests keyboard resize");
+        String proxy = method("ProxyEditor", "showForm");
+        has(proxy, "requestGeneration != inputGeneration[0]", "stale probe generation is rejected");
+        has(proxy, "!requestSnapshot.equals(endpointSnapshot(protocol, host, port))", "probe result belongs to captured endpoint");
+        has(proxy, "catch (RuntimeException invalidEndpoint)", "invalid host cannot escape click handler");
+        before(proxy, "catch (RuntimeException invalidEndpoint)", "PROBE_EXECUTOR.execute", "endpoint validation precedes worker dispatch");
+        has(proxy, "ProfileEditor.setError(testResult, line)", "probe completion uses visible inline feedback");
+        has(method("MainActivity", "profileMenu"), "ProfileEditor.show", "existing environment has edit entry");
+        has(method("MainActivity", "reload"), "updateRuntimeSheet()", "runtime detail follows observer reload");
+        has(method("MainActivity", "updateRuntimeSheet"), "confirmEnvironmentExit(expectedSession)", "runtime exit requires session-bound confirmation");
+        has(method("MainActivity", "showRuntime"), "setOnDismissListener", "runtime sheet releases its reference");
+        has(method("NativeBrowserActivity", "buildChrome"), "dp(48)", "toolbar tab target remains 48dp");
+        has(method("NativeBrowserActivity", "onConfigurationChanged"), "applyChromePalette()", "existing toolbar recolors without kernel recreation");
+        has(source("NativeBrowserActivity.java"), "返回环境列表（保留运行）", "return is distinct from stopping");
+    }
+
+    /** Source contract only: neither this parser nor NTP host tests execute toolbar buildChrome. */
+    // Use actual AST source spans: pretty-printing escapes Chinese and canonicalizes f to F.
+    // Existing contracts keep their original AST-body representation unchanged.
+    private static String declaration(String owner, String name) {
+        String body = methodDeclarations.get(owner + "#" + name);
+        if (body == null) throw new IllegalArgumentException("Declaration not parsed: " + owner + "#" + name);
+        return body;
+    }
+
+    private static boolean searchLabelContract(String body, String editor) {
+        String text = compact(body);
+        return text.contains(compact(editor + ".setHint(\"搜索\");"))
+                && text.contains(compact(editor + ".setContentDescription(\"搜索或输入网址\");"))
+                && !text.contains(compact(editor + ".setHint(\"搜索或输入网址\");"));
+    }
+
+    private static boolean singleSearchOwnerContract(String ntp) {
+        return !ntp.contains("EditText") && !ntp.contains("buildSearchCard")
+                && !ntp.contains("setOnEditorActionListener") && !ntp.contains("InputMethodManager")
+                && !ntp.contains("SearchEngine.resolve");
+    }
+
+    private static void shortSearchAndIndependentHeader() {
+        String body = declaration("NativeBrowserActivity", "buildChrome");
+        check(searchLabelContract(body, "address"), "sole omnibox has short hint/full label; not runtime accessibility proof");
+        check(!searchLabelContract(body.replace("address.setHint(\"搜索\");", "address.setHint(\"搜索或输入网址\");"), "address"),
+                "reject old-long-hint in-memory control");
+        check(!searchLabelContract(body.replace("address.setContentDescription(\"搜索或输入网址\");", ""), "address"),
+                "reject missing-full-label in-memory control");
+        String ntp = source("NewTabPage.java");
+        check(singleSearchOwnerContract(ntp), "NTP has no second editor, resolver, submission or keyboard owner");
+        check(!singleSearchOwnerContract(ntp + "new EditText(context)"), "reject reintroduced real editor negative control");
+        check(!singleSearchOwnerContract(ntp + "SearchEngine.resolve(query)"), "reject separate navigation resolver negative control");
+        String header = declaration("NewTabPage", "buildIdentityRow");
+        has(header, "header.setOrientation(LinearLayout.VERTICAL)", "environment identity and metadata have independent lines");
+        has(header, "title.setSingleLine(false)", "full environment name may wrap instead of disappearing");
+        lacks(header, "setOnClickListener", "identity does not duplicate the history action");
+        String section = declaration("NewTabPage", "buildSectionRow");
+        has(section, "all.setContentDescription(\"历史记录\")", "contextual all action has full accessible destination");
+        has(section, "all.setMinimumWidth(dp(48))", "history action has48dp width floor");
+        has(section, "all.setMinimumHeight(dp(48))", "history action has48dp height floor");
+        lacks(method("NewTabPage", "refresh"), "sectionRow.setVisibility", "history destination stays reachable with empty history");
+        has(declaration("NewTabPage", "buildEmptyState"), "顶部地址栏", "empty state explains the real next action");
+        has(body, "chromeFonts.bind(address, 16)", "sole toolbar editor retains16sp role");
+        String history = method("NativeBrowserActivity", "createHistorySurfaces");
+        has(history, "browserFrame.addView(historyPanel", "history owns a full-window single header");
+        lacks(history, "pageContainer.addView(historyPanel", "history does not stack a second browser header");
+        String open = method("NativeBrowserActivity", "showHistoryPanel");
+        before(open, "dismissAddressEditor()", "historyPanel.show()", "history takes focus/IME ownership before entry");
+        has(open, "IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS", "covered browser chrome is not exposed to accessibility");
+        String dismiss = method("HistoryPanel", "dismiss");
+        before(dismiss, "searchField.clearFocus()", "setVisibility(View.GONE)", "history releases editor focus before hiding");
+        has(dismiss, "hideSoftInputFromWindow", "history filter keyboard closes on dismissal");
+        has(method("NativeBrowserActivity", "onBackPressed"), "address.hasFocus()", "Back settles editing independently of suggestions");
+        String row = method("HistoryPanel", "makeRow");
+        has(row, "remove.setMinimumWidth(dp(48))", "delete does not compete with open-row below48dp width");
+        has(row, "remove.setMinimumHeight(dp(48))", "delete target minimum48dp high");
+    }
+
+    private static void nativePaletteContinuity() {
+        String dispatch = method("NativeBrowserActivity", "applySurfacePalette");
+        String chrome = method("NativeBrowserActivity", "applyChromePalette");
+        lacks(chrome, "dismiss()", "theme repaint retains open menu identity and focus");
+        lacks(chrome, "refreshUrlSuggestions()", "theme repaint retains existing suggestion rows");
+        has(chrome, "overflowPalette.apply()", "open menu colors update without reopening");
+        has(chrome, "suggestionPalette.apply()", "existing suggestion rows recolor in place");
+        lacks(chrome, "address.setBackground(", "address background identity survives repaint");
+        before(method("NativeBrowserActivity", "refreshUrlSuggestions"), "suggestionPalette.clear()",
+                "urlSuggest.removeAllViews()", "replaced suggestions release their bindings");
+        has(method("NativeBrowserActivity", "showMenu"), "overflowPalette.clear()", "dismissed menu releases owned bindings");
+        has(method("NativeBrowserActivity", "showMenu"), "setClippingEnabled(true)", "popup uses the public SDK clipping API");
+        lacks(source("NativeBrowserActivity.java"), "setClipToScreenEnabled", "non-public popup API must not return");
+        has(method("NativeBrowserActivity", "applySystemBarAppearance"), "setSystemBarsAppearance", "modern bar appearance is updated explicitly");
+        has(method("NativeBrowserActivity", "applySystemBarAppearance"), "SYSTEM_UI_FLAG_LAYOUT_STABLE",
+                "system-bar visibility excursions must not change the retained scroll viewport");
+        before(method("BrowserDialogs", "confirm"), "dialog.show()", "dialog.palette.apply()", "dialog window is repainted after framework show initialization");
+        lacks(dispatch, "interactive()", "paused/startup palette repaint is not an input action");
+        has(dispatch, "closed || quiescing || cleanupComplete", "terminal overlays are not repainted");
+        lacks(source("NativeBrowserActivity.java"), "rebuildPaletteSurfaces", "theme changes never replace live overlay owners");
+        for (String owner : List.of("NewTabPage", "HistoryPanel", "TabSwitcherView")) {
+            String paint = method(owner, "applyPalette");
+            has(paint, "readPalette()", owner + " reads current semantic roles");
+            has(paint, ".apply()", owner + " repaints owned bindings");
+            has(dispatch, "applyPalette()", "activity dispatches native overlay paints");
+            for (String forbidden : List.of("new ", "refresh(", "rebuild(", "show(", "dismiss(", "setText(",
+                    "requestFocus(", "clearFocus(", "scrollTo(", "setVisibility(", "store.", ".add(")) {
+                lacks(paint, forbidden, owner + " palette operation preserves content/state: " + forbidden);
+            }
+            lacks(source(owner + ".java"), "private final int PAGE", owner + " palette roles are not constructor snapshots");
+        }
+        has(method("NewTabPage", "applyPalette"), "BrowserDialogs.applyPalette", "NTP retains/repaints its live dialog");
+        has(method("HistoryPanel", "applyPalette"), "BrowserDialogs.applyPalette", "history retains/repaints live dialogs");
+        has(method("TabSwitcherView", "rebuild"), "cardPalette.clear()", "replaced tab cards release old view bindings");
+        has(method("TabSwitcherView", "dismiss"), "cardPalette.clear()", "dismissed tab cards release view bindings");
+        has(method("BrowserDialogs", "danger"), "ON_DANGER()", "danger foreground has its own contrast role");
+        has(method("BrowserDialogs", "confirm"), "applySystemBarAppearance", "dialog has its own window appearance binding");
+        has(method("NativeBrowserActivity", "applySystemBarPalette"), "setBackgroundDrawable", "transparent bars have a palette-aware window underlay");
+        has(method("NativeBrowserActivity", "applySystemBarPalette"), "browserFrame.setBackgroundColor(CANVAS)", "inset frame does not expose a light background at night");
+        String config = method("NativeBrowserActivity", "onConfigurationChanged");
+        before(config, "tabSwitcher.retainPaletteAnchor()", "super.onConfigurationChanged(newConfig)",
+                "overview anchor precedes superclass Window configuration dispatch, not just later palette mutations");
+        has(method("NativeBrowserActivity", "onCreate"), "browserFrame = createBrowserFrame()", "real Activity uses the tested root inset hook");
+        String insetRoot = method("NativeBrowserActivity", "createBrowserFrame");
+        before(insetRoot, "tabSwitcher.retainInsetsAnchor()", "super.onApplyWindowInsets(insets)", "logical capture precedes existing inset owner application");
+        has(insetRoot, "return super.onApplyWindowInsets(insets)", "root preserves original consumption/IME dispatch result");
+        String bars = method("NativeBrowserActivity", "applySystemBarPalette");
+        before(bars, "tabSwitcher.retainPaletteAnchor()", "Window windowFrame", "overview anchor is captured before any Window palette mutation");
+        has(bars, "windowBackground == null", "window underlay is installed only once per Activity");
+        has(bars, "windowBackground.setColor(CANVAS)", "later palette changes invalidate the retained window drawable in place");
+        lacks(bars, "setBackgroundDrawable(new ", "palette cannot replace the Window background drawable each time");
+        before(method("TabSwitcherView", "applyPalette"), "retainPaletteAnchor()", "readPalette()", "standalone overview repaint also protects its viewport");
+        String anchor = method("TabSwitcherView", "retainPaletteAnchor");
+        has(anchor, "paletteObserver != null", "palette work coalesces until its settled pre-draw");
+        before(anchor, "retainScrollPosition()", "addOnPreDrawListener", "capture precedes registration of the final-layout restore");
+        lacks(anchor, ".post(", "no delayed retry can race the settled range");
+        has(source("TabSwitcherView.java"), "if (paletteAnchorRestore != this)", "obsolete pre-draw snapshot cannot consume a new transaction");
+        has(method("TabSwitcherView", "onLayout"), "restoreOnLayout && paletteObserver == null", "intermediate inset layout cannot consume a palette anchor");
+        has(method("TabSwitcherView", "restoreScrollPosition"), "scroll.getScrollY() != target", "unchanged palette viewport causes no scroll call");
+        has(method("TabSwitcherView", "cancelScrollWork"), "removePaletteAnchorListener()", "dismiss/detach/show/input release observer ownership");
+        for (String input : List.of("dispatchTouchEvent", "dispatchGenericMotionEvent", "dispatchKeyEvent")) {
+            has(method("TabSwitcherView", input), "cancelScrollWork()", "new user input wins over deferred anchor work: " + input);
+        }
+        has(source("TabSwitcherView.java"), "new FrameLayout.LayoutParams(dp(48), dp(48), Gravity.TOP | Gravity.END)", "overview close target is at least 48dp without resizing the preview slot");
+    }
+
+    private static void nativeFontContinuity() {
+        has(source("AndroidManifest.xml.jinja2"),
+                "android:configChanges=\"orientation|screenSize|keyboardHidden|uiMode|fontScale\"",
+                "only fontScale is added to the native Activity configuration contract");
+        has(method("NativeBrowserActivity", "onCreate"),
+                "appliedFontScale = getResources().getConfiguration().fontScale", "initialize last-applied font scale");
+        String config = method("NativeBrowserActivity", "onConfigurationChanged");
+        before(config, "tabSwitcher.retainPaletteAnchor()", "super.onConfigurationChanged(newConfig)",
+                "font configuration retains the existing pre-super anchor boundary");
+        has(config, "Float.compare(appliedFontScale, newConfig.fontScale)", "compare applied state, not already-updated Resources");
+        before(config, "appliedFontScale = newConfig.fontScale", "applySurfaceFonts()", "record current font before dispatch");
+        has(method("FontBindings", "bind"), "view.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, originalSp)",
+                "framework SP handles nonlinear conversion; no cached pixel size");
+        has(method("FontBindings", "clear"), "bindings.clear()", "retired font owners release references");
+        String dispatch = method("NativeBrowserActivity", "applySurfaceFonts");
+        has(dispatch, "closed || quiescing || cleanupComplete", "terminal owners cannot receive font dispatch");
+        lacks(dispatch, "interactive()", "startup/hidden/paused font refresh is not an input action");
+        for (String owner : List.of("chromeFonts", "suggestionFonts", "overflowFonts")) {
+            has(dispatch, owner + ".apply()", "existing Activity font owner refreshes: " + owner);
+        }
+        for (String owner : List.of("newTab", "historyPanel", "tabSwitcher")) {
+            has(dispatch, "if (" + owner + " != null) " + owner + ".applyFontScale()", "null-safe font surface: " + owner);
+        }
+        for (String owner : List.of("NewTabPage", "HistoryPanel", "TabSwitcherView")) {
+            String font = method(owner, "applyFontScale");
+            has(font, "staticFonts.apply()", "static font roles refresh on " + owner);
+            for (String forbidden : List.of("refresh(", "rebuild(", "removeAllViews(", "setText(", "clearFocus(", "hideKeyboard(")) {
+                lacks(font, forbidden, "font refresh preserves existing content/focus on " + owner + ": " + forbidden);
+            }
+        }
+        for (String body : List.of(config, dispatch)) {
+            for (String forbidden : List.of("runtime.", "manager.", "window.", "initializeBrowserUi(", "createBlankTab(",
+                    "closeNativeView(", "finish(", "recreate(", "setContentView(", "dismiss(")) {
+                lacks(body, forbidden, "font configuration does not change native/window ownership: " + forbidden);
+            }
+        }
+        before(method("NewTabPage", "refresh"), "tileFonts.clear()", "tiles.removeAllViews()", "replaced tile fonts retire");
+        before(method("HistoryPanel", "rebuild"), "rowFonts.clear()", "list.removeAllViews()", "replaced history fonts retire");
+        before(method("TabSwitcherView", "rebuild"), "cardFonts.clear()", "grid.removeAllViews()", "replaced card fonts retire");
+        has(method("TabSwitcherView", "dismiss"), "cardFonts.clear()", "dismissed card fonts retire");
+        before(method("NativeBrowserActivity", "refreshUrlSuggestions"), "suggestionFonts.clear()", "urlSuggest.removeAllViews()",
+                "replaced suggestion fonts retire");
+        String menu = method("NativeBrowserActivity", "showMenu");
+        has(menu, "overflowFonts.clear()", "dismissed overflow fonts retire");
+        has(menu, "anchor.addOnLayoutChangeListener(anchorLayout)", "live popup responds to actual anchor layout only");
+        has(menu, "Runnable resize = () -> resizeOverflowMenu(popup, scroll, anchor)", "same owner receives one direct remeasure");
+        has(menu, "anchor.removeOnLayoutChangeListener(anchorLayout)", "popup anchor listener retires on dismiss");
+        for (String forbidden : List.of("post(", "postDelayed(", "addOnGlobalLayoutListener(", "addOnPreDrawListener(")) {
+            lacks(menu, forbidden, "popup layout hook has no timer/retry/global self-layout loop: " + forbidden);
+        }
+        has(menu, "overflowResize = null", "dismissed popup releases its resize owner");
+        String resize = method("NativeBrowserActivity", "resizeOverflowMenu");
+        has(resize, "overflowMenu != popup || !popup.isShowing()", "retired popup cannot resize a replacement");
+        has(resize, "getMaxAvailableHeight(anchor, dp(6))", "live popup uses actual anchor bounds");
+        has(resize, "View.MeasureSpec.AT_MOST", "live popup has a bounded scroll viewport");
+        has(resize, "popup.update(width, scroll.getMeasuredHeight())", "resize same live popup after actual text growth");
+        for (String forbidden : List.of("showAsDropDown", "dismiss(", "scrollTo(", "requestFocus(", "requestLayout(", "post(")) {
+            lacks(resize, forbidden, "popup font remeasure retains identity/scroll/focus: " + forbidden);
+        }
+        has(method("NewTabPage", "applyFontScale"), "BrowserDialogs.applyFontScale(removalDialog)", "NTP dialog follows system font");
+        has(method("HistoryPanel", "applyFontScale"), "BrowserDialogs.applyFontScale(clearDialog)", "clear dialog follows system font");
+        has(method("HistoryPanel", "applyFontScale"), "BrowserDialogs.applyFontScale(rowDialog)", "row dialog follows system font");
+        has(method("ThemedDialog", "dismiss"), "fonts.clear()", "dismissed dialog drops its font callbacks");
+        has(method("DialogActions", "onMeasure"), "cancel.getMeasuredWidth()", "complete cancel label decides horizontal fit");
+        has(method("DialogActions", "onMeasure"), "confirm.getMeasuredWidth()", "complete positive label decides horizontal fit");
+        has(method("DialogActions", "onMeasure"), "stacked ? VERTICAL : HORIZONTAL", "actions stack from measured content");
+        lacks(method("DialogActions", "onMeasure"), "fontScale", "stacking does not use a magic font-scale threshold");
+        has(method("DialogPanel", "onMeasure"), "available - margins - actions.getMeasuredHeight()", "body scroll budget reserves actions");
+        has(method("BrowserDialogs", "confirm"), "panel.addView(textScroll", "dialog text is separately scrollable");
+        has(source("TabSwitcherView.java"), "Math.max(dp(122), placeholder.getMeasuredHeight())", "preview floor admits measured large-font content");
+        has(source("TabSwitcherView.java"), "placeholder.measure", "preview grows from owned text, not bitmap intrinsic dimensions");
+        String[][] roles = {
+            {"NativeBrowserActivity", "chromeFonts.bind(title, 19)", "chromeFonts.bind(splashStatus, 13)",
+                "chromeFonts.bind(tabCounter, 12)", "chromeFonts.bind(address, 16)", "chromeFonts.bind(restoreRetry, 14)", "overflowFonts.bind(action, 14)",
+                "suggestionFonts.bind(titleView, 14.5f)", "suggestionFonts.bind(originView, 12)"},
+            {"NewTabPage", "staticFonts.bind(footer, 11)", "staticFonts.bind(title, 17)",
+                "staticFonts.bind(hint, 12.5f)", "staticFonts.bind(section, 17)", "staticFonts.bind(all, 14)",
+                "staticFonts.bind(title, 16)", "staticFonts.bind(body, 13.5f)",
+                "tileFonts.bind(avatar, 16)", "tileFonts.bind(name, 12.5f)", "tileFonts.bind(meta, 10.5f)"},
+            {"HistoryPanel", "staticFonts.bind(back, 23)", "staticFonts.bind(title, 18)", "staticFonts.bind(clear, 13)",
+                "staticFonts.bind(searchField, 14)", "staticFonts.bind(emptyTitle, 13)", "staticFonts.bind(hint, 11)",
+                "rowFonts.bind(header, 12.5f)", "rowFonts.bind(badge, 14)", "rowFonts.bind(title, 14)",
+                "rowFonts.bind(sub, 12.5f)", "rowFonts.bind(time, 11.5f)", "rowFonts.bind(remove, 15)"},
+            {"TabSwitcherView", "staticFonts.bind(emptyLabel, 13)", "staticFonts.bind(back, 23)", "staticFonts.bind(title, 18)",
+                "staticFonts.bind(countLabel, 12.5f)", "staticFonts.bind(create, 24)", "staticFonts.bind(label, 12.5f)",
+                "staticFonts.bind(hint, 11)", "cardFonts.bind(hostLabel, 11)", "cardFonts.bind(note, 12)",
+                "cardFonts.bind(close, 14)", "cardFonts.bind(title, 13)", "cardFonts.bind(badge, 10)",
+                "cardFonts.bind(url, 11.5f)", "cardFonts.bind(avatar, 18)"},
+            {"BrowserDialogs", "dialog.fonts.bind(heading, 19)", "dialog.fonts.bind(body, 14.5f)", "fonts.bind(view, 14.5f)"}
+        };
+        int count = 0;
+        for (String[] file : roles) {
+            String text = source(file[0] + ".java");
+            for (int i = 1; i < file.length; i++) {
+                has(text, file[i], "original SP role retained: " + file[0] + ": " + file[i]);
+                count++;
+            }
+            lacks(text, "scaledDensity", "no linear pixel conversion in " + file[0]);
+            lacks(text, "COMPLEX_UNIT_PX", "no frozen pixel font in " + file[0]);
+            lacks(text, "setAutoSizeTextType", "no font shrinking to mask overflow in " + file[0]);
+            if (!file[0].equals("NativeBrowserActivity")) lacks(text, ".setTextSize(", "all roles participate in binding: " + file[0]);
+        }
+        check(count == 47, "all47 surviving/new text roles audited; removed editor/decorative roles are not retained");
     }
 
     private static void nonDestructiveQuiescence() {
@@ -204,6 +563,18 @@ public final class NativeBrowserUiSourceContractTest {
 
     private static void privateLifecycleStages() {
         String create = method("NativeBrowserActivity", "onCreate");
+        String beforeStartup = create.substring(0, create.indexOf("BrowserStartupController.getInstance()"));
+        lacks(beforeStartup, "pageContainer.addView(manager",
+                "renderer stays off-window before Chromium registers Chrome_UIThread");
+        String success = method("", "onSuccess");
+        before(success, "if (!current() || uiBuilt) return;", "pageContainer.addView(manager",
+                "stale or duplicate startup cannot attach the renderer");
+        has(success, "pageContainer.addView(manager, 0, new FrameLayout.LayoutParams(-1, -1))",
+                "successful startup inserts the renderer below existing native overlays");
+        before(success, "pageContainer.addView(manager", "initializeBrowserUi()",
+                "successful native startup owns renderer attachment before browser UI initialization");
+        lacks(method("", "onFailure"), "pageContainer.addView(manager",
+                "failed Chromium startup never attaches the renderer Surface");
         before(create, "Log.i(TAG, \"LIFECYCLE_ON_CREATE_INTENT_VALIDATE\")", "validateIntent(getIntent())", "intent stage is fixed and precedes validation");
         before(create, "Log.i(TAG, \"LIFECYCLE_ON_CREATE_SAVED_STATE_SESSION_CHECK\")", "savedState != null", "saved-state stage precedes session check");
         before(create, "Log.i(TAG, \"LIFECYCLE_ON_CREATE_RUNTIME_ATTACH\")", "runtime.attach(this)", "attach stage precedes runtime ownership");
@@ -214,6 +585,11 @@ public final class NativeBrowserUiSourceContractTest {
     }
 
     private static void eventDrivenForegroundVisibility() {
+        String create = method("NativeBrowserActivity", "onCreate");
+        before(create, "manager.setWindow(window)", "manager.usePersistentTabContentViewHost()",
+                "initialize compositor before opting into its fixed product host");
+        before(create, "manager.usePersistentTabContentViewHost()", "installShellObserverHooks()",
+                "product renderer and toolbar policy precede every retained Shell");
         String activity = source("NativeBrowserActivity.java");
         lacks(activity, "uiTick", "no perpetual UI polling runnable");
         lacks(activity, "postDelayed", "no periodic view/history/preview polling");
@@ -224,9 +600,11 @@ public final class NativeBrowserUiSourceContractTest {
         has(visibility, "pageForeground && shell == active ? Visibility.VISIBLE : Visibility.HIDDEN",
                 "only selected foreground WebContents may be visible");
         has(visibility, "contents.getVisibility() != visibility", "visibility updates are idempotent");
-        for (String overlay : List.of("tabSwitcher", "historyPanel", "newTab")) {
+        for (String overlay : List.of("historyPanel", "newTab")) {
             has(visibility, overlay, "native overlay hides underlying web page: " + overlay);
         }
+        lacks(visibility, "tabSwitcher.isShowing()",
+                "tab switcher keeps the active page visible so real previews can be captured");
         String pause = method("NativeBrowserActivity", "onPause");
         before(pause, "resumed = false", "syncWebContentsVisibility()", "background flag set before hiding tabs");
         has(pause, "cancelUiWork()", "pause cancels pending capture/refresh");
@@ -254,7 +632,7 @@ public final class NativeBrowserUiSourceContractTest {
         has(capture, "shell.getWebContents() == contents", "WebContents identity must still match");
         has(capture, "url.equals(visibleUrl(shell))", "preview URL must still match");
         has(capture, "result == PixelCopy.SUCCESS && samePage", "only matching successful pixels are published");
-        has(capture, "PixelCopy.ERROR_SOURCE_NO_DATA", "first-buffer copies can retry honestly");
+        has(capture, "Preview copy rejected", "rejected copies stay diagnosable without string concatenation");
         has(capture, "previewRetries < MAX_PREVIEW_RETRIES", "source-no-data retries are bounded");
         has(method("NativeBrowserActivity", "schedulePreviewCapture"), "postOnAnimation(previewCapture)",
                 "retry on a real animation traversal, not timer/JS spoofing");
@@ -282,6 +660,106 @@ public final class NativeBrowserUiSourceContractTest {
         }
     }
 
+    private static void pageRestoreCover() {
+        has(method("NativeBrowserActivity", "showPageRestoring"), "beginPageRestoring(shell, false)",
+                "non-reload recovery shares the page-area presenter");
+        String show = method("NativeBrowserActivity", "beginPageRestoring");
+        has(show, "restoreSplashShown = true", "reclaimed renderer gets honest page-area loading state");
+        has(show, "splash.setVisibility(View.VISIBLE)", "reuse the startup splash without touching the renderer");
+        has(show, "!reloading && interrupted == null && isPageReady(shell)",
+                "only ordinary ready pages can skip recovery; a dead saved frame cannot");
+        has(show, "restoreShell = shell", "restore state is Shell-owned");
+        has(show, "restoreContents = contents", "restore state is WebContents-owned");
+        has(show, "restoreUrl = visibleUrl(shell)", "navigation URL belongs to restore state");
+        has(show, "restoreEpoch != epoch", "retired deadline cannot alter a new restore");
+        has(show, "restoreRetry.setVisibility(View.VISIBLE)", "deadline exposes a real reload action, not an empty page");
+        has(show, "splashSpinner.setVisibility(View.GONE)", "a long recovery is not an endless spinner");
+        has(show, "interrupted == null ? 8000", "ordinary unready recovery retains eight-second budget");
+        has(show, "now + 8000", "interrupted retry reentry gets bounded foreground budget");
+        has(show, "interrupted.retryDeadline = priorDeadline", "pending URL rebind cannot renew foreground retry budget");
+        has(show, "interrupted == null && isBlankPage(shell, visibleUrl(shell))",
+                "unowned dead about:blank receives recovery instead of being skipped as native NTP");
+        String marker = method("NativeBrowserActivity", "pageInterruption");
+        lacks(marker, "visibleUrl(shell)", "even a pending native-NTP URL cannot erase an existing dead document marker");
+        lacks(marker, "!observer.interruptedUrl.equals(visibleUrl(shell))",
+                "pending visible URL drift cannot erase an interrupted document");
+        String start = method("ShellHistoryObserver", "didStartNavigationInPrimaryMainFrame");
+        lacks(start, "clearInterruption()", "navigation start is not proof that dead document was replaced");
+        has(start, "!navigation.isSameDocument()", "same-document navigation cannot acquire fresh replacement proof");
+        has(start, "retryCommitted = false", "a new candidate invalidates earlier committed replacement proof");
+        has(show, "postOnAnimationDelayed(restoreTimeout, remaining)", "deadline changes state, not fake readiness");
+        has(methodDeclarations.get("NativeBrowserActivity#beginPageRestoring"),
+                "页面已中断，可重新加载或切换标签页", "known loss has honest immediate interruption copy");
+        lacks(show, "bringToFront()", "recovery stays below chrome/native destinations");
+        String owns = method("NativeBrowserActivity", "ownsPageRestoring");
+        for (String guard : List.of("restoreGeneration == generation", "manager.getActiveShell() == shell",
+                "restoreShell == shell", "restoreContents == contents", "shell.getWebContents() == contents",
+                "restoreUrl.equals(visibleUrl(shell))", "interactive()", "!contents.isDestroyed()")) {
+            has(owns, guard, "recovery ownership guard: " + guard);
+        }
+        String reconcile = method("NativeBrowserActivity", "reconcilePageRestoring");
+        has(reconcile, "active != chromeShell || contents != chromeContents", "all active-owner transitions are reconciled");
+        has(reconcile, "changed || stale", "ordinary refresh cannot reset delayed recovery");
+        has(reconcile, "interrupted && !restoreSplashShown", "same-owner renderer death does not require identity change");
+        has(reconcile, "!interrupted && isPageReady(active)", "saved-ready dead frame cannot remove cover");
+        has(method("NativeBrowserActivity", "refreshChrome"), "reconcilePageRestoring()", "close/native-close/new-tab paths share reconciliation");
+        String hide = method("NativeBrowserActivity", "hidePageRestoring");
+        has(hide, "removeCallbacks(restoreTimeout)", "cancel stale deadlines explicitly");
+        has(hide, "interrupted.retryDeadline = 0", "hide cancels UI budget without issuing another reload");
+        has(method("NativeBrowserActivity", "cancelUiWork"), "hidePageRestoring()", "pause/shutdown retires visible recovery work");
+        String retry = method("NativeBrowserActivity", "retryPageRestoring");
+        has(retry, "ownsPageRestoring(shell, contents)", "retry validates current live owner");
+        has(retry, "reloadPage(shell)", "page action shares guarded reload with menu");
+        String reload = method("NativeBrowserActivity", "reloadPage");
+        has(reload, "interrupted.retryBusy", "retained observer gate blocks duplicate reloads across screen reentry");
+        before(reload, "beginPageRestoring(shell, true)", "reload(true)", "reset busy state before repost-checking reload prevents repeat taps");
+        has(method("NativeBrowserActivity", "performMenuAction"), "reloadPage(manager.getActiveShell())",
+                "ordinary menu refresh on dead page reconciles interruption through shared busy path");
+        String complete = method("NativeBrowserActivity", "completePageRestoring");
+        has(complete, "pageInterruption(shell) == null", "known interruption must retire before readiness can uncover page");
+        has(complete, "ownsPageRestoring(shell, contents) && isPageReady(shell)", "load-stop alone is not success evidence");
+        for (String event : List.of("didFirstVisuallyNonEmptyPaint", "didStopLoading")) {
+            String callback = method("ShellHistoryObserver", event);
+            has(callback, "completePageRestoring(shell, contents)", "observer callback has exact identity: " + event);
+            has(callback, "ownsContents()", "completion checks observer ownership: " + event);
+            has(callback, "finishInterruptedPage(", "completion requires fresh interrupted document proof: " + event);
+        }
+        String death = method("ShellHistoryObserver", "primaryMainFrameRenderProcessGone");
+        has(death, "ownsContents()", "real Chromium renderer-death callback validates owner");
+        has(death, "visibleUrl(shell).equals(newTabUrls.get(shell))",
+                "renderer loss native exemption requires visible explicitly owned NTP");
+        has(death, "deadDocumentUrl.equals(newTabUrls.get(shell))",
+                "pending native-entry URL cannot exempt a still-committed web document");
+        has(death, "contents.getLastCommittedUrl().getSpec()", "renderer-loss identity uses actual committed document URL");
+        has(death, "interruptedUrl = deadDocumentUrl.isEmpty() ? visibleUrl(shell) : deadDocumentUrl",
+                "death records committed interrupted URL, falling back only before any commit");
+        has(death, "interruptedNavigation = ++navigationSerial", "death retires earlier navigation proof");
+        has(death, "showPageRestoring(shell)", "known active death gets immediate page-only interruption");
+        lacks(death, "reload(", "death never silently reloads or replays POST");
+        String observerOwns = method("ShellHistoryObserver", "ownsContents");
+        for (String guard : List.of("ownerGeneration == generation", "historyObservers.get(shell) == this",
+                "shell.getWebContents() == contents", "!contents.isDestroyed()", "validTab(shell)")) {
+            has(observerOwns, guard, "durable observer ownership guard: " + guard);
+        }
+        String genuine = method("ShellHistoryObserver", "finishInterruptedPage");
+        for (String guard : List.of("!retryCommitted", "interruptedNavigation != navigationSerial",
+                "!interruptedUrl.equals(url)", "!url.equals(visibleUrl(shell))", "!isPageReady(shell)")) {
+            has(genuine, guard, "fresh interrupted completion proof: " + guard);
+        }
+        String finish = method("ShellHistoryObserver", "didFinishNavigationInPrimaryMainFrame");
+        has(finish, "retryNavigation == navigation", "fresh retry commits require exact handle identity");
+        has(finish, "retryNavigation = null", "native navigation handle is released at finish");
+        has(finish, "navigation.isSameDocument() && interruptedUrl != null && retryCommitted",
+                "same-document router may follow existing fresh proof, never create it");
+        has(finish, "url.equals(visibleUrl(shell))", "only current successful router URL can follow replacement proof");
+        has(method("NativeBrowserActivity", "initializeBrowserUi"), "reparentSplashToPageArea()", "startup cover becomes page-area-only after startup");
+        has(method("NativeBrowserActivity", "reparentSplashToPageArea"), "pageContainer.addView(splash", "chrome remains reachable throughout recovery");
+        String capture = method("NativeBrowserActivity", "captureActivePreview");
+        lacks(capture, "if (!retrying)", "retry callback cannot suppress its own schedule");
+        has(capture, "result == PixelCopy.ERROR_TIMEOUT", "only transient copy failures are retryable");
+        lacks(capture, "tabSwitcher.isShowing()", "surface-only copy may settle behind overview sibling");
+    }
+
     private static void popupAndHistorySemantics() {
         String hooks = method("NativeBrowserActivity", "installShellObserverHooks");
         has(hooks, "contentview_holder", "popup ContentView initialization hook is retained");
@@ -300,9 +778,15 @@ public final class NativeBrowserUiSourceContractTest {
 
     private static void overlaySafetyAndWarnings() {
         String switcher = source("TabSwitcherView.java");
-        has(switcher, "new ScrollView(context)", "tab overview scrolls through all retained tabs");
+        has(switcher, "new AnchorScrollView(context)", "tab overview scrolls through all retained tabs");
+        has(switcher, "class AnchorScrollView extends ScrollView", "overview retains native ScrollView behavior");
         has(switcher, "widthDp < 300f ? 1 : 2", "overview retains adaptive two-column cards");
-        has(method("TabSwitcherView", "makeCard"), "image.setImageBitmap(item.preview)", "overview displays real cached bitmaps");
+        has(method("CardBinding", "bind"), "item.preview != null && !item.preview.isRecycled()", "overview accepts only a valid cached bitmap");
+        has(method("CardBinding", "bind"), "image.setImageBitmap(nextPreview)", "overview displays the actual cached bitmap, or clears an absent preview");
+        has(method("TabSwitcherView", "refresh"), "canUpdateCards(items, columns)", "unchanged shell order updates retained cards");
+        has(method("TabSwitcherView", "onMeasure"), "View.MeasureSpec.getSize(widthMeasureSpec)", "reflow observes the new measured width, not a stale previous width");
+        lacks(method("TabSwitcherView", "refresh"), ".post(", "refresh never restores against an old or empty layout range");
+        has(method("TabSwitcherView", "onDetachedFromWindow"), "cancelScrollWork()", "detached overview cancels pending layout work");
         has(method("TabSwitcherView", "dismiss"), "cancelScrollWork()", "shutdown/dismiss cancels deferred scrolling");
         has(method("TabSwitcherView", "dismiss"), "grid.removeAllViews()", "dismiss drops stale ImageView references");
         lacks(switcher, ".recycle()", "overview never recycles displayed bitmaps");
@@ -323,6 +807,102 @@ public final class NativeBrowserUiSourceContractTest {
         String source = sources.get(name);
         if (source == null) throw new IllegalArgumentException("Source not parsed: " + name);
         return source;
+    }
+
+    /**
+     * The product is proxy-mandatory, so the only legitimate resolver is the proxy
+     * exit: the frozen argv must short-circuit every local resolution path (including
+     * DNS prefetch and preconnect hints) so destination hostnames cannot leak to the
+     * local ISP resolver, while the proxy endpoint itself stays reachable.
+     */
+    /**
+     * Per-profile fingerprint differentiation: each profile carries a CSPRNG
+     * seed generated once and persisted in the app files dir, then frozen into
+     * the engine fingerprint payload, so canvas and audio readbacks differ
+     * across profiles, stay stable within one profile, and cannot be predicted
+     * from the environment name.
+     */
+    private static void perProfileFingerprintSeeds() {
+        String freeze = method("NativeBrowserApplication", "freezeCommandLine");
+        has(freeze, "loadOrCreateFingerprintSeed(launch.directorySuffix(), seedContext)",
+            "frozen argv must carry the per-profile fingerprint payload");
+        has(freeze, "fingerprintConfigPayload(fingerprintSeed)",
+            "frozen argv encodes the seed that was just persisted");
+        has(freeze, "seed_fp=", "freeze logs a non-reversible seed fingerprint");
+        String verify = method("NativeBrowserApplication", "verifyFrozenCommandLineFor");
+        has(verify, "readPersistedFingerprintSeed(launch.directorySuffix(), seedContext)",
+            "fingerprint payload belongs to the verified frozen switch set");
+        String load = method("NativeBrowserApplication", "loadOrCreateFingerprintSeed");
+        has(load, "FingerprintSeedStore.loadOrCreate(directorySuffix, context.getFilesDir())",
+            "the Application hands the app-private files dir to the seed store");
+        String file = method("NativeBrowserApplication", "fingerprintSeedFile");
+        has(file, "context.getFilesDir()", "seed storage is app-private");
+        lacks(file, "/data/data", "no hardcoded app data path");
+        String storeSource = source("FingerprintSeedStore.java");
+        String storeLoad = method("FingerprintSeedStore", "loadOrCreate");
+        has(storeLoad, "new SecureRandom().nextBytes(fresh)",
+            "seed is minted by a CSPRNG, not derived from the env name");
+        has(storeLoad, "persistAtomically(file, fresh)",
+            "the minted seed is persisted before the read-only verify");
+        has(storeSource, "SEED_BYTES = 8", "seed is 8 bytes on disk");
+        has(storeSource, "fingerprint-seeds", "seed storage lives under a dedicated dir");
+        String storeFile = method("FingerprintSeedStore", "seedFile");
+        has(storeFile, "directorySuffix + \".seed\"", "seed file is keyed by the env suffix");
+        has(storeFile, "setPosixFilePermissions", "seed directory is owner-only");
+        lacks(storeFile, "/data/data", "no hardcoded app data path");
+        String persist = method("FingerprintSeedStore", "persistAtomically");
+        has(persist, "ATOMIC_MOVE", "seed write is atomic");
+        String verifySeed = method("FingerprintSeedStore", "readPersisted");
+        has(verifySeed, "stored.length != SEED_BYTES", "persisted seed round-trips exactly");
+        String digest = method("FingerprintSeedStore", "fingerprint");
+        has(digest, "MessageDigest.getInstance(\"SHA-256\")",
+            "logs carry a digest, never the raw seed");
+        String payload = method("NativeBrowserApplication", "fingerprintConfigPayload");
+        has(payload, "canvasSeed", "canvas noise seed is profile-derived");
+        has(payload, "audioSeed", "audio noise seed is profile-derived");
+        has(payload, "schemaVersion", "payload keeps the engine schema version");
+    }
+
+    private static void frozenModeSpecificResolverChain() {
+        String freeze = method("NativeBrowserApplication", "freezeCommandLine");
+        has(freeze, "if (launch.profile.isDirect())", "direct requires explicit profile mode");
+        has(freeze, "arguments.add(\"--agent-browser-product-network-mode=direct\")",
+                "direct emits the native explicit mode rather than no-proxy-server");
+        before(freeze, "arguments.add(\"--agent-browser-product-network-mode=direct\")", "} else {",
+                "direct branch is distinct from proxy-only endpoint and DNS rules");
+        has(freeze, "\"--proxy-server=\" + launch.profile.proxy.proxyRule()",
+                "proxy branch retains the fixed endpoint");
+        has(freeze, "\"--host-resolver-rules=\" + launch.profile.proxy.hostResolverRules()",
+                "proxy branch retains proxy-exit-only resolver rules");
+        has(freeze, "verifyFrozenCommandLineFor(seedContext);",
+                "frozen argv is verified before native library load");
+        has(freeze, "\"--disable-quic\"", "both modes keep QUIC restriction");
+        has(freeze, "\"--force-webrtc-ip-handling-policy=disable_non_proxied_udp\"",
+                "both modes keep WebRTC non-proxied UDP restriction");
+        String verify = method("NativeBrowserApplication", "verifyFrozenCommandLineFor");
+        has(verify, "frozenNetworkMatches(command)", "freeze verification checks the mode-specific contract");
+        String network = method("NativeBrowserApplication", "frozenNetworkMatches");
+        has(network, "!launch.profile.isDirect()", "proxy verification does not dereference null direct proxy");
+        has(network, "!command.hasSwitch(\"agent-browser-product-network-mode\")",
+                "proxy cannot drift into explicit direct");
+        has(network, "launch.profile.proxy.hostResolverRules()",
+                "proxy verification reads the same resolver rules builder as the freeze");
+        has(network, "\"direct\".equals(command.getSwitchValue(\"agent-browser-product-network-mode\"))",
+                "direct verification requires the exact explicit value");
+        for (String rejected : List.of("proxy-server", "proxy-bypass-list", "no-proxy-server", "proxy-pac-url",
+                "proxy-auto-detect", "use-system-proxy-resolver", "host-resolver-rules", "host-rules",
+                "agent-browser-local-dns-policy", "agent-browser-proxy-bootstrap-host")) {
+            has(network, "\"" + rejected + "\"", "direct rejects stale or competing switch " + rejected);
+        }
+        String runtime = method("NativeBrowserRuntime", "<init>");
+        has(runtime, "launch.profile.hasProxyCredentials()", "native admission is safe for direct profiles");
+        has(runtime, "launch.profile.isDirect()", "initial runtime status is mode-aware");
+        has(source("NativeBrowserRuntime.java"), "不提供代理保护", "direct status does not claim fixed-proxy protection");
+        String spec = method("ProxySpec", "hostResolverRules");
+        has(spec, "MAP * ~NOTFOUND", "mapped names never reach the system resolver");
+        has(spec, "EXCLUDE 127.0.0.1", "loopback proxy endpoints stay reachable");
+        has(spec, "EXCLUDE localhost", "localhost proxy endpoints stay reachable");
+        has(spec, "HostSyntax.bracket(host)", "IPv6 proxy hosts keep resolver-rule brackets");
     }
 
     private static String method(String owner, String name) {

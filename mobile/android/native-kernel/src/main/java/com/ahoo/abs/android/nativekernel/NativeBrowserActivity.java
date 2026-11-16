@@ -19,14 +19,16 @@ import android.view.SurfaceView;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.Window;
+import android.view.WindowInsets;
 import android.view.inputmethod.EditorInfo;
 import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
-import android.widget.PopupMenu;
+import android.widget.PopupWindow;
 import android.widget.TextView;
 import android.widget.Toast;
 import com.ahoo.abs.android.MainActivity;
+import com.ahoo.abs.android.Ui;
 import com.ahoo.abs.android.browser.ControlProtocol;
 import com.ahoo.abs.core.LaunchSpec;
 import java.util.ArrayList;
@@ -63,37 +65,89 @@ public final class NativeBrowserActivity extends Activity {
     private static int INK;
     private static int MUTED;
     private static int ACCENT;
-    private static int ACCENT_SOFT;
     private static int SURFACE;
     private static int PILL;
     private static int DIVIDER;
     private static int CANVAS;
     // Shared holders for the other browser surfaces (same package).
-    static int C_CANVAS, C_SURFACE, C_INK, C_INK_SOFT, C_MUTED, C_ACCENT, C_ACCENT_DEEP, C_ACCENT_SOFT,
-            C_PILL, C_DIVIDER, C_STROKE, C_SUCCESS, C_WARNING, C_DANGER, C_TILE_TOP, C_TILE_BOTTOM,
-            C_RIPPLE;
+    static int C_CANVAS;
+    static int C_SURFACE;
+    static int C_INK;
+    static int C_INK_SOFT;
+    static int C_MUTED;
+    static int C_ACCENT;
+    static int C_ACCENT_DEEP;
+    static int C_ACCENT_SOFT;
+    static int C_PILL;
+    static int C_DIVIDER;
+    static int C_STROKE;
+    static int C_SUCCESS;
+    static int C_WARNING;
+    static int C_DANGER;
+    static int C_TILE_TOP;
+    static int C_TILE_BOTTOM;
+    static int C_RIPPLE;
     static boolean C_DARK;
 
     static void resolvePalette(android.app.Activity activity) {
         int mask = activity.getResources().getConfiguration().uiMode
                 & android.content.res.Configuration.UI_MODE_NIGHT_MASK;
         C_DARK = mask == android.content.res.Configuration.UI_MODE_NIGHT_YES;
-        if (C_DARK) {
-            C_CANVAS = 0xFF0E1016; C_SURFACE = 0xFF171B26; C_INK = 0xFFE6E9F2; C_INK_SOFT = 0xFFC3C9D6;
-            C_MUTED = 0xFF8B94A7; C_ACCENT = 0xFF818CF8; C_ACCENT_DEEP = 0xFFA5B4FC; C_ACCENT_SOFT = 0xFF23264A;
-            C_PILL = 0xFF232838; C_DIVIDER = 0xFF232838; C_STROKE = 0xFF232838;
-            C_SUCCESS = 0xFF34D399; C_WARNING = 0xFFFBBF24; C_DANGER = 0xFFF87171;
-            C_TILE_TOP = 0xFF1B2030; C_TILE_BOTTOM = 0xFF12151F; C_RIPPLE = 0x1AFFFFFF;
-        } else {
-            C_CANVAS = 0xFFF4F5F9; C_SURFACE = 0xFFFFFFFF; C_INK = 0xFF0F172A; C_INK_SOFT = 0xFF334155;
-            C_MUTED = 0xFF64748B; C_ACCENT = 0xFF4F46E5; C_ACCENT_DEEP = 0xFF4338CA; C_ACCENT_SOFT = 0xFFEDEFFF;
-            C_PILL = 0xFFF2F4F8; C_DIVIDER = 0xFFEDEFF4; C_STROKE = 0xFFE7E9F0;
-            C_SUCCESS = 0xFF059669; C_WARNING = 0xFFD97706; C_DANGER = 0xFFDC2626;
-            C_TILE_TOP = 0xFFFBFBFD; C_TILE_BOTTOM = 0xFFF1F3F8; C_RIPPLE = 0x1A0F172A;
-        }
-        INK = C_INK; MUTED = C_MUTED; ACCENT = C_ACCENT; ACCENT_SOFT = C_ACCENT_SOFT;
+        Ui.initPalette(activity);
+        C_CANVAS = Ui.BG; C_SURFACE = Ui.WHITE; C_INK = Ui.INK; C_INK_SOFT = Ui.INK_SOFT;
+        // 辅助文字需在画布和输入底色上可读，不直接沿用仅适合弱化装饰的灰色。
+        C_MUTED = C_DARK ? 0xFFADADAD : 0xFF6A6A6A;
+        C_ACCENT = Ui.ACCENT; C_ACCENT_DEEP = Ui.ACCENT_DEEP; C_ACCENT_SOFT = Ui.ACCENT_SOFT;
+        C_PILL = Ui.SURFACE_SOFT; C_DIVIDER = Ui.STROKE; C_STROKE = Ui.STROKE;
+        C_SUCCESS = Ui.SUCCESS; C_WARNING = Ui.WARNING; C_DANGER = Ui.DANGER;
+        C_TILE_TOP = C_CANVAS; C_TILE_BOTTOM = C_CANVAS;
+        C_RIPPLE = C_DARK ? 0x1AFFFFFF : 0x14000000;
+        INK = C_INK; MUTED = C_MUTED; ACCENT = C_ACCENT;
         SURFACE = C_SURFACE; PILL = C_PILL; DIVIDER = C_DIVIDER; CANVAS = C_CANVAS;
     }
+
+    /** Owned-view color bindings; never traverse or restyle the Chromium view hierarchy. */
+    static final class PaletteBindings {
+        private final List<Runnable> bindings = new ArrayList<>();
+
+        void add(Runnable binding) {
+            bindings.add(binding);
+            binding.run();
+        }
+
+        void apply() {
+            for (Runnable binding : bindings) binding.run();
+        }
+
+        void clear() {
+            bindings.clear();
+        }
+    }
+
+    /** Original-SP roles, reapplied by the framework (including nonlinear font scaling). */
+    static final class FontBindings {
+        private final List<Runnable> bindings = new ArrayList<>();
+
+        void bind(TextView view, float originalSp) {
+            Runnable binding = () -> view.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, originalSp);
+            bindings.add(binding);
+            binding.run();
+        }
+
+        void apply() {
+            for (Runnable binding : bindings) binding.run();
+        }
+
+        void clear() {
+            bindings.clear();
+        }
+    }
+
+    private final FontBindings chromeFonts = new FontBindings();
+    private final FontBindings overflowFonts = new FontBindings();
+    private final FontBindings suggestionFonts = new FontBindings();
+    private float appliedFontScale;
+    private Runnable overflowResize;
 
     private final Handler main = new Handler(Looper.getMainLooper());
     // PixelCopy owns its destination until its result callback. Never cancel this handler:
@@ -103,11 +157,13 @@ public final class NativeBrowserActivity extends Activity {
     private NativeBrowserRuntime runtime;
     private LinearLayout root;
     private FrameLayout browserFrame;
+    private android.graphics.drawable.ColorDrawable windowBackground;
     private ShellManager manager;
     private ActivityWindowAndroid window;
     private IntentRequestTracker intents;
     private TextView tabCounter;
     private TabSwitcherView tabSwitcher;
+    private String profileName;
     private List<TabSwitcherView.TabItem> shownTabs = new ArrayList<>();
     private final java.util.HashMap<Shell, Bitmap> tabPreviews = new java.util.HashMap<>();
     private final java.util.HashMap<Shell, String> previewUrls = new java.util.HashMap<>();
@@ -119,9 +175,15 @@ public final class NativeBrowserActivity extends Activity {
     private SurfaceHolder.Callback previewSurfaceObserver;
     private final Runnable previewCapture = this::captureActivePreview;
     private EditText address;
-    private TextView back;
+    private View back;
+    private View menuButton;
+    private LinearLayout chromeBar;
+    private View chromeDivider;
     private LinearLayout splash;
     private TextView splashStatus;
+    private TextView splashTitle;
+    private android.widget.ProgressBar splashSpinner;
+    private TextView restoreRetry;
     private Shell loadingShell;
     private String clipboardRaw;
     private View progressBar;
@@ -131,7 +193,19 @@ public final class NativeBrowserActivity extends Activity {
     private boolean quiescing;
     private boolean resumed;
     private boolean chromeRefreshPosted;
-    private PopupMenu overflowMenu;
+    private boolean restoreSplashShown;
+    private boolean restoreInterrupted;
+    private int restoreEpoch;
+    private Shell restoreShell;
+    private WebContents restoreContents;
+    private String restoreUrl;
+    private long restoreGeneration;
+    private Runnable restoreTimeout;
+    private Shell chromeShell;
+    private WebContents chromeContents;
+    private PopupWindow overflowMenu;
+    private final PaletteBindings overflowPalette = new PaletteBindings();
+    private final PaletteBindings suggestionPalette = new PaletteBindings();
     private boolean cleanupComplete;
     private boolean uiBuilt;
     private final java.util.HashMap<Shell, ShellHistoryObserver> historyObservers = new java.util.HashMap<>();
@@ -174,14 +248,9 @@ public final class NativeBrowserActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedState) {
         super.onCreate(savedState);
+        appliedFontScale = getResources().getConfiguration().fontScale;
         resolvePalette(this);
-        Window windowFrame = getWindow();
-        windowFrame.setStatusBarColor(CANVAS);
-        windowFrame.setNavigationBarColor(CANVAS);
-        int lightFlags = View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR | View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
-        windowFrame.getDecorView().setSystemUiVisibility(C_DARK
-                ? windowFrame.getDecorView().getSystemUiVisibility() & ~lightFlags
-                : windowFrame.getDecorView().getSystemUiVisibility() | lightFlags);
+        applySystemBarPalette();
         root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         // Give clearFocus() a neutral target. Otherwise Android can immediately refocus the
@@ -191,7 +260,8 @@ public final class NativeBrowserActivity extends Activity {
             if (!focused) cancelNavigationFocus();
         });
         root.setBackgroundColor(CANVAS);
-        browserFrame = new FrameLayout(this);
+        browserFrame = createBrowserFrame();
+        browserFrame.setBackgroundColor(CANVAS);
         browserFrame.setFitsSystemWindows(true);
         browserFrame.addView(root, new FrameLayout.LayoutParams(-1, -1));
         setContentView(browserFrame);
@@ -218,13 +288,15 @@ public final class NativeBrowserActivity extends Activity {
             intents = IntentRequestTracker.createFromActivity(this);
             window = new ActivityWindowAndroid(this, true, intents, null, true);
             manager.setWindow(window);
+            // Keep the shared compositor Surface attached while retained Shells change.
+            // Product mode also owns the stock Shell toolbar, including fullscreen exits.
+            manager.usePersistentTabContentViewHost();
             installShellObserverHooks();
             renderView = manager.getContentViewRenderView();
             installPreviewSurfaceHooks();
             window.setAnimationPlaceholderView(renderView.getSurfaceView());
             buildChrome();
             pageContainer = new FrameLayout(this);
-            pageContainer.addView(manager, new FrameLayout.LayoutParams(-1, -1));
             root.addView(pageContainer, new LinearLayout.LayoutParams(-1, 0, 1));
             attachHistorySurfaces(launch);
             attachTabSwitcher(launch);
@@ -234,6 +306,9 @@ public final class NativeBrowserActivity extends Activity {
                         @Override public void onSuccess(@Nullable StartupMetrics metrics) {
                             if (!current() || uiBuilt) return;
                             try {
+                                // Keep the renderer off-window until Chrome_UIThread is registered.
+                                // Native startup may create a Shell; insert below native overlays.
+                                pageContainer.addView(manager, 0, new FrameLayout.LayoutParams(-1, -1));
                                 initializeBrowserUi();
                             } catch (RuntimeException failure) {
                                 if (!current()) return;
@@ -257,11 +332,23 @@ public final class NativeBrowserActivity extends Activity {
         }
     }
 
+    private FrameLayout createBrowserFrame() {
+        return new FrameLayout(this) {
+            @Override
+            public WindowInsets onApplyWindowInsets(WindowInsets insets) {
+                // Capture before the existing fits owner changes padding/range. Palette
+                // pre-draw can already have finished before this later inset traversal.
+                if (tabSwitcher != null) tabSwitcher.retainInsetsAnchor();
+                return super.onApplyWindowInsets(insets);
+            }
+        };
+    }
+
     private int dp(float value) {
         return Math.round(getResources().getDisplayMetrics().density * value);
     }
 
-    /** Branded launch cover shown until the async startup callback finishes building the UI. */
+    /** 启动遮罩持续拦截输入，直到原有异步启动流程完成。 */
     private void buildSplash() {
         splash = new LinearLayout(this);
         splash.setOrientation(LinearLayout.VERTICAL);
@@ -270,27 +357,14 @@ public final class NativeBrowserActivity extends Activity {
         // Cover the (not yet built) content so pre-startup taps cannot reach it.
         splash.setClickable(true);
         splash.setFocusable(true);
-        LinearLayout mark = new LinearLayout(this);
-        mark.setGravity(Gravity.CENTER);
-        GradientDrawable markBackground = new GradientDrawable(GradientDrawable.Orientation.TL_BR,
-                new int[]{ACCENT, 0xFF7C3AED});
-        markBackground.setCornerRadius(dp(16));
-        mark.setBackground(markBackground);
-        mark.setElevation(dp(3));
-        TextView initial = new TextView(this);
-        initial.setText("A");
-        initial.setTextColor(0xFFFFFFFF);
-        initial.setTextSize(22);
-        initial.setTypeface(android.graphics.Typeface.create("sans-serif-medium",
-                android.graphics.Typeface.NORMAL));
-        mark.addView(initial);
-        LinearLayout markWrap = new LinearLayout(this);
-        markWrap.setGravity(Gravity.CENTER);
-        markWrap.addView(mark, new LinearLayout.LayoutParams(dp(46), dp(46)));
-        splash.addView(markWrap, new LinearLayout.LayoutParams(-2, -2));
+        splash.setPadding(dp(24), dp(24), dp(24), dp(24));
         TextView title = new TextView(this);
+        splashTitle = title;
+        title.setMaxLines(3);
+        title.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        title.setGravity(Gravity.CENTER);
         title.setText("ABS Browser");
-        title.setTextSize(19);
+        chromeFonts.bind(title, 19);
         title.setTextColor(INK);
         title.setTypeface(android.graphics.Typeface.create("sans-serif-medium",
                 android.graphics.Typeface.NORMAL));
@@ -299,15 +373,32 @@ public final class NativeBrowserActivity extends Activity {
         splash.addView(title, titleLp);
         splashStatus = new TextView(this);
         splashStatus.setText("正在准备独立环境…");
-        splashStatus.setTextSize(13);
+        splashStatus.setGravity(Gravity.CENTER);
+        splashStatus.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
+        chromeFonts.bind(splashStatus, 13);
         splashStatus.setTextColor(MUTED);
         LinearLayout.LayoutParams statusLp = new LinearLayout.LayoutParams(-2, -2);
         statusLp.topMargin = dp(8);
         splash.addView(splashStatus, statusLp);
         android.widget.ProgressBar spinner = new android.widget.ProgressBar(this);
+        splashSpinner = spinner;
+        spinner.setIndeterminateTintList(android.content.res.ColorStateList.valueOf(ACCENT));
         LinearLayout.LayoutParams spinnerLp = new LinearLayout.LayoutParams(dp(26), dp(26));
         spinnerLp.topMargin = dp(18);
         splash.addView(spinner, spinnerLp);
+        restoreRetry = new TextView(this);
+        restoreRetry.setText("重新加载");
+        restoreRetry.setGravity(Gravity.CENTER);
+        restoreRetry.setMinimumWidth(dp(112));
+        restoreRetry.setMinimumHeight(dp(48));
+        restoreRetry.setPadding(dp(18), dp(10), dp(18), dp(10));
+        chromeFonts.bind(restoreRetry, 14);
+        restoreRetry.setOnClickListener(view -> retryPageRestoring());
+        restoreRetry.setVisibility(View.GONE);
+        LinearLayout.LayoutParams retryLp = new LinearLayout.LayoutParams(-2, -2);
+        retryLp.topMargin = dp(18);
+        splash.addView(restoreRetry, retryLp);
+        applyRestoreActionPalette();
         browserFrame.addView(splash, new FrameLayout.LayoutParams(-1, -1));
     }
 
@@ -315,11 +406,186 @@ public final class NativeBrowserActivity extends Activity {
         if (splash != null && splash.getVisibility() != View.GONE) splash.setVisibility(View.GONE);
     }
 
+    private boolean isPageReady(Shell shell) {
+        WebContents contents = shell == null || shell.isDestroyed() ? null : shell.getWebContents();
+        RenderWidgetHostView view = contents == null ? null : contents.getRenderWidgetHostView();
+        return view != null && view.isReady();
+    }
+
+    /** A known renderer loss is not ordinary unreadiness: a saved old frame may still be ready.
+     *  The observer owns that interruption even while its tab or Activity is not foreground. */
+    private ShellHistoryObserver pageInterruption(Shell shell) {
+        ShellHistoryObserver observer = historyObservers.get(shell);
+        if (observer == null) return null;
+        // A pending URL or navigation start is not proof that the dead document was replaced.
+        if (!observer.ownsContents()) {
+            observer.clearInterruption();
+        }
+        return observer.interruptedUrl == null ? null : observer;
+    }
+
+    private void showPageRestoring(Shell shell) {
+        beginPageRestoring(shell, false);
+    }
+
+    /** Ordinary unready pages get a bounded wait; a dead page waits for an explicit user action. */
+    private void beginPageRestoring(Shell shell, boolean reloading) {
+        ShellHistoryObserver interrupted = pageInterruption(shell);
+        // Rebinding a pending/redirected URL is not foreground reentry: keep its original budget.
+        long priorDeadline = interrupted != null && restoreInterrupted && restoreShell == shell
+                && restoreContents == interrupted.contents ? interrupted.retryDeadline : 0;
+        hidePageRestoring();
+        if (!uiBuilt || splash == null || !interactive() || !validTab(shell)) return;
+        WebContents contents = shell.getWebContents();
+        if (contents == null || contents.isDestroyed()
+                || (interrupted == null && isBlankPage(shell, visibleUrl(shell)))
+                || (!reloading && interrupted == null && isPageReady(shell))) return;
+        if (interrupted != null && interrupted.retryBusy && priorDeadline > 0) {
+            interrupted.retryDeadline = priorDeadline;
+        }
+        restoreShell = shell;
+        restoreContents = contents;
+        restoreUrl = visibleUrl(shell);
+        restoreGeneration = generation;
+        restoreSplashShown = true;
+        restoreInterrupted = interrupted != null;
+        splashTitle.setText(tabTitle(shell));
+        splash.setVisibility(View.VISIBLE);
+        long now = android.os.SystemClock.elapsedRealtime();
+        if (interrupted != null && interrupted.retryBusy && interrupted.retryDeadline == 0) {
+            interrupted.retryDeadline = now + 8000;
+        }
+        long remaining = interrupted == null ? 8000 : interrupted.retryDeadline - now;
+        if (interrupted != null && remaining <= 0) {
+            interrupted.retryBusy = false;
+            interrupted.retryDeadline = 0;
+            splashStatus.setText(interrupted.retryRequested
+                    ? "页面恢复时间较长，可重新加载或切换标签页"
+                    : "页面已中断，可重新加载或切换标签页");
+            splashSpinner.setVisibility(View.GONE);
+            restoreRetry.setVisibility(View.VISIBLE);
+            return;
+        }
+        splashStatus.setText(reloading || interrupted != null ? "正在重新加载页面…" : "正在恢复页面…");
+        splashSpinner.setVisibility(View.VISIBLE);
+        restoreRetry.setVisibility(View.GONE);
+        int epoch = ++restoreEpoch;
+        restoreTimeout = () -> {
+            if (restoreEpoch != epoch || !ownsPageRestoring(shell, contents)) return;
+            restoreTimeout = null;
+            if (pageInterruption(shell) == null && isPageReady(shell)) {
+                hidePageRestoring();
+                return;
+            }
+            ShellHistoryObserver owner = pageInterruption(shell);
+            if (owner != null) {
+                owner.retryBusy = false;
+                owner.retryDeadline = 0;
+            }
+            splashSpinner.setVisibility(View.GONE);
+            splashStatus.setText("页面恢复时间较长，可重新加载或切换标签页");
+            restoreRetry.setVisibility(View.VISIBLE);
+        };
+        browserFrame.postOnAnimationDelayed(restoreTimeout, remaining);
+    }
+
+    private boolean ownsPageRestoring(Shell shell, WebContents contents) {
+        return restoreSplashShown && interactive() && restoreGeneration == generation
+                && validTab(shell) && manager.getActiveShell() == shell
+                && restoreShell == shell && restoreContents == contents
+                && shell.getWebContents() == contents && !contents.isDestroyed()
+                && restoreUrl.equals(visibleUrl(shell));
+    }
+
+    private void hidePageRestoring() {
+        if (restoreTimeout != null && browserFrame != null) browserFrame.removeCallbacks(restoreTimeout);
+        restoreTimeout = null;
+        restoreEpoch++;
+        ShellHistoryObserver interrupted = historyObservers.get(restoreShell);
+        if (restoreInterrupted && interrupted != null) interrupted.retryDeadline = 0;
+        restoreShell = null;
+        restoreContents = null;
+        restoreUrl = null;
+        restoreInterrupted = false;
+        if (!restoreSplashShown) return;
+        restoreSplashShown = false;
+        hideSplash();
+    }
+
+    private void retryPageRestoring() {
+        Shell shell = restoreShell;
+        WebContents contents = restoreContents;
+        if (!ownsPageRestoring(shell, contents) || restoreRetry.getVisibility() != View.VISIBLE) return;
+        reloadPage(shell);
+    }
+
+    /** Both recovery and menu refresh use this gate; never automatically replay a dead document. */
+    private void reloadPage(Shell shell) {
+        if (!interactive() || !validTab(shell)) return;
+        WebContents contents = shell.getWebContents();
+        if (contents == null || contents.isDestroyed() || contents.getNavigationController() == null) return;
+        ShellHistoryObserver interrupted = pageInterruption(shell);
+        if (interrupted != null) {
+            if (interrupted.retryBusy) return;
+            interrupted.retryBusy = true;
+            interrupted.retryRequested = true;
+            interrupted.retryCommitted = false;
+            interrupted.retryNavigation = null;
+            interrupted.retryDeadline = 0;
+        } else if (ownsPageRestoring(shell, contents) && restoreRetry.getVisibility() != View.VISIBLE) {
+            return;
+        }
+        // Establish busy feedback and its deadline before reload, including ready-old-frame races.
+        beginPageRestoring(shell, true);
+        if (ownsPageRestoring(shell, contents) || (interrupted == null && isBlankPage(shell, visibleUrl(shell)))) {
+            contents.getNavigationController().reload(true);
+        }
+    }
+
+    /** Reconcile loss even without a Shell/WebContents transition. Ordinary refreshes never renew
+     *  a stalled page's deadline. Only actual screen reentry rearms the foreground wait budget. */
+    private void reconcilePageRestoring() {
+        Shell active = manager == null ? null : manager.getActiveShell();
+        WebContents contents = active == null || active.isDestroyed() ? null : active.getWebContents();
+        boolean changed = active != chromeShell || contents != chromeContents;
+        chromeShell = active;
+        chromeContents = contents;
+        boolean interrupted = pageInterruption(active) != null;
+        boolean stale = restoreSplashShown && (!ownsPageRestoring(active, contents)
+                || restoreInterrupted != interrupted);
+        if (restoreSplashShown && !interrupted && isPageReady(active)) hidePageRestoring();
+        if ((changed || stale || (interrupted && !restoreSplashShown))
+                && interactive() && validTab(active)) showPageRestoring(active);
+        else if (stale) hidePageRestoring();
+    }
+
+    private void completePageRestoring(Shell shell, WebContents contents) {
+        if (pageInterruption(shell) == null && ownsPageRestoring(shell, contents)
+                && isPageReady(shell)) hidePageRestoring();
+    }
+
+    private void applyRestoreActionPalette() {
+        if (restoreRetry == null) return;
+        restoreRetry.setTextColor(INK);
+        restoreRetry.setBackground(new android.graphics.drawable.RippleDrawable(
+                android.content.res.ColorStateList.valueOf(C_RIPPLE), rounded(PILL, 12), null));
+    }
+
+    /** The startup splash covers the whole window; after startup it becomes the page-area
+     *  restore cover so the address bar and menu remain reachable. */
+    private void reparentSplashToPageArea() {
+        if (splash == null || pageContainer == null || splash.getParent() != browserFrame) return;
+        browserFrame.removeView(splash);
+        pageContainer.addView(splash, Math.min(1, pageContainer.getChildCount()),
+                new FrameLayout.LayoutParams(-1, -1));
+    }
+
     private void initializeBrowserUi() {
         application.requireBrowserActivation();
         prepareInitialTab();
         uiBuilt = true;
         hideSplash();
+        reparentSplashToPageArea();
         refreshChrome();
         requestActivePreview(manager.getActiveShell());
     }
@@ -331,40 +597,78 @@ public final class NativeBrowserActivity extends Activity {
         return drawable;
     }
 
-    private TextView glyph(String text, float sizeSp, int color) {
-        TextView view = new TextView(this);
-        view.setText(text);
-        view.setTextSize(sizeSp);
-        view.setTextColor(color);
-        view.setGravity(Gravity.CENTER);
-        view.setLayoutParams(new LinearLayout.LayoutParams(dp(48), dp(48)));
-        return view;
+    private FrameLayout chromeButton(Ui.Glyph glyph, String description) {
+        FrameLayout button = new FrameLayout(this);
+        button.setMinimumWidth(dp(48));
+        button.setMinimumHeight(dp(48));
+        button.setLayoutParams(new LinearLayout.LayoutParams(dp(48), dp(48)));
+        Ui.IconView icon = Ui.icon(this, glyph, INK, 22);
+        icon.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+        button.addView(icon, new FrameLayout.LayoutParams(dp(22), dp(22), Gravity.CENTER));
+        button.setContentDescription(description);
+        button.setFocusable(true);
+        return button;
+    }
+
+    private void applyChromeButtonPalette(View button) {
+        android.graphics.drawable.RippleDrawable ripple;
+        if (button.getBackground() instanceof android.graphics.drawable.RippleDrawable) {
+            ripple = (android.graphics.drawable.RippleDrawable) button.getBackground();
+        } else {
+            ripple = new android.graphics.drawable.RippleDrawable(
+                    android.content.res.ColorStateList.valueOf(C_RIPPLE), null, rounded(SURFACE, 14));
+            button.setBackground(ripple);
+        }
+        ripple.setColor(android.content.res.ColorStateList.valueOf(C_RIPPLE));
+        ((GradientDrawable) ripple.findDrawableByLayerId(android.R.id.mask)).setColor(SURFACE);
+        ((Ui.IconView) ((FrameLayout) button).getChildAt(0)).setColor(INK);
+    }
+
+    private void applyTabCounterPalette() {
+        // 外层始终为48dp触达区，22dp轮廓与计数居中，不将小徽标当成点击范围。
+        android.graphics.drawable.RippleDrawable ripple;
+        GradientDrawable outline;
+        if (tabCounter.getBackground() instanceof android.graphics.drawable.RippleDrawable) {
+            ripple = (android.graphics.drawable.RippleDrawable) tabCounter.getBackground();
+            outline = (GradientDrawable) ((InsetDrawable) ripple.getDrawable(0)).getDrawable();
+        } else {
+            outline = rounded(Color.TRANSPARENT, 5);
+            InsetDrawable icon = new InsetDrawable(outline, dp(13));
+            ripple = new android.graphics.drawable.RippleDrawable(
+                    android.content.res.ColorStateList.valueOf(C_RIPPLE), icon, rounded(SURFACE, 14));
+            tabCounter.setBackground(ripple);
+        }
+        outline.setStroke(dp(1.75f), INK);
+        ripple.setColor(android.content.res.ColorStateList.valueOf(C_RIPPLE));
+        ((GradientDrawable) ripple.findDrawableByLayerId(android.R.id.mask)).setColor(SURFACE);
+        tabCounter.setTextColor(INK);
     }
 
     private void buildChrome() {
         LinearLayout bar = new LinearLayout(this);
         bar.setOrientation(LinearLayout.VERTICAL);
+        chromeBar = bar;
         bar.setBackgroundColor(SURFACE);
-        bar.setElevation(dp(2));
 
         LinearLayout urlRow = new LinearLayout(this);
         urlRow.setOrientation(LinearLayout.HORIZONTAL);
         urlRow.setGravity(Gravity.CENTER_VERTICAL);
-        urlRow.setPadding(dp(6), dp(5), dp(6), dp(5));
-        back = glyph("\u2039", 26, INK);
-        back.setContentDescription("后退");
-        back.setBackground(new android.graphics.drawable.RippleDrawable(
-                android.content.res.ColorStateList.valueOf(C_RIPPLE), null,
-                rounded(SURFACE, 22)));
-        back.setLayoutParams(new LinearLayout.LayoutParams(dp(48), dp(48)));
-        tabCounter = glyph("1", 12, ACCENT);
+        urlRow.setPadding(dp(4), dp(4), dp(4), dp(4));
+        urlRow.setMinimumHeight(dp(56));
+        back = chromeButton(Ui.Glyph.BACK, "后退");
+        applyChromeButtonPalette(back);
+        tabCounter = new TextView(this);
+        tabCounter.setText("1");
+        chromeFonts.bind(tabCounter, 12);
+        tabCounter.setMinimumWidth(dp(48));
+        tabCounter.setMinimumHeight(dp(48));
+        tabCounter.setFocusable(true);
+        tabCounter.setContentDescription("标签页：1 个，打开标签页总览");
         tabCounter.setTypeface(android.graphics.Typeface.create("sans-serif-medium",
                 android.graphics.Typeface.NORMAL));
         tabCounter.setGravity(Gravity.CENTER);
-        tabCounter.setBackground(rounded(ACCENT_SOFT, 10));
-        tabCounter.setPadding(dp(9), 0, dp(9), 0);
-        tabCounter.setMinWidth(0);
-        tabCounter.setMinimumWidth(0);
+        tabCounter.setPadding(0, 0, 0, 0);
+        applyTabCounterPalette();
         tabCounter.setOnClickListener(view -> {
             view.performHapticFeedback(android.view.HapticFeedbackConstants.KEYBOARD_TAP);
             showTabSwitcher();
@@ -373,10 +677,12 @@ public final class NativeBrowserActivity extends Activity {
         address.setSingleLine(true);
         address.setSelectAllOnFocus(true);
         address.setImeOptions(EditorInfo.IME_ACTION_GO);
-        address.setTextSize(14.5f);
+        chromeFonts.bind(address, 16);
+        address.setMinHeight(dp(48));
+        address.setContentDescription("搜索或输入网址");
         address.setTextColor(INK);
         address.setHintTextColor(MUTED);
-        address.setHint("搜索或输入网址");
+        address.setHint("搜索");
         address.setBackground(rounded(PILL, 22));
         address.setPadding(dp(16), dp(7), dp(16), dp(7));
         address.setInputType(android.text.InputType.TYPE_CLASS_TEXT
@@ -389,11 +695,9 @@ public final class NativeBrowserActivity extends Activity {
             }
             return false;
         });
-        TextView menu = glyph("\u22ee", 22, MUTED);
-        menu.setBackground(new android.graphics.drawable.RippleDrawable(
-                android.content.res.ColorStateList.valueOf(C_RIPPLE), null,
-                rounded(SURFACE, 22)));
-        menu.setLayoutParams(new LinearLayout.LayoutParams(dp(48), dp(48)));
+        FrameLayout menu = chromeButton(Ui.Glyph.MENU, "更多操作");
+        menuButton = menu;
+        applyChromeButtonPalette(menu);
         back.setOnClickListener(view -> {
             if (!interactive()) return;
             view.performHapticFeedback(android.view.HapticFeedbackConstants.KEYBOARD_TAP);
@@ -407,17 +711,17 @@ public final class NativeBrowserActivity extends Activity {
             showMenu(view);
         });
         urlRow.addView(back);
-        LinearLayout.LayoutParams addressLp = new LinearLayout.LayoutParams(0, dp(46), 1);
-        addressLp.leftMargin = dp(6);
+        LinearLayout.LayoutParams addressLp = new LinearLayout.LayoutParams(0, -2, 1);
+        addressLp.setMarginStart(dp(4));
         urlRow.addView(address, addressLp);
-        LinearLayout.LayoutParams counterLp = new LinearLayout.LayoutParams(-2, dp(28));
-        counterLp.leftMargin = dp(4);
-        counterLp.rightMargin = dp(6);
+        LinearLayout.LayoutParams counterLp = new LinearLayout.LayoutParams(dp(48), -2);
+        counterLp.setMarginStart(dp(4));
         urlRow.addView(tabCounter, counterLp);
         urlRow.addView(menu);
-        bar.addView(urlRow, new LinearLayout.LayoutParams(-1, dp(62)));
+        bar.addView(urlRow, new LinearLayout.LayoutParams(-1, -2));
 
         View divider = new View(this);
+        chromeDivider = divider;
         divider.setBackgroundColor(DIVIDER);
         bar.addView(divider, new LinearLayout.LayoutParams(-1, 1));
         // Thin determinate-free load bar under the URL row; driven by navigation observers.
@@ -452,46 +756,106 @@ public final class NativeBrowserActivity extends Activity {
         cancelNavigationFocus();
         dismissAddressEditor();
         if (overflowMenu != null) overflowMenu.dismiss();
-        PopupMenu popup = new PopupMenu(this, anchor);
+        // Own the drawable/view bindings: a platform PopupMenu cannot retheme its live list
+        // through public APIs. Keep this one scrollable popup alive across palette changes.
+        android.widget.ScrollView scroll = new android.widget.ScrollView(this);
+        LinearLayout menu = new LinearLayout(this);
+        menu.setOrientation(LinearLayout.VERTICAL);
+        menu.setPadding(0, dp(6), 0, dp(6));
+        scroll.addView(menu, new FrameLayout.LayoutParams(-1, -2));
+        int width = Math.min(dp(288), getResources().getDisplayMetrics().widthPixels - dp(24));
+        PopupWindow popup = new PopupWindow(scroll, width, -2, true);
+        GradientDrawable background = rounded(SURFACE, 18);
+        popup.setBackgroundDrawable(background);
+        popup.setElevation(dp(8));
+        popup.setOutsideTouchable(true);
+        popup.setInputMethodMode(PopupWindow.INPUT_METHOD_NOT_NEEDED);
+        popup.setClippingEnabled(true);
         overflowMenu = popup;
-        popup.setOnDismissListener(menu -> {
-            if (overflowMenu == menu) overflowMenu = null;
-        });
-        popup.getMenu().add("新建标签页");
-        popup.getMenu().add("标签页总览");
-        popup.getMenu().add("历史记录");
-        popup.getMenu().add("前进");
-        popup.getMenu().add("刷新");
-        popup.getMenu().add("关闭当前标签页");
-        popup.getMenu().add("返回环境列表");
-        popup.setOnMenuItemClickListener(item -> {
-            if (!interactive()) return true;
-            String title = String.valueOf(item.getTitle());
-            if ("新建标签页".equals(title)) {
-                if (manager.getShells().size() < MAX_TABS) createBlankTab();
-                else Toast.makeText(this, "最多保留 " + MAX_TABS + " 个标签页", Toast.LENGTH_SHORT).show();
-            } else if ("标签页总览".equals(title)) {
-                showTabSwitcher();
-            } else if ("前进".equals(title)) {
-                WebContents contents = contents();
-                NavigationController navigation = contents == null ? null : contents.getNavigationController();
-                if (navigation != null && navigation.canGoForward()) navigation.goForward();
-            } else if ("历史记录".equals(title)) {
-                showHistoryPanel();
-            } else if ("刷新".equals(title)) {
-                WebContents contents = contents();
-                if (contents != null) contents.getNavigationController().reload(true);
-            } else if ("关闭当前标签页".equals(title)) {
-                Shell active = manager.getActiveShell();
-                if (active != null) closeTab(active);
-            } else if ("返回环境列表".equals(title)) {
-                returnToList();
-                return true;
+        overflowPalette.add(() -> background.setColor(SURFACE));
+        Runnable resize = () -> resizeOverflowMenu(popup, scroll, anchor);
+        overflowResize = resize;
+        // Font growth can move the anchor on the following real layout. No posted retries.
+        View.OnLayoutChangeListener anchorLayout = (view, l, t, r, b, ol, ot, or, ob) -> resize.run();
+        anchor.addOnLayoutChangeListener(anchorLayout);
+        popup.setOnDismissListener(() -> {
+            anchor.removeOnLayoutChangeListener(anchorLayout);
+            if (overflowMenu == popup) {
+                overflowMenu = null;
+                overflowResize = null;
+                overflowPalette.clear();
+                overflowFonts.clear();
             }
-            refreshChrome();
-            return true;
         });
-        popup.show();
+        for (String title : new String[]{"新建标签页", "标签页总览", "历史记录", "前进", "刷新",
+                "关闭当前标签页", "返回环境列表（保留运行）", "退出当前环境"}) {
+            android.widget.Button action = new android.widget.Button(this);
+            action.setText(title);
+            overflowFonts.bind(action, 14);
+            action.setAllCaps(false);
+            action.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
+            action.setMinimumHeight(dp(48));
+            action.setMinHeight(dp(48));
+            action.setPadding(dp(18), dp(10), dp(18), dp(10));
+            action.setStateListAnimator(null);
+            android.graphics.drawable.RippleDrawable ripple = new android.graphics.drawable.RippleDrawable(
+                    android.content.res.ColorStateList.valueOf(C_RIPPLE), null, null);
+            action.setBackground(ripple);
+            overflowPalette.add(() -> {
+                action.setTextColor("退出当前环境".equals(title) ? C_DANGER : INK);
+                ripple.setColor(android.content.res.ColorStateList.valueOf(C_RIPPLE));
+            });
+            action.setOnClickListener(view -> {
+                if (overflowMenu != popup || !interactive()) return;
+                view.performHapticFeedback(android.view.HapticFeedbackConstants.KEYBOARD_TAP);
+                popup.dismiss();
+                performMenuAction(title);
+            });
+            menu.addView(action, new LinearLayout.LayoutParams(-1, -2));
+        }
+        int maxHeight = Math.max(dp(48), popup.getMaxAvailableHeight(anchor, dp(6)));
+        scroll.measure(View.MeasureSpec.makeMeasureSpec(width, View.MeasureSpec.EXACTLY),
+                View.MeasureSpec.makeMeasureSpec(maxHeight, View.MeasureSpec.AT_MOST));
+        popup.setHeight(scroll.getMeasuredHeight());
+        popup.showAsDropDown(anchor, 0, dp(6), Gravity.END);
+    }
+
+    /** Remeasure the same live popup after font/layout changes, within its actual anchor bounds. */
+    private void resizeOverflowMenu(PopupWindow popup, android.widget.ScrollView scroll, View anchor) {
+        if (overflowMenu != popup || !popup.isShowing()) return;
+        int width = Math.min(dp(288), getResources().getDisplayMetrics().widthPixels - dp(24));
+        int available = Math.max(dp(48), popup.getMaxAvailableHeight(anchor, dp(6)));
+        scroll.measure(View.MeasureSpec.makeMeasureSpec(width, View.MeasureSpec.EXACTLY),
+                View.MeasureSpec.makeMeasureSpec(available, View.MeasureSpec.AT_MOST));
+        popup.update(width, scroll.getMeasuredHeight());
+    }
+
+    private void performMenuAction(String title) {
+        if (!interactive()) return;
+        if ("新建标签页".equals(title)) {
+            if (manager.getShells().size() < MAX_TABS) createBlankTab();
+            else Toast.makeText(this, "最多保留 " + MAX_TABS + " 个标签页", Toast.LENGTH_SHORT).show();
+        } else if ("标签页总览".equals(title)) {
+            showTabSwitcher();
+        } else if ("前进".equals(title)) {
+            WebContents contents = contents();
+            NavigationController navigation = contents == null ? null : contents.getNavigationController();
+            if (navigation != null && navigation.canGoForward()) navigation.goForward();
+        } else if ("历史记录".equals(title)) {
+            showHistoryPanel();
+        } else if ("刷新".equals(title)) {
+            reloadPage(manager.getActiveShell());
+        } else if ("关闭当前标签页".equals(title)) {
+            Shell active = manager.getActiveShell();
+            if (active != null) closeTab(active);
+        } else if ("返回环境列表（保留运行）".equals(title)) {
+            returnToList();
+            return;
+        } else if ("退出当前环境".equals(title)) {
+            requestEnvironmentExit();
+            return;
+        }
+        refreshChrome();
     }
 
     private void navigate(String raw) {
@@ -540,6 +904,8 @@ public final class NativeBrowserActivity extends Activity {
         if (urlSuggest == null) return;
         if (!interactive() || historyStore == null || !address.hasFocus()) { hideUrlSuggestions(); return; }
         String query = address.getText().toString().trim();
+        suggestionPalette.clear();
+        suggestionFonts.clear();
         urlSuggest.removeAllViews();
         int added = 0;
         if (query.isEmpty()) {
@@ -606,25 +972,33 @@ public final class NativeBrowserActivity extends Activity {
     private View suggestRow(String title, String origin, String target) {
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.VERTICAL);
-        row.setBackground(new android.graphics.drawable.RippleDrawable(
-                android.content.res.ColorStateList.valueOf(C_RIPPLE),
-                new android.graphics.drawable.ColorDrawable(SURFACE), null));
+        android.graphics.drawable.ColorDrawable background =
+                new android.graphics.drawable.ColorDrawable(SURFACE);
+        android.graphics.drawable.RippleDrawable ripple = new android.graphics.drawable.RippleDrawable(
+                android.content.res.ColorStateList.valueOf(C_RIPPLE), background, null);
+        row.setBackground(ripple);
         int padH = dp(14);
         row.setPadding(padH, dp(10), padH, dp(10));
         TextView titleView = new TextView(this);
         titleView.setText(title);
-        titleView.setTextSize(14.5f);
+        suggestionFonts.bind(titleView, 14.5f);
         titleView.setTextColor(INK);
         titleView.setSingleLine(true);
         titleView.setEllipsize(android.text.TextUtils.TruncateAt.END);
         row.addView(titleView);
         TextView originView = new TextView(this);
         originView.setText(origin);
-        originView.setTextSize(12);
+        suggestionFonts.bind(originView, 12);
         originView.setTextColor(MUTED);
         originView.setSingleLine(true);
         originView.setEllipsize(android.text.TextUtils.TruncateAt.END);
         row.addView(originView);
+        suggestionPalette.add(() -> {
+            background.setColor(SURFACE);
+            ripple.setColor(android.content.res.ColorStateList.valueOf(C_RIPPLE));
+            titleView.setTextColor(INK);
+            originView.setTextColor(MUTED);
+        });
         row.setOnClickListener(view -> {
             view.performHapticFeedback(android.view.HapticFeedbackConstants.KEYBOARD_TAP);
             hideUrlSuggestions();
@@ -703,9 +1077,10 @@ public final class NativeBrowserActivity extends Activity {
         // Reconcile the load bar with the now-active shell so it can never stick after a switch.
         if (progressBar != null) {
             Shell barOwner = loadingShell;
-            boolean show = barOwner != null && !barOwner.isDestroyed() && barOwner == active;
-            progressBar.setVisibility(show ? View.VISIBLE : View.GONE);
+            boolean loading = barOwner != null && !barOwner.isDestroyed() && barOwner == active;
+            progressBar.setVisibility(loading ? View.VISIBLE : View.GONE);
         }
+        reconcilePageRestoring();
         refreshTabSwitcher(false);
         syncWebContentsVisibility();
     }
@@ -714,8 +1089,10 @@ public final class NativeBrowserActivity extends Activity {
     private void syncWebContentsVisibility() {
         if (manager == null) return;
         Shell active = manager.getActiveShell();
+        // The tab switcher deliberately keeps the active page visible: its cards need a real
+        // PixelCopy preview, and pausing/resuming the renderer on every open made switching
+        // feel like a freeze. The overlay is opaque, so the page stays out of the user's view.
         boolean pageForeground = resumed && current()
-                && (tabSwitcher == null || !tabSwitcher.isShowing())
                 && (historyPanel == null || historyPanel.getVisibility() != View.VISIBLE)
                 && (newTab == null || newTab.getVisibility() != View.VISIBLE);
         for (Shell shell : manager.getShells()) {
@@ -741,45 +1118,54 @@ public final class NativeBrowserActivity extends Activity {
         if (!value.contentEquals(view.getText())) view.setText(value);
     }
 
-    private void tint(TextView view, boolean enabled) {
+    private void tint(View view, boolean enabled) {
         float alpha = enabled ? 1f : 0.3f;
         if (view.getAlpha() != alpha) view.setAlpha(alpha);
     }
 
     private void attachTabSwitcher(LaunchSpec launch) {
-        tabSwitcher = new TabSwitcherView(this, launch.profile.name, new TabSwitcherView.Listener() {
-            @Override public void onSelect(Shell shell) {
-                if (!interactive() || !validTab(shell)) return;
-                manager.selectShell(shell);
-                dismissTabSwitcher();
-                refreshChrome();
-                requestActivePreview(shell);
-            }
-            @Override public void onClose(Shell shell) {
-                if (!interactive() || !validTab(shell)) return;
-                closeTab(shell);
-                refreshChrome();
-            }
-            @Override public void onNewTab() {
-                if (!interactive()) return;
-                if (manager.getShells().size() >= MAX_TABS) {
-                    Toast.makeText(NativeBrowserActivity.this,
-                            "最多保留 " + MAX_TABS + " 个标签页", Toast.LENGTH_SHORT).show();
-                    return;
-                }
-                dismissTabSwitcher();
-                createBlankTab();
-                refreshChrome();
-            }
-            @Override public void onDismiss() {
-                if (!interactive()) return;
-                dismissTabSwitcher();
-                syncWebContentsVisibility();
-                requestActivePreview(manager.getActiveShell());
-            }
-        });
+        profileName = launch.profile.name;
+        createTabSwitcher();
+    }
+
+    /** One switcher instance owns its bindings and survives retained configuration changes. */
+    private void createTabSwitcher() {
+        if (browserFrame == null) return;
+        tabSwitcher = new TabSwitcherView(this, profileName, tabSwitcherListener);
         browserFrame.addView(tabSwitcher, new FrameLayout.LayoutParams(-1, -1));
     }
+
+    private final TabSwitcherView.Listener tabSwitcherListener = new TabSwitcherView.Listener() {
+        @Override public void onSelect(Shell shell) {
+            if (!interactive() || !validTab(shell)) return;
+            manager.selectShell(shell);
+            dismissTabSwitcher();
+            refreshChrome();
+            requestActivePreview(shell);
+        }
+        @Override public void onClose(Shell shell) {
+            if (!interactive() || !validTab(shell)) return;
+            closeTab(shell);
+            refreshChrome();
+        }
+        @Override public void onNewTab() {
+            if (!interactive()) return;
+            if (manager.getShells().size() >= MAX_TABS) {
+                Toast.makeText(NativeBrowserActivity.this,
+                        "最多保留 " + MAX_TABS + " 个标签页", Toast.LENGTH_SHORT).show();
+                return;
+            }
+            dismissTabSwitcher();
+            createBlankTab();
+            refreshChrome();
+        }
+        @Override public void onDismiss() {
+            if (!interactive()) return;
+            dismissTabSwitcher();
+            syncWebContentsVisibility();
+            requestActivePreview(manager.getActiveShell());
+        }
+    };
 
     private boolean validTab(Shell shell) {
         return current() && manager != null && shell != null && !shell.isDestroyed()
@@ -884,6 +1270,9 @@ public final class NativeBrowserActivity extends Activity {
     private void captureActivePreview() {
         Shell shell = manager == null ? null : manager.getActiveShell();
         if (!previewRequested || !resumed || !validTab(shell) || previewInFlight) return;
+        // Copy only the renderer SurfaceView (or the NTP subtree), never the Window. A native
+        // switcher sibling cannot enter those pixels; its opening request may settle behind it.
+        if (historyPanel != null && historyPanel.getVisibility() == View.VISIBLE) return;
         WebContents contents = shell.getWebContents();
         if (contents == null) return;
         String url = visibleUrl(shell);
@@ -938,12 +1327,21 @@ public final class NativeBrowserActivity extends Activity {
                     refreshTabSwitcher(true);
                 } else {
                     bitmap.recycle();
-                    if (samePage && result == PixelCopy.ERROR_SOURCE_NO_DATA
-                            && previewRetries < MAX_PREVIEW_RETRIES) {
+                    if (result == PixelCopy.ERROR_SOURCE_NO_DATA) {
+                        Log.d(TAG, "Preview copy no data");
+                    } else if (result == PixelCopy.ERROR_SOURCE_INVALID) {
+                        Log.d(TAG, "Preview copy source invalid");
+                    } else if (result == PixelCopy.ERROR_DESTINATION_INVALID) {
+                        Log.d(TAG, "Preview copy destination invalid");
+                    } else {
+                        Log.d(TAG, "Preview copy rejected");
+                    }
+                    boolean retryable = result == PixelCopy.ERROR_SOURCE_NO_DATA
+                            || result == PixelCopy.ERROR_TIMEOUT;
+                    if (samePage && retryable && previewRetries < MAX_PREVIEW_RETRIES) {
                         previewRetries++;
                         previewRequested = true;
                     }
-                    Log.d(TAG, "Preview copy rejected");
                 }
                 schedulePreviewCapture();
             }, previewResults);
@@ -1032,33 +1430,51 @@ public final class NativeBrowserActivity extends Activity {
 
     /** Owns the per-profile store and the two overlays; key is the immutable launch profile id. */
     private void attachHistorySurfaces(LaunchSpec launch) {
+        profileName = launch.profile.name;
         historyStore = new BrowserHistoryStore(this, launch.profile.id);
-        newTab = new NewTabPage(this, historyStore, launch.profile.name, new NewTabPage.Listener() {
-            @Override public void onNtpNavigate(String url) { loadResolvedUrl(url, false); }
-            @Override public void onNtpOpenHistory() { showHistoryPanel(); }
-        });
+        createHistorySurfaces();
+    }
+
+    private void createHistorySurfaces() {
+        if (pageContainer == null || historyStore == null) return;
+        newTab = new NewTabPage(this, historyStore, profileName, newTabListener);
         pageContainer.addView(newTab, new FrameLayout.LayoutParams(-1, -1));
+        attachNewTabPreviewLayout();
+        historyPanel = new HistoryPanel(this, historyStore, historyListener);
+        // History is a full native destination with its own header. Overlay the browser chrome
+        // rather than resizing/reparenting the shared renderer surface on entry and exit.
+        browserFrame.addView(historyPanel, new FrameLayout.LayoutParams(-1, -1));
+    }
+
+    private void attachNewTabPreviewLayout() {
+        if (newTab == null) return;
         newTab.addOnLayoutChangeListener((view, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom) -> {
             if (right - left > 0 && bottom - top > 0
                     && (right - left != oldRight - oldLeft || bottom - top != oldBottom - oldTop)) {
                 requestActivePreview(manager == null ? null : manager.getActiveShell());
             }
         });
-        historyPanel = new HistoryPanel(this, historyStore, new HistoryPanel.Listener() {
-            @Override public void onOpenHistoryUrl(String url, boolean newTabRequested) {
-                loadResolvedUrl(url, newTabRequested);
-            }
-            @Override public void onHistoryChanged() {
-                if (!quiescing && !closed && newTab != null) newTab.refresh();
-            }
-            @Override public void onHistoryDismissed() {
-                if (quiescing || closed) return;
-                syncWebContentsVisibility();
-                if (interactive()) requestActivePreview(manager.getActiveShell());
-            }
-        });
-        pageContainer.addView(historyPanel, new FrameLayout.LayoutParams(-1, -1));
     }
+
+    private final NewTabPage.Listener newTabListener = new NewTabPage.Listener() {
+        @Override public void onNtpNavigate(String url) { loadResolvedUrl(url, false); }
+        @Override public void onNtpOpenHistory() { showHistoryPanel(); }
+    };
+
+    private final HistoryPanel.Listener historyListener = new HistoryPanel.Listener() {
+        @Override public void onOpenHistoryUrl(String url, boolean newTabRequested) {
+            loadResolvedUrl(url, newTabRequested);
+        }
+        @Override public void onHistoryChanged() {
+            if (!quiescing && !closed && newTab != null) newTab.refresh();
+        }
+        @Override public void onHistoryDismissed() {
+            if (root != null) root.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_AUTO);
+            if (quiescing || closed) return;
+            syncWebContentsVisibility();
+            if (interactive()) requestActivePreview(manager.getActiveShell());
+        }
+    };
 
     /** Other native navigation paths cancel, but never create, address-focus ownership. */
     private boolean loadResolvedUrl(String url, boolean newTabRequested) {
@@ -1093,10 +1509,10 @@ public final class NativeBrowserActivity extends Activity {
 
     private void showHistoryPanel() {
         if (!interactive() || historyPanel == null) return;
-        // Deliberately no address-editor dismissal: an in-flight navigation-focus handoff must
-        // survive the panel (pinned by the focus host). Menu/URL paths dismiss instead.
         cancelNavigationFocus();
+        dismissAddressEditor();
         historyPanel.show();
+        root.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS);
         historyPanel.bringToFront();
         syncWebContentsVisibility();
     }
@@ -1110,7 +1526,7 @@ public final class NativeBrowserActivity extends Activity {
         while (old.hasNext()) {
             java.util.Map.Entry<Shell, ShellHistoryObserver> entry = old.next();
             if (!shells.contains(entry.getKey()) || entry.getKey().isDestroyed()) {
-                entry.getValue().observe(null);
+                entry.getValue().retire();
                 old.remove();
             }
         }
@@ -1150,12 +1566,18 @@ public final class NativeBrowserActivity extends Activity {
     }
 
     private void observeShell(Shell shell) {
-        if (!current() || historyStore == null || shell.isDestroyed()) return;
-        WebContents contents = shell.getWebContents();
-        if (contents == null) return;
+        if (!current() || historyStore == null) return;
+        WebContents contents = shell.isDestroyed() ? null : shell.getWebContents();
         ShellHistoryObserver prior = historyObservers.get(shell);
-        if (prior == null || prior.getWebContents() != contents) {
-            if (prior != null) prior.observe(null);
+        if (contents == null || contents.isDestroyed()) {
+            if (prior != null) {
+                historyObservers.remove(shell);
+                prior.retire();
+            }
+            return;
+        }
+        if (prior == null || prior.getWebContents() != contents || prior.ownerGeneration != generation) {
+            if (prior != null) prior.retire();
             historyObservers.put(shell, new ShellHistoryObserver(shell, contents));
             requestChromeRefresh();
             requestActivePreview(shell);
@@ -1165,8 +1587,17 @@ public final class NativeBrowserActivity extends Activity {
     private final class ShellHistoryObserver extends WebContentsObserver {
         private final Shell shell;
         private final WebContents contents;
+        private final long ownerGeneration = generation;
         private String committedUrl;
         private boolean awaitingPaint;
+        private long navigationSerial;
+        private String interruptedUrl;
+        private long interruptedNavigation;
+        private long retryDeadline;
+        private boolean retryRequested;
+        private boolean retryBusy;
+        private boolean retryCommitted;
+        private NavigationHandle retryNavigation;
 
         ShellHistoryObserver(Shell shell, WebContents contents) {
             super(contents);
@@ -1174,8 +1605,65 @@ public final class NativeBrowserActivity extends Activity {
             this.contents = contents;
         }
 
+        private boolean ownsContents() {
+            return current() && ownerGeneration == generation && validTab(shell)
+                    && historyObservers.get(shell) == this && getWebContents() == contents
+                    && shell.getWebContents() == contents && !contents.isDestroyed();
+        }
+
+        private void clearInterruption() {
+            interruptedUrl = null;
+            retryNavigation = null;
+            retryRequested = false;
+            retryBusy = false;
+            retryCommitted = false;
+            retryDeadline = 0;
+        }
+
+        private void retire() {
+            clearInterruption();
+            observe(null);
+        }
+
+        @Override public void primaryMainFrameRenderProcessGone(int terminationStatus) {
+            if (!ownsContents()) return;
+            String deadDocumentUrl = contents.getLastCommittedUrl().getSpec();
+            clearInterruption();
+            if (visibleUrl(shell).equals(newTabUrls.get(shell))
+                    && deadDocumentUrl.equals(newTabUrls.get(shell))) {
+                // A pending back-to-NTP URL cannot exempt a still-committed dead web document.
+                // Only the actually committed owned native NTP is renderer-independent.
+                requestChromeRefresh();
+                return;
+            }
+            interruptedUrl = deadDocumentUrl.isEmpty() ? visibleUrl(shell) : deadDocumentUrl;
+            interruptedNavigation = ++navigationSerial;
+            awaitingPaint = true;
+            tabPreviews.remove(shell);
+            previewUrls.remove(shell);
+            if (loadingShell == shell) loadingShell = null;
+            if (manager.getActiveShell() == shell) {
+                previewEpoch++;
+                previewRequested = false;
+                browserFrame.removeCallbacks(previewCapture);
+                // No automatic reload/POST replay, and no same-Shell identity-change dependency.
+                showPageRestoring(shell);
+            }
+            requestChromeRefresh();
+        }
+
         @Override public void didStartNavigationInPrimaryMainFrame(NavigationHandle navigation) {
-            if (!current() || !navigation.isInPrimaryMainFrame()) return;
+            if (!ownsContents() || !navigation.isInPrimaryMainFrame()) return;
+            if (!navigation.isSameDocument()) {
+                navigationSerial++;
+                if (interruptedUrl != null) {
+                    // Address/history navigation can replace the dead document too, but a start,
+                    // pending URL, abort, error page, or same-document change cannot prove it did.
+                    retryCommitted = false;
+                    retryNavigation = navigation;
+                    interruptedNavigation = navigationSerial;
+                }
+            }
             tabPreviews.remove(shell);
             previewUrls.remove(shell);
             if (!navigation.isSameDocument()) awaitingPaint = true;
@@ -1188,34 +1676,76 @@ public final class NativeBrowserActivity extends Activity {
             requestChromeRefresh();
         }
 
+        /** isReady may describe a saved dead frame. Only a fresh, committed replacement navigation
+         *  followed by its URL-correct paint/valid load-stop can retire a known interruption. */
+        private boolean finishInterruptedPage(String url) {
+            if (interruptedUrl == null) return true;
+            if (!retryCommitted || interruptedNavigation != navigationSerial
+                    || !interruptedUrl.equals(url) || !url.equals(visibleUrl(shell))
+                    || !isPageReady(shell)) return false;
+            clearInterruption();
+            return true;
+        }
+
         @Override public void didFirstVisuallyNonEmptyPaint() {
-            if (!current()) return;
+            if (!ownsContents() || !finishInterruptedPage(visibleUrl(shell))) return;
             awaitingPaint = false;
             if (loadingShell == shell) loadingShell = null;
+            completePageRestoring(shell, contents);
             requestActivePreview(shell);
             requestChromeRefresh();
         }
 
         @Override public void didStopLoading(GURL url, boolean isKnownValid) {
-            if (!current()) return;
+            if (!ownsContents() || (interruptedUrl != null
+                    && (!isKnownValid || !finishInterruptedPage(url.getSpec())))) return;
             awaitingPaint = false;
             if (loadingShell == shell) loadingShell = null;
+            completePageRestoring(shell, contents);
             requestActivePreview(shell);
             requestChromeRefresh();
         }
 
-        @Override public void navigationEntriesChanged() { requestChromeRefresh(); }
-        @Override public void onVisibilityChanged(int visibility) { requestChromeRefresh(); }
+        @Override public void navigationEntriesChanged() {
+            if (ownsContents()) requestChromeRefresh();
+        }
+        @Override public void onVisibilityChanged(int visibility) {
+            if (ownsContents()) requestChromeRefresh();
+        }
         @Override public void webContentsDestroyed() {
+            retire();
+            if (historyObservers.get(shell) != this) return;
+            historyObservers.remove(shell);
+            if (restoreShell == shell && restoreContents == contents) hidePageRestoring();
             if (loadingShell == shell) loadingShell = null;
             requestChromeRefresh();
         }
 
         @Override public void didFinishNavigationInPrimaryMainFrame(NavigationHandle navigation) {
-            if (!current() || !navigation.isInPrimaryMainFrame() || !navigation.hasCommitted()) return;
+            if (!ownsContents() || !navigation.isInPrimaryMainFrame()) return;
+            if (retryNavigation == navigation) {
+                retryNavigation = null; // Chromium requires releasing the handle at finish.
+                retryCommitted = navigation.hasCommitted() && !navigation.isSameDocument()
+                        && !navigation.isErrorPage() && interruptedNavigation == navigationSerial;
+                if (retryCommitted) interruptedUrl = navigation.getUrl().getSpec();
+                else {
+                    retryBusy = false;
+                    retryDeadline = 0;
+                    if (manager.getActiveShell() == shell) showPageRestoring(shell);
+                }
+                requestChromeRefresh();
+            }
+            if (!navigation.hasCommitted()) return;
             requestChromeRefresh();
             if (navigation.isSameDocument()) requestActivePreview(shell);
             String url = navigation.getUrl().getSpec();
+            if (navigation.isSameDocument() && interruptedUrl != null && retryCommitted
+                    && interruptedNavigation == navigationSerial && !navigation.isErrorPage()
+                    && url.equals(visibleUrl(shell))) {
+                // A router may change a fresh replacement's URL before its first paint/stop.
+                // Same-document navigation follows existing proof; it can never create it.
+                interruptedUrl = url;
+            }
             if (navigation.isErrorPage() || !BrowserHistory.isTrackable(url)) {
                 committedUrl = null;
                 return;
@@ -1227,7 +1757,8 @@ public final class NativeBrowserActivity extends Activity {
         }
 
         @Override public void titleWasSet(String title) {
-            if (current() && committedUrl != null) {
+            if (!ownsContents()) return;
+            if (committedUrl != null) {
                 historyStore.updateTitle(committedUrl, title);
                 ntpRenderDirty = true;
             }
@@ -1294,6 +1825,13 @@ public final class NativeBrowserActivity extends Activity {
         main.removeCallbacks(chromeRefresh);
         chromeRefreshPosted = false;
         previewRequested = false;
+        hidePageRestoring();
+        // Pause only retires visible work. A runtime/Activity exit also retires durable loss state.
+        if (!current()) {
+            for (ShellHistoryObserver observer : historyObservers.values()) observer.clearInterruption();
+        }
+        chromeShell = null;
+        chromeContents = null;
         hideUrlSuggestions();
         if (progressBar != null) progressBar.setVisibility(View.GONE);
         if (browserFrame != null) browserFrame.removeCallbacks(previewCapture);
@@ -1357,7 +1895,7 @@ public final class NativeBrowserActivity extends Activity {
         if (historyStore != null) {
             try { historyStore.flush(); } catch (RuntimeException ignored) { }
         }
-        for (ShellHistoryObserver observer : historyObservers.values()) observer.observe(null);
+        for (ShellHistoryObserver observer : historyObservers.values()) observer.retire();
         historyObservers.clear();
         newTabUrls.clear();
         tabPreviews.clear();
@@ -1392,6 +1930,19 @@ public final class NativeBrowserActivity extends Activity {
         cleanupComplete = true;
     }
 
+    private void requestEnvironmentExit() {
+        if (!interactive()) return;
+        // The manager owns the cross-process drain/exit protocol. Never just finish this
+        // Activity: doing so would leave the environment lock and browser process alive.
+        com.ahoo.abs.core.LaunchSpec launch = application.requireLaunch();
+        Intent home = new Intent(this, MainActivity.class);
+        home.setAction(MainActivity.ACTION_REQUEST_ENVIRONMENT_EXIT);
+        home.putExtra(ControlProtocol.SESSION, launch.sessionId);
+        home.putExtra(ControlProtocol.NONCE, launch.nonce);
+        home.addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+        startActivity(home);
+    }
+
     private void returnToList() {
         if (quiescing || closed) return;
         // Returning to the manager is not profile exit: preserve this Activity and every tab.
@@ -1419,19 +1970,108 @@ public final class NativeBrowserActivity extends Activity {
         super.onWindowFocusChanged(hasFocus);
     }
 
+    private void applySystemBarPalette() {
+        // Capture before any Window/DecorView mutation, not after its scroll range can clamp.
+        if (tabSwitcher != null) tabSwitcher.retainPaletteAnchor();
+        Window windowFrame = getWindow();
+        // Android 15+ may enforce transparent bars. Install the underlay once and avoid
+        // potentially re-entering background/inset work by replacing it for a color-only
+        // repaint. Retain drawable identity while any system-bar/inset work settles.
+        if (windowBackground == null) {
+            windowBackground = new android.graphics.drawable.ColorDrawable(CANVAS);
+            windowFrame.setBackgroundDrawable(windowBackground);
+        } else {
+            windowBackground.setColor(CANVAS);
+        }
+        if (browserFrame != null) browserFrame.setBackgroundColor(CANVAS);
+        applySystemBarAppearance(windowFrame);
+    }
+
+    static void applySystemBarAppearance(Window windowFrame) {
+        if (windowFrame == null) return;
+        windowFrame.setStatusBarColor(C_CANVAS);
+        windowFrame.setNavigationBarColor(C_CANVAS);
+        int lightFlags = View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR | View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
+        View decor = windowFrame.getDecorView();
+        // Keep the existing fitsSystemWindows owner on stable system-bar geometry. A
+        // transient navigation-bar visibility change must not enlarge a ScrollView and
+        // irreversibly clamp its position after the palette's first pre-draw has finished.
+        // Preserve all other flags; this changes neither bar visibility nor IME layout.
+        int layoutFlags = decor.getSystemUiVisibility() | View.SYSTEM_UI_FLAG_LAYOUT_STABLE;
+        decor.setSystemUiVisibility(C_DARK ? layoutFlags & ~lightFlags : layoutFlags | lightFlags);
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+            android.view.WindowInsetsController controller = windowFrame.getInsetsController();
+            if (controller != null) {
+                int mask = android.view.WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS
+                        | android.view.WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS;
+                controller.setSystemBarsAppearance(C_DARK ? 0 : mask, mask);
+            }
+        }
+    }
+
+    private void applyChromePalette() {
+        applySystemBarPalette();
+        if (root != null) root.setBackgroundColor(CANVAS);
+        if (splash != null) {
+            splash.setBackgroundColor(CANVAS);
+            splashTitle.setTextColor(INK);
+            splashStatus.setTextColor(MUTED);
+            splashSpinner.setIndeterminateTintList(android.content.res.ColorStateList.valueOf(ACCENT));
+            applyRestoreActionPalette();
+        }
+        if (chromeBar == null) return;
+        chromeBar.setBackgroundColor(SURFACE);
+        chromeDivider.setBackgroundColor(DIVIDER);
+        address.setTextColor(INK);
+        address.setHintTextColor(MUTED);
+        ((GradientDrawable) address.getBackground()).setColor(PILL);
+        applyChromeButtonPalette(back);
+        applyChromeButtonPalette(menuButton);
+        applyTabCounterPalette();
+        ((android.widget.ProgressBar) progressBar).getIndeterminateDrawable()
+                .setColorFilter(ACCENT, android.graphics.PorterDuff.Mode.SRC_IN);
+        urlSuggest.setBackgroundColor(SURFACE);
+        suggestionPalette.apply();
+        overflowPalette.apply();
+        // Overlay owners recolor their own semantic bindings, never the renderer view tree.
+    }
+
+    /** Repaint even paused/startup surfaces without changing drafts, focus, scroll or visibility. */
+    private void applySurfacePalette() {
+        if (closed || quiescing || cleanupComplete) return;
+        if (newTab != null) newTab.applyPalette();
+        if (historyPanel != null) historyPanel.applyPalette();
+        if (tabSwitcher != null) tabSwitcher.applyPalette();
+    }
+
+    /** Update only owned native text; keep drafts, focus, windows and native owners intact. */
+    private void applySurfaceFonts() {
+        if (closed || quiescing || cleanupComplete) return;
+        chromeFonts.apply();
+        suggestionFonts.apply();
+        overflowFonts.apply();
+        if (newTab != null) newTab.applyFontScale();
+        if (historyPanel != null) historyPanel.applyFontScale();
+        if (tabSwitcher != null) tabSwitcher.applyFontScale();
+        if (overflowResize != null) overflowResize.run();
+    }
+
     @Override
     public void onConfigurationChanged(android.content.res.Configuration newConfig) {
+        // Super can dispatch configuration to the Window before our palette repaint begins.
+        if (tabSwitcher != null) tabSwitcher.retainPaletteAnchor();
         super.onConfigurationChanged(newConfig);
-        // configChanges handles uiMode, so nothing recreates: re-resolve the palette and the
-        // system bars at least. Already-built views keep their colors until they are rebuilt.
+        boolean wasDark = C_DARK;
         resolvePalette(this);
-        Window windowFrame = getWindow();
-        windowFrame.setStatusBarColor(CANVAS);
-        windowFrame.setNavigationBarColor(CANVAS);
-        int lightFlags = View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR | View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
-        windowFrame.getDecorView().setSystemUiVisibility(C_DARK
-                ? windowFrame.getDecorView().getSystemUiVisibility() & ~lightFlags
-                : windowFrame.getDecorView().getSystemUiVisibility() | lightFlags);
+        if (wasDark != C_DARK) {
+            applyChromePalette();
+            applySurfacePalette();
+        }
+        // Resources may already expose newConfig on entry: compare our last applied value.
+        if (Float.compare(appliedFontScale, newConfig.fontScale) != 0) {
+            appliedFontScale = newConfig.fontScale;
+            applySurfaceFonts();
+        }
         requestChromeRefresh();
     }
 
@@ -1443,10 +2083,9 @@ public final class NativeBrowserActivity extends Activity {
             return;
         }
         cancelNavigationFocus();
-        if (urlSuggest != null && urlSuggest.getVisibility() == View.VISIBLE) {
-            hideUrlSuggestions();
-            address.clearFocus();
-            root.requestFocus();
+        if ((address != null && address.hasFocus())
+                || (urlSuggest != null && urlSuggest.getVisibility() == View.VISIBLE)) {
+            dismissAddressEditor();
             return;
         }
         if (tabSwitcher != null && tabSwitcher.isShowing()) {
@@ -1515,11 +2154,18 @@ public final class NativeBrowserActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
+        MediaPermissionBridge.setHost(this);
         if (closed || quiescing) return;
         resumed = true;
         lastBackExitHint = 0;
         requestChromeRefresh();
         requestActivePreview(manager == null ? null : manager.getActiveShell());
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        MediaPermissionBridge.onHostResult(permissions, grantResults);
     }
 
     @Override
@@ -1548,6 +2194,7 @@ public final class NativeBrowserActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        MediaPermissionBridge.clearHost(this);
         try { closeNativeView(); }
         finally {
             if (runtime != null) runtime.detach(this);

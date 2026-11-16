@@ -1,5 +1,27 @@
 # ABS Android — internal capability candidate
 
+## Current native-product checkpoint — 2026-11-16, r13z rev11 direct connections
+
+Read the [rev11 explicit-direct implementation, artifact and bounded phone evidence](../../docs/review/android-r13z-rev11-direct-2026-11-16.md). New profiles default to **不使用代理（直连）**; no proxy catalog entry is required. Existing HTTP/HTTPS/SOCKS5 proxy profiles remain explicit proxy profiles. This is implemented through storage and native Chromium, not just an editor checkbox or a Java-only APK repack: actual policy C++ compilation and native SOLINK completed.
+
+The original-release-signature, non-debuggable ARM64 candidate was update-installed with explicit authorization **without clearing data**; the installed APK SHA-256 was independently verified. On one newly created owned profile, default direct, missing-route validation, restore/save/reopen, direct→existing proxy→direct save/reopen, normal native startup, live HTTP rendering/button response and public HTTPS rendering passed. Detailed observations and limits are recorded in the handoff. Direct uses the device's current network **including any system VPN**, exposes that network's public IP and does not provide proxy exit isolation. It is not anonymity, DNS/leak-proof, full product or visual acceptance; nothing was published.
+
+## Previous native-product checkpoint — 2026-11-16, r13z rev10
+
+Read the [rev10 persistent-renderer fix and targeted physical-phone results](../../docs/review/android-r13z-rev10-closure-2026-11-16.md) first. The original-release-signature, non-debuggable ARM64 candidate was update-installed **without clearing data**, and its installed APK identity was independently verified. On two newly created, explicitly owned test tabs, six A/B alternations preserved both input drafts while timers advanced and buttons responded; the browser PID matched before and after the sequence. Actual A/B screenshots show the same ABS address/navigation chrome without a duplicate Chromium toolbar. Rev8 and rev9 were rejected for startup crashes, not successful runtime checkpoints. This is a **targeted runtime pass**, not full product, performance, accessibility or user-aesthetic acceptance; no release was published.
+
+## Historical native-product checkpoint — 2026-11-15, r13z rev7
+
+Read the [rev7 renderer-recovery checkpoint and remaining acceptance work](../../docs/review/android-r13z-rev7-closure-2026-11-15.md) first. The original-release-signature, non-debuggable ARM64 **candidate** was built and update-installed; its exact installed APK and frozen inputs were reverified during follow-up. Rev7 adds owner-bound renderer interruption and explicit, deduplicated manual recovery. Fresh host regressions pass; controlled device subcases have evidence, but the hidden-tab/Home retry-budget matrix, natural OS reclaim and final visual acceptance are **not complete**. This is a local source checkpoint, not a published or fully accepted release.
+
+## Historical native-product checkpoint — 2026-11-09
+
+Read the [r13k source, build, physical-phone QA and remaining-work handoff](../../docs/review/android-native-ui-handoff-2026-11-09.md) first. An original-signature, non-debuggable ARM64 native Chromium **release candidate** has now been built and installed with targeted UI/font/editor/history/normal-exit checks. The current source checkpoint does **not** mean formal release, Ping0/DNS/RAF acceptance, cookie/crash durability, full source reproducibility, or top-tier aesthetic acceptance. APKs and machine-specific evidence remain in ignored local artifact directories, not in Git.
+
+## Historical prototype notes (through 2026-10-31)
+
+The following prototype/build-status statements are historical context. In particular, “not compiled/installed” and prototype signing/variant descriptions below do not describe the later r13k native-product candidate; use the dated handoff above for its exact identity and boundaries.
+
 **Development resumed by the user's explicit request on 2026-10-27, including dedicated-emulator verification. Incomplete; not a Ping0-passed release. No production APK publication is implied.**
 
 Server handoff: [`../../docs/review/android-native-kernel-server-task-2026-10-27.md`](../../docs/review/android-native-kernel-server-task-2026-10-27.md). The approved direction is a controllable native engine. [Chromium patch 0057](../../patches/chromium/ANDROID_TIMEZONE.md) supplies a separate internal native-timezone verification APK and [read-only acceptance fixture](native-kernel-tests/README.md). Its reviewed build has reached actual GN/Ninja compilation, but no new native APK has passed the artifact/install/runtime gates. The Gradle product prototype in `app/` still uses System WebView. The [native product adapter](native-kernel/README.md) now has separate bootstrap/view/build-overlay source and verified selected-input staging; it has not been natively compiled or installed. Neither a verification shell nor a successful prototype build completes the Android product goal. Source review precedes each new build or installation; active native-build inputs stay frozen.

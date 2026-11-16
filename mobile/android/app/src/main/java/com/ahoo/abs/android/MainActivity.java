@@ -30,6 +30,8 @@ import java.util.UUID;
 
 /** Exported launcher accepts no external profile, URL, identity or proxy extras. */
 public final class MainActivity extends Activity {
+    public static final String ACTION_REQUEST_ENVIRONMENT_EXIT =
+            "com.ahoo.abs.android.REQUEST_ENVIRONMENT_EXIT";
     private ProfileRepository repository;
     private BootstrapStore bootstrap;
     private LaunchCoordinator coordinator;
@@ -38,7 +40,9 @@ public final class MainActivity extends Activity {
     private TextView section;
     private FrameLayout segmentControl;
     private EditText search;
-    private Button create;
+    private View create;
+    private Ui.Sheet runtimeSheet;
+    private Button runtimeExit;
     private BootstrapStore.ActiveLaunch active;
     private boolean runtimeKnown;
     private int selected;
@@ -61,33 +65,37 @@ public final class MainActivity extends Activity {
         LinearLayout root = Ui.root(this);
 
         LinearLayout brand = Ui.row(this);
-        LinearLayout mark = new LinearLayout(this);
-        mark.setGravity(Gravity.CENTER);
-        mark.setBackground(Ui.gradient(this, 16, Ui.ACCENT, Ui.ACCENT_2));
-        mark.setElevation(dp(3));
-        mark.addView(Ui.styled(this, "A", 22, Ui.WHITE,
-                android.graphics.Typeface.create("sans-serif-medium", android.graphics.Typeface.NORMAL)));
-        brand.addView(mark, new LinearLayout.LayoutParams(dp(46), dp(46)));
-        LinearLayout heading = Ui.column(this);
-        heading.setPadding(dp(14), 0, 0, 0);
-        heading.addView(Ui.display(this, "ABS Browser"));
-        TextView tagline = Ui.caption(this, "独立身份 · 从容切换");
-        tagline.setPadding(0, dp(3), 0, 0);
-        heading.addView(tagline);
+        TextView heading = Ui.display(this, "浏览环境");
+        heading.setTextSize(21);
+        heading.setMaxLines(1);
+        heading.setEllipsize(TextUtils.TruncateAt.END);
         brand.addView(heading, new LinearLayout.LayoutParams(0, -2, 1));
-        FrameLayout more = Ui.iconButton(this, Ui.Glyph.MENU, "更多设置", Ui.MUTED, this::showMore);
-        brand.addView(more);
-        root.addView(brand, Ui.gap(this, 6));
+        LinearLayout tools = Ui.row(this);
+        tools.setBackground(Ui.shape(this, Ui.WHITE, 24));
+        create = Ui.iconButton(this, Ui.Glyph.PLUS, "新建环境", Ui.INK, v -> createItem());
+        create.setMinimumWidth(dp(48));
+        create.setMinimumHeight(dp(48));
+        tools.addView(create, new LinearLayout.LayoutParams(-2, -2));
+        FrameLayout more = Ui.iconButton(this, Ui.Glyph.MENU, "更多设置", Ui.INK, this::showMore);
+        more.setMinimumWidth(dp(48));
+        more.setMinimumHeight(dp(48));
+        tools.addView(more, new LinearLayout.LayoutParams(-2, -2));
+        Ui.applyEnabledLook(create, false);
+        brand.addView(tools);
+        root.addView(brand, Ui.gap(this, 2));
 
-        runtime = Ui.styled(this, "正在读取运行状态…", 12.5f, Ui.MUTED,
+        runtime = Ui.styled(this, "正在读取运行状态…", 14, Ui.MUTED,
                 android.graphics.Typeface.create("sans-serif", android.graphics.Typeface.NORMAL));
-        runtime.setBackground(Ui.shape(this, Ui.WHITE, 14, true));
-        runtime.setElevation(dp(1));
-        int padH = dp(14);
-        int padV = dp(11);
+        runtime.setBackgroundColor(android.graphics.Color.TRANSPARENT);
+        runtime.setElevation(0);
+        int padH = dp(2);
+        int padV = dp(12);
         runtime.setPadding(padH, padV, padH, padV);
+        runtime.setMinimumHeight(dp(48));
+        runtime.setMaxLines(2);
+        runtime.setEllipsize(TextUtils.TruncateAt.END);
         runtime.setOnClickListener(v -> showRuntime());
-        root.addView(runtime, Ui.gap(this, 18));
+        root.addView(runtime, Ui.gap(this, 4));
 
         String[] labels = {"环境", "代理"};
         segmentControl = Ui.segmented(this, labels, new int[]{-1, -1}, selected, index -> {
@@ -97,23 +105,27 @@ public final class MainActivity extends Activity {
                 render();
             }
         });
-        root.addView(segmentControl, Ui.gap(this, 18));
+        root.addView(segmentControl, Ui.gap(this, 2));
 
         search = Ui.searchField(this);
         search.setHint(selected == 0 ? "搜索环境名称、代理或时区" : "搜索代理名称、地址或协议");
         LinearLayout searchSurface = Ui.searchSurface(this, search);
-        root.addView(searchSurface, Ui.gap(this, 14));
+        root.addView(searchSurface, Ui.gap(this, 12));
 
         LinearLayout sectionRow = Ui.row(this);
         section = Ui.heading(this, "所有环境");
         sectionRow.addView(section, new LinearLayout.LayoutParams(0, -2, 1));
-        sortToggle = Ui.chip(this, "智能排序", false, v -> {
+        sortToggle = Ui.caption(this, "智能排序  ↓");
+        sortToggle.setMinHeight(dp(48));
+        sortToggle.setGravity(Gravity.CENTER);
+        sortToggle.setPadding(dp(10), 0, dp(4), 0);
+        sortToggle.setOnClickListener(v -> {
             Ui.haptic(v);
             sortByName = !sortByName;
             render(false);
         });
         sectionRow.addView(sortToggle);
-        sectionRow.setPadding(dp(2), dp(20), dp(2), dp(10));
+        sectionRow.setPadding(dp(2), dp(16), dp(2), dp(8));
         root.addView(sectionRow);
 
         ScrollView scroll = new ScrollView(this);
@@ -124,10 +136,10 @@ public final class MainActivity extends Activity {
         scroll.addView(list);
         root.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1));
 
-        create = Ui.primary(this, "+  新建环境", v -> createItem());
-        LinearLayout.LayoutParams footer = new LinearLayout.LayoutParams(-1, dp(54));
-        footer.topMargin = dp(10);
-        root.addView(create, footer);
+        TextView footerNote = Ui.caption(this, "ABS Browser  ·  独立环境，单个运行");
+        footerNote.setGravity(Gravity.CENTER);
+        footerNote.setPadding(0, dp(12), 0, dp(4));
+        root.addView(footerNote);
 
         search.addTextChangedListener(new TextWatcher() {
             @Override public void beforeTextChanged(CharSequence s,int start,int count,int after) { }
@@ -145,10 +157,77 @@ public final class MainActivity extends Activity {
             coordinator = LaunchCoordinator.get(this);
             runtimeObserver = () -> { if (!isFinishing() && !isDestroyed()) reload(); };
             coordinator.observe(runtimeObserver); reload();
+            consumeExitRequest(getIntent());
         } catch (RuntimeException failure) {
             runtime.setText("配置存储不可用（" + Ui.errorCode(failure) + "）");
-            create.setEnabled(false);
+            Ui.applyEnabledLook(create, false);
         }
+        if (android.os.Build.VERSION.SDK_INT >= 33) {
+            getOnBackInvokedDispatcher().registerOnBackInvokedCallback(
+                    android.window.OnBackInvokedDispatcher.PRIORITY_DEFAULT,
+                    () -> moveTaskToBack(true));
+        }
+    }
+
+    @Override protected void onNewIntent(android.content.Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        consumeExitRequest(intent);
+    }
+
+    /** Exported launcher never executes stop directly from an Intent. Require a matching
+     * live session and nonce, then a fresh user confirmation in the manager process. */
+    private void consumeExitRequest(android.content.Intent intent) {
+        if (intent == null || !ACTION_REQUEST_ENVIRONMENT_EXIT.equals(intent.getAction())) return;
+        intent.setAction(null);
+        String session;
+        String nonce;
+        try {
+            session = intent.getStringExtra(com.ahoo.abs.android.browser.ControlProtocol.SESSION);
+            nonce = intent.getStringExtra(com.ahoo.abs.android.browser.ControlProtocol.NONCE);
+            intent.removeExtra(com.ahoo.abs.android.browser.ControlProtocol.SESSION);
+            intent.removeExtra(com.ahoo.abs.android.browser.ControlProtocol.NONCE);
+            if (bootstrap == null || coordinator == null) return;
+            BootstrapStore.ActiveLaunch observed = bootstrap.readActive();
+            if (observed == null || !observed.launch.sessionId.equals(session)
+                    || !observed.launch.nonce.equals(nonce)) return;
+            confirmEnvironmentExit(observed.launch.sessionId);
+        } catch (RuntimeException rejected) {
+            // Malformed or stale external intents cannot control a running environment.
+        }
+    }
+
+    private void confirmEnvironmentExit(String expectedSession) {
+        if (expectedSession == null || bootstrap == null || coordinator == null) return;
+        try {
+            BootstrapStore.ActiveLaunch target = bootstrap.readActive();
+            if (target == null || !expectedSession.equals(target.launch.sessionId)) {
+                reload();
+                return;
+            }
+            Ui.Sheet sheet = Ui.Sheet.create(this, "退出当前环境？", null);
+            sheet.text("环境：" + target.launch.profile.name
+                    + "\n\n关闭所有浏览标签页并尝试保存网站数据，然后返回环境列表。未提交的网页内容可能丢失。");
+            sheet.actions("取消", null, "退出环境", () -> {
+                sheet.dialog().dismiss();
+                try {
+                    BootstrapStore.ActiveLaunch observed = bootstrap.readActive();
+                    if (observed == null || !expectedSession.equals(observed.launch.sessionId)) {
+                        reload();
+                        return;
+                    }
+                    queuedOpen = null;
+                    launchGeneration++;
+                    coordinator.stop();
+                } catch (RuntimeException failure) { showError(failure); }
+            }).show();
+        } catch (RuntimeException failure) { showError(failure); }
+    }
+
+    @Override public void onBackPressed() {
+        // The retained browser may sit underneath this manager in the same task.
+        // Background the task instead of finishing the manager and revealing it again.
+        moveTaskToBack(true);
     }
 
     private int dp(int value) { return Ui.dp(this, value); }
@@ -205,7 +284,10 @@ public final class MainActivity extends Activity {
         } catch (RuntimeException failure) {
             runtimeKnown = false; renderedSignature = null; queuedOpen = null; launchGeneration++;
             runtime.setText("读取失败（" + Ui.errorCode(failure) + "），未将现有配置视为空。" );
+            Ui.applyEnabledLook(create, false);
             list.removeAllViews(); list.addView(Ui.muted(this, "暂时无法显示配置，请在运行状态中重新核对。", 14));
+        } finally {
+            updateRuntimeSheet();
         }
     }
 
@@ -217,11 +299,13 @@ public final class MainActivity extends Activity {
         if (list == null) return;
         Ui.selectSegment(segmentControl, selected, new int[]{profiles.size(), proxies.size()});
         search.setHint(selected == 0 ? "搜索环境名称、代理或时区" : "搜索代理名称、地址或协议");
-        create.setText(selected == 0 ? "+  新建环境" : "+  新建代理");
+        create.setContentDescription(selected == 0 ? "新建环境" : "新建代理");
+        Ui.applyEnabledLook(create, repository != null && runtimeKnown);
         String query = search.getText().toString().trim().toLowerCase(Locale.ROOT);
         // Skip the whole rebuild when nothing visible changed (status ticks, reconcile calls).
         String activeKey = active == null ? "none"
-                : active.state.name() + ":" + active.launch.profile.id + ":" + active.launch.profile.revision;
+                : active.state.name() + ":" + active.launch.sessionId + ":"
+                + active.launch.profile.id + ":" + active.launch.profile.revision;
         StringBuilder signature = new StringBuilder(selected + "|" + query + "|" + sortByName + "|" + activeKey
                 + "|" + profiles.size() + "|" + proxies.size());
         for (ProfileSpec profile : profiles) signature.append('|').append(profile.id).append(':').append(profile.revision);
@@ -235,7 +319,7 @@ public final class MainActivity extends Activity {
         if (selected == 0) {
             List<ProfileSpec> visible = new ArrayList<>();
             for (ProfileSpec profile : profiles) {
-                if (matches(query, profile.name, profile.proxy.authority(), profile.timeZoneId,
+                if (matches(query, profile.name, routeLabel(profile), profile.timeZoneId,
                         String.join(",", profile.languageTags))) visible.add(profile);
             }
             if (sortByName) {
@@ -258,18 +342,18 @@ public final class MainActivity extends Activity {
             }
             for (ManagedProxy proxy : visible) { addCard(proxyCard(proxy, query), animate); shown++; }
         }
-        section.setText((selected == 0 ? "所有环境" : "代理资源") + "   ·   " + shown);
-        sortToggle.setText(sortByName ? "按名称" : "智能排序");
+        section.setText((selected == 0 ? "所有环境" : "代理资源") + "  ·  " + shown);
+        sortToggle.setText(sortByName ? "按名称  ↓" : "智能排序  ↓");
         if (shown == 0) {
             LinearLayout empty = Ui.emptyState(this,
                     query.isEmpty() ? (selected == 0 ? "创建你的第一个环境" : "把代理集中管理") : "没有匹配结果",
                     query.isEmpty() ? (selected == 0
-                            ? "环境拥有独立的时区、语言与站点数据。从选择一个代理开始。"
+                            ? "环境拥有独立的时区、语言与站点数据，可选择直连或代理出口。"
                             : "添加一次代理，即可供多个环境复用。保存不代表出口实测通过。")
                             : "试试其他名称、地址或时区关键词。");
             if (!query.isEmpty()) {
-                Button clear = Ui.ghost(this, "清空搜索", v -> search.setText(""));
-                LinearLayout.LayoutParams clearLp = new LinearLayout.LayoutParams(-2, dp(44));
+                Button clear = wrapButton(Ui.ghost(this, "清空搜索", v -> search.setText("")));
+                LinearLayout.LayoutParams clearLp = new LinearLayout.LayoutParams(-2, -2);
                 clearLp.topMargin = dp(12);
                 clearLp.gravity = Gravity.CENTER_HORIZONTAL;
                 empty.addView(clear, clearLp);
@@ -289,10 +373,16 @@ public final class MainActivity extends Activity {
                 && active.launch.profile.id.equals(profile.id);
     }
 
+    /** Route labels never infer direct from a missing catalog reference. */
+    private static String routeLabel(ProfileSpec profile) {
+        return profile.isDirect() ? "不使用代理（直连）"
+                : profile.proxy.scheme.name() + " · " + profile.proxy.authority();
+    }
+
     /** Which non-name field matched, for a small reason chip on filtered results. */
     private String matchReason(String query, ProfileSpec profile) {
         if (profile.name.toLowerCase(Locale.ROOT).contains(query)) return null;
-        if (profile.proxy.authority().toLowerCase(Locale.ROOT).contains(query)) return "出口匹配";
+        if (routeLabel(profile).toLowerCase(Locale.ROOT).contains(query)) return "出口匹配";
         if (profile.timeZoneId.toLowerCase(Locale.ROOT).contains(query)) return "时区匹配";
         if (String.join(",", profile.languageTags).toLowerCase(Locale.ROOT).contains(query)) return "语言匹配";
         return null;
@@ -321,68 +411,46 @@ public final class MainActivity extends Activity {
     }
     private void addCard(LinearLayout card, boolean animate) {
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-1, -2);
-        params.bottomMargin = dp(12);
+        params.bottomMargin = dp(4);
         list.addView(card, params);
         if (animate) Ui.animateIn(card);
     }
-    private TextView oneLine(String value, int size) {
-        TextView view = Ui.bold(this, value, size); view.setSingleLine(true);
-        view.setEllipsize(TextUtils.TruncateAt.END); return view;
+    private LinearLayout listRow(boolean selectedRow) {
+        LinearLayout row = Ui.column(this);
+        row.setPadding(dp(12), dp(10), dp(8), dp(10));
+        row.setMinimumHeight(dp(68));
+        row.setBackground(new android.graphics.drawable.RippleDrawable(
+                android.content.res.ColorStateList.valueOf(Ui.DARK ? 0x18FFFFFF : 0x10000000),
+                Ui.shape(this, selectedRow ? Ui.SURFACE_SOFT : Ui.BG, 14), null));
+        return row;
     }
-    private TextView itemHeading(LinearLayout card, String name, String initial, boolean running, View.OnClickListener menu) {
+
+    private TextView itemHeading(LinearLayout row, String name, String subtitle, boolean running, View.OnClickListener menu) {
         LinearLayout heading = Ui.row(this);
-        heading.addView(Ui.avatar(this, initial, Ui.ACCENT, 44));
+        View icon = Ui.icon(this, Ui.Glyph.FOLDER, Ui.INK_SOFT, 22);
+        heading.addView(icon, new LinearLayout.LayoutParams(dp(22), dp(22)));
         LinearLayout title = Ui.column(this);
-        title.setPadding(dp(12), 0, 0, 0);
-        TextView titleText = oneLine(name, 18);
-        titleText.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 17.5f);
-        titleText.setTypeface(android.graphics.Typeface.create("sans-serif-medium", android.graphics.Typeface.NORMAL));
+        title.setPadding(dp(12), 0, dp(4), 0);
+        TextView titleText = Ui.body(this, name);
+        titleText.setTextSize(16);
+        titleText.setTextColor(Ui.INK);
+        titleText.setMaxLines(2);
+        titleText.setEllipsize(TextUtils.TruncateAt.END);
         title.addView(titleText);
-        if (running) {
-            LinearLayout status = Ui.row(this);
-            View dot = new View(this);
-            dot.setBackground(Ui.shape(this, Ui.SUCCESS, 4));
-            LinearLayout.LayoutParams dotParams = new LinearLayout.LayoutParams(dp(7), dp(7));
-            status.addView(dot, dotParams);
-            TextView badge = Ui.styled(this, "当前活动环境", 11.5f, Ui.SUCCESS,
-                    android.graphics.Typeface.create("sans-serif-medium", android.graphics.Typeface.NORMAL));
-            LinearLayout.LayoutParams badgeParams = new LinearLayout.LayoutParams(-2, -2);
-            badgeParams.leftMargin = dp(6);
-            status.addView(badge, badgeParams);
-            LinearLayout.LayoutParams statusParams = new LinearLayout.LayoutParams(-2, -2);
-            statusParams.topMargin = dp(4);
-            title.addView(status, statusParams);
-        }
+        TextView detail = Ui.muted(this, (running ? "运行中  ·  " : "") + subtitle, 14);
+        detail.setMaxLines(2);
+        detail.setEllipsize(TextUtils.TruncateAt.END);
+        detail.setPadding(0, dp(5), 0, 0);
+        title.addView(detail);
         heading.addView(title, new LinearLayout.LayoutParams(0, -2, 1));
-        TextView more = Ui.styled(this, "⋯", 24, Ui.MUTED,
-                android.graphics.Typeface.create("sans-serif", android.graphics.Typeface.NORMAL));
-        more.setGravity(Gravity.CENTER);
-        more.setContentDescription(name + " 更多操作");
-        more.setOnClickListener(v -> { Ui.haptic(v); menu.onClick(v); });
-        Ui.pressable(more);
-        heading.addView(more, new LinearLayout.LayoutParams(dp(44), dp(44)));
-        card.addView(heading);
-        // Long-press anywhere on the card opens the same menu (WeChat/Meituan convention).
-        card.setLongClickable(true);
-        card.setOnLongClickListener(v -> { Ui.haptic(v); menu.onClick(v); return true; });
+        FrameLayout more = Ui.iconButton(this, Ui.Glyph.MENU, name + " 更多操作", Ui.MUTED, menu);
+        more.setMinimumWidth(dp(48));
+        more.setMinimumHeight(dp(48));
+        heading.addView(more, new LinearLayout.LayoutParams(-2, -2));
+        row.addView(heading);
+        row.setLongClickable(true);
+        row.setOnLongClickListener(v -> { Ui.haptic(v); menu.onClick(v); return true; });
         return titleText;
-    }
-
-    private TextView metaChip(String value) {
-        TextView chip = Ui.chip(this, value, false, null);
-        // Single line + capped width: a long timezone must ellipsize, not push its siblings
-        // off the card edge (the old horizontal row clipped overflow entirely).
-        chip.setSingleLine(true);
-        chip.setEllipsize(TextUtils.TruncateAt.END);
-        chip.setMaxWidth(dp(150));
-        return chip;
-    }
-
-    /** Wrapping chip flow: long timezone/language tags wrap to the next line instead of clipping. */
-    private Ui.FlowLayout chipFlow() {
-        Ui.FlowLayout flow = new Ui.FlowLayout(this);
-        flow.setPadding(0, dp(14), 0, dp(2));
-        return flow;
     }
 
     private LinearLayout profileCard(ProfileSpec profile, String query) {
@@ -390,29 +458,30 @@ public final class MainActivity extends Activity {
                 && active.launch.profile.id.equals(profile.id);
         boolean launching = active != null && active.state == BootstrapStore.State.PUBLISHED
                 && active.launch.profile.id.equals(profile.id);
-        LinearLayout card = Ui.card(this);
-        TextView titleText = itemHeading(card, profile.name, profile.name.substring(0, 1).toUpperCase(Locale.ROOT),
-                running, v -> profileMenu(v, profile));
-        titleText.setText(highlighted(profile.name, query));
-        String reason = query.isEmpty() ? null : matchReason(query, profile);
-        if (reason != null) {
-            TextView reasonChip = Ui.caption(this, "· " + reason);
-            reasonChip.setTextColor(Ui.ACCENT);
-            reasonChip.setPadding(0, dp(2), 0, 0);
-            card.addView(reasonChip);
-        }
-        String proxyName = profile.proxy.scheme.name() + " · " + profile.proxy.authority();
+        boolean exiting = active != null && active.launch.profile.id.equals(profile.id)
+                && (active.state == BootstrapStore.State.EXIT_UNCONFIRMED
+                || active.state == BootstrapStore.State.REVOKED);
+        String ownedSession = active == null ? null : active.launch.sessionId;
+        LinearLayout card = listRow(running || exiting || launching);
+        String proxyName = routeLabel(profile);
         for (ManagedProxy proxy : proxies) {
             if (proxy.id.equals(proxyLinks.get(profile.id))) { proxyName = proxy.name; break; }
         }
-        Ui.FlowLayout chips = chipFlow();
-        chips.addView(metaChip(profile.timeZoneId), 0, 8, 0);
-        chips.addView(metaChip(String.join(", ", profile.languageTags)), 0, 8, 0);
-        card.addView(chips);
-        TextView route = Ui.caption(this, "出口  " + proxyName
-                + (profile.proxy.hasCredentials ? "  ·  旧认证配置" : ""));
-        route.setPadding(0, dp(2), 0, dp(2));
-        card.addView(route);
+        String summary = proxyName + "  ·  " + profile.timeZoneId;
+        if (exiting) summary = "退出待确认  ·  可重试退出";
+        else if (launching) summary = "正在启动，请稍候";
+        TextView titleText = itemHeading(card, profile.name, summary,
+                running, v -> profileMenu(v, profile));
+        titleText.setText(highlighted(profile.name, query));
+        card.setOnClickListener(v -> {
+            if (exiting) showRuntime(); else openProfile(profile);
+        });
+        String reason = query.isEmpty() ? null : matchReason(query, profile);
+        if (reason != null) {
+            TextView reasonText = Ui.caption(this, reason);
+            reasonText.setPadding(dp(34), dp(4), 0, 0);
+            card.addView(reasonText);
+        }
         if (profile.deviceMode != ProfileSpec.DeviceMode.NATIVE) {
             TextView warning = Ui.caption(this, "声明型号未校准，无法作为完整设备模拟启动");
             warning.setTextColor(Ui.WARNING);
@@ -424,64 +493,40 @@ public final class MainActivity extends Activity {
             warning.setPadding(0, dp(4), 0, 0);
             card.addView(warning);
         }
-        LinearLayout actions = Ui.row(this); actions.setPadding(0, dp(16), 0, 0);
-        Button open = Ui.primary(this, launching ? "启动中…" : (running ? "继续浏览" : "打开环境"),
-                v -> openProfile(profile));
-        Ui.applyEnabledLook(open, runtimeKnown && !launching);
-        actions.addView(open, new LinearLayout.LayoutParams(0, dp(50), 2f));
-        Button edit = Ui.tonal(this, "编辑", v -> {
-            if (running || launching) { showRuntime(); return; }
-            ProfileEditor.show(this, repository, profile, this::reload);
-        });
-        if (running || launching) {
-            // The environment owns its live config; editing must wait until it exits.
-            edit.setEnabled(false);
-            edit.setAlpha(0.55f);
-            edit.setContentDescription(running ? "环境运行中，退出后可编辑" : "正在启动，稍候可编辑");
+        if (running || exiting) {
+            LinearLayout actions = Ui.row(this);
+            boolean stacked = getResources().getConfiguration().screenWidthDp < 360
+                    || getResources().getConfiguration().fontScale >= 1.3f;
+            actions.setOrientation(stacked ? LinearLayout.VERTICAL : LinearLayout.HORIZONTAL);
+            actions.setPadding(dp(24), dp(4), 0, 0);
+            Button open = wrapButton(Ui.ghost(this, exiting ? "查看状态" : "继续浏览", v -> {
+                if (exiting) showRuntime(); else openProfile(profile);
+            }));
+            actions.addView(open, new LinearLayout.LayoutParams(stacked ? -1 : 0, -2, stacked ? 0f : 1f));
+            Button exit = wrapButton(Ui.ghost(this, exiting ? "重试退出" : "退出环境",
+                    v -> confirmEnvironmentExit(ownedSession)));
+            actions.addView(exit, new LinearLayout.LayoutParams(stacked ? -1 : 0, -2, stacked ? 0f : 1f));
+            card.addView(actions);
         }
-        LinearLayout.LayoutParams editParams = new LinearLayout.LayoutParams(0, dp(50), 1f);
-        editParams.leftMargin = dp(8);
-        actions.addView(edit, editParams);
-        card.addView(actions);
         return card;
     }
 
     private LinearLayout proxyCard(ManagedProxy proxy, String query) {
         Integer cachedUsage = proxyUsage.get(proxy.id);
         int usage = cachedUsage == null ? 0 : cachedUsage;
-        LinearLayout card = Ui.card(this);
-        TextView proxyTitle = itemHeading(card, proxy.name, "P", false, v -> proxyMenu(v, proxy, usage));
+        LinearLayout card = listRow(false);
+        String summary = proxy.proxy.scheme.name() + "  ·  " + proxy.proxy.authority()
+                + (usage == 0 ? "  ·  未引用" : "  ·  " + usage + " 个环境");
+        TextView proxyTitle = itemHeading(card, proxy.name, summary, false, v -> proxyMenu(v, proxy, usage));
         proxyTitle.setText(highlighted(proxy.name, query));
-        Ui.FlowLayout chips = chipFlow();
-        chips.addView(metaChip(proxy.proxy.scheme.name()), 0, 8, 0);
-        card.addView(chips);
-        TextView endpoint = Ui.caption(this, proxy.proxy.authority());
-        endpoint.setPadding(0, dp(2), 0, dp(2));
-        card.addView(endpoint);
-        TextView usageLine = Ui.caption(this, usage == 0 ? "暂未被环境引用" : "被 " + usage + " 个环境引用");
-        usageLine.setTextColor(usage == 0 ? Ui.MUTED : Ui.ACCENT);
-        usageLine.setPadding(0, dp(4), 0, 0);
-        card.addView(usageLine);
-        Button edit = Ui.tonal(this, "编辑代理", v -> ProxyEditor.show(this, repository, proxy, this::reload));
-        LinearLayout.LayoutParams layout = new LinearLayout.LayoutParams(-1, dp(50));
-        layout.topMargin = dp(16);
-        card.addView(edit, layout);
+        card.setOnClickListener(v -> ProxyEditor.show(this, repository, proxy, this::reload));
         return card;
     }
 
     private void createItem() {
         if (repository == null || !runtimeKnown) return;
         if (selected == 1) ProxyEditor.show(this, repository, null, this::reload);
-        else if (proxies.isEmpty()) {
-            Ui.Sheet sheet = Ui.Sheet.create(this, "先添加一个代理",
-                    "环境从代理资源中选择出口，添加后可供多个环境复用。");
-            sheet.actions("取消", null, "添加代理", () -> {
-                sheet.dialog().dismiss();
-                selected = 1;
-                render();
-                ProxyEditor.show(this, repository, null, this::reload);
-            }).show();
-        } else ProfileEditor.show(this, repository, null, this::reload);
+        else ProfileEditor.show(this, repository, null, this::reload);
     }
 
     private void openProfile(ProfileSpec profile) {
@@ -496,23 +541,41 @@ public final class MainActivity extends Activity {
         if (active == null || active.launch.profile.id.equals(profile.id)) {
             queuedOpen = null; launchGeneration++; coordinator.open(profile); return;
         }
+        String expectedSession = active.launch.sessionId;
         Ui.Sheet sheet = Ui.Sheet.create(this, "切换到 “" + profile.name + "”",
                 "将先退出 “" + active.launch.profile.name + "”。确认原进程退出后，再打开所选环境。");
         sheet.actions("取消", null, "切换环境", () -> {
             sheet.dialog().dismiss();
-            launchGeneration++; queuedOpen = profile; coordinator.stop();
+            try {
+                BootstrapStore.ActiveLaunch observed = bootstrap.readActive();
+                if (observed == null || !expectedSession.equals(observed.launch.sessionId)) {
+                    reload();
+                    return;
+                }
+                launchGeneration++; queuedOpen = profile; coordinator.stop();
+            } catch (RuntimeException failure) { showError(failure); }
         }).show();
     }
     private void profileMenu(View anchor, ProfileSpec profile) {
         boolean busy = active != null && active.launch.profile.id.equals(profile.id)
                 && active.state != BootstrapStore.State.EXIT_CONFIRMED;
         PopupMenu menu = new PopupMenu(this, anchor);
-        menu.getMenu().add("复制为新环境").setEnabled(!profile.proxy.hasCredentials).setOnMenuItemClickListener(item -> {
+        menu.getMenu().add(!runtimeKnown ? "编辑环境（状态未知，请先核对）"
+                : busy ? "编辑环境（使用中，请先退出）" : "编辑环境")
+                .setEnabled(runtimeKnown && !busy).setOnMenuItemClickListener(item -> {
+            reload();
+            if (runtimeKnown && !isActive(profile)) {
+                ProfileEditor.show(this, repository, profile, this::reload);
+            }
+            return true;
+        });
+        menu.getMenu().add("复制为新环境").setEnabled(runtimeKnown && !profile.hasProxyCredentials()).setOnMenuItemClickListener(item -> {
             duplicate(profile); return true;
         });
         menu.getMenu().add("查看配置摘要").setOnMenuItemClickListener(item -> {
             Ui.Sheet sheet = Ui.Sheet.create(this, profile.name, "环境配置摘要");
-            sheet.text("代理：" + profile.proxy.proxyRule()
+            sheet.text("名称：" + profile.name + "\n网络：" + (profile.isDirect()
+                    ? "不使用代理（直连），使用设备当前网络（包括系统 VPN）的公网 IP" : profile.proxy.proxyRule())
                     + "\n时区：" + profile.timeZoneId + "\n语言：" + String.join(", ", profile.languageTags)
                     + "\n地区：" + (profile.countryCode.isEmpty() ? "未设置" : profile.countryCode + "（手动）")
                     + "\n型号：" + profile.deviceModel + "\n独立环境 ID：" + profile.id);
@@ -520,7 +583,7 @@ public final class MainActivity extends Activity {
             return true;
         });
         menu.getMenu().add(busy ? "删除环境（运行中，请先退出）" : "删除环境")
-                .setEnabled(!busy).setOnMenuItemClickListener(item -> {
+                .setEnabled(runtimeKnown && !busy).setOnMenuItemClickListener(item -> {
             confirmDeleteProfile(profile); return true;
         });
         menu.show();
@@ -531,7 +594,7 @@ public final class MainActivity extends Activity {
         Ui.Sheet sheet = Ui.Sheet.create(this, "删除这个环境？",
                 profile.name + " · 删除后环境将从列表移除，代理引用释放，已保存的凭据一并清除；"
                         + "本机已生成的站点数据文件不会自动清理。此操作不可撤销。");
-        sheet.actions("取消", null, "删除", () -> {
+        sheet.dangerActions("取消", null, "删除", () -> {
             sheet.dialog().dismiss();
             try {
                 repository.deleteProfile(profile.id);
@@ -549,13 +612,22 @@ public final class MainActivity extends Activity {
             ProfileSpec copy = new ProfileSpec(UUID.randomUUID().toString(), UUID.randomUUID().toString(), name,
                     original.proxy, original.countryCode, original.timeZoneId, original.languageTags,
                     original.deviceMode, original.deviceModel, "");
-            repository.saveProfileWithProxy(copy, null, repository.proxyIdForProfile(original.id)); reload();
+            if (copy.isDirect()) repository.saveProfileWithoutProxy(copy, null);
+            else repository.saveProfileWithProxy(copy, null, repository.proxyIdForProfile(original.id));
+            reload();
             Ui.snackbar(this, "已创建副本 “" + copy.name + "”");
         } catch (RuntimeException failure) { showError(failure); }
     }
     private boolean nameExists(String name) { for (ProfileSpec profile : profiles) if (profile.name.equalsIgnoreCase(name)) return true; return false; }
     private void proxyMenu(View anchor, ManagedProxy proxy, int usage) {
         PopupMenu menu = new PopupMenu(this, anchor);
+        menu.getMenu().add("查看代理详情").setOnMenuItemClickListener(item -> {
+            Ui.Sheet sheet = Ui.Sheet.create(this, proxy.name, "代理配置详情");
+            sheet.text("名称：" + proxy.name + "\n代理：" + proxy.proxy.proxyRule()
+                    + "\n引用环境：" + usage + " 个\n代理 ID：" + proxy.id);
+            sheet.actions(null, null, "知道了", null).show();
+            return true;
+        });
         menu.getMenu().add("查看引用环境").setOnMenuItemClickListener(item -> {
             List<String> names = new ArrayList<>();
             for (ProfileSpec profile : profiles) if (proxy.id.equals(proxyLinks.get(profile.id))) names.add(profile.name);
@@ -566,7 +638,7 @@ public final class MainActivity extends Activity {
         });
         menu.getMenu().add(usage == 0 ? "删除代理" : "删除代理（仍被引用）").setEnabled(usage == 0).setOnMenuItemClickListener(item -> {
             Ui.Sheet sheet = Ui.Sheet.create(this, "删除这个代理？", proxy.name + " · 此操作不会改动其他代理。");
-            sheet.actions("取消", null, "删除", () -> {
+            sheet.dangerActions("取消", null, "删除", () -> {
                 sheet.dialog().dismiss();
                 try { repository.deleteProxy(proxy.id, proxy.revision); Ui.snackbar(this, "已删除代理 “" + proxy.name + "”"); reload(); } catch (RuntimeException failure) { showError(failure); }
             }).show();
@@ -585,25 +657,62 @@ public final class MainActivity extends Activity {
     }
     private void showRuntime() {
         if (coordinator == null) return;
+        if (runtimeSheet != null) return;
         Ui.Sheet sheet = Ui.Sheet.create(this, "运行状态", null);
-        sheet.text(runtimeSummary());
-        Button refresh = Ui.tonal(this, "核对状态", v -> {
+        runtimeSheet = sheet;
+        sheet.text("正在核对运行状态…");
+        Button refresh = wrapButton(Ui.tonal(this, "核对状态", v -> {
             coordinator.reconcile();
-            sheet.updateText(runtimeSummary());
-        });
-        LinearLayout.LayoutParams refreshParams = new LinearLayout.LayoutParams(-1, dp(46));
+            reload();
+        }));
+        sheet.content(refresh);
+        LinearLayout.LayoutParams refreshParams = new LinearLayout.LayoutParams(-1, -2);
         refreshParams.topMargin = dp(14);
-        sheet.content(refresh).actions("关闭", null, "退出当前环境", () -> {
-            sheet.dialog().dismiss();
-            queuedOpen = null; launchGeneration++; coordinator.stop();
-        });
-        refresh.setMinimumHeight(dp(46));
         refresh.setLayoutParams(refreshParams);
+        runtimeExit = wrapButton(Ui.ghost(this, "退出当前环境", null));
+        sheet.content(runtimeExit).actions("关闭", null, null, null);
+        sheet.dialog().setOnDismissListener(dialog -> {
+            if (runtimeSheet == sheet) {
+                runtimeSheet = null;
+                runtimeExit = null;
+            }
+        });
+        updateRuntimeSheet();
         sheet.show();
     }
 
+    private void updateRuntimeSheet() {
+        if (runtimeSheet == null) return;
+        runtimeSheet.updateText(runtimeSummary());
+        boolean canExit = runtimeKnown && active != null
+                && active.state != BootstrapStore.State.EXIT_CONFIRMED;
+        String expectedSession = canExit ? active.launch.sessionId : null;
+        boolean retry = canExit && (active.state == BootstrapStore.State.EXIT_UNCONFIRMED
+                || active.state == BootstrapStore.State.REVOKED);
+        runtimeExit.setText(!runtimeKnown ? "状态未知，请先核对"
+                : !canExit ? "当前没有可退出的环境" : retry ? "重试退出" : "退出当前环境");
+        Ui.applyEnabledLook(runtimeExit, canExit);
+        Ui.Sheet sheet = runtimeSheet;
+        runtimeExit.setOnClickListener(v -> {
+            if (expectedSession == null) return;
+            sheet.dialog().dismiss();
+            confirmEnvironmentExit(expectedSession);
+        });
+    }
+
+    private Button wrapButton(Button button) {
+        button.setSingleLine(false);
+        button.setMaxLines(Integer.MAX_VALUE);
+        button.setEllipsize(null);
+        button.setMinHeight(dp(48));
+        button.setMinimumHeight(dp(48));
+        button.setMinimumWidth(dp(48));
+        return button;
+    }
+
     private String runtimeSummary() {
-        return (active == null ? "当前没有打开的环境" : "当前环境：" + active.launch.profile.name)
+        return (!runtimeKnown ? "当前环境状态未知，请核对后再操作"
+                : active == null ? "当前没有打开的环境" : "当前环境：" + active.launch.profile.name)
                 + "\n\n" + coordinator.status() + "\n\n同时仅运行一个环境；返回环境列表不等于结束浏览器进程。";
     }
     private void showError(RuntimeException failure) {
@@ -614,6 +723,9 @@ public final class MainActivity extends Activity {
     @Override protected void onDestroy() {
         queuedOpen = null; launchGeneration++; main.removeCallbacksAndMessages(null);
         if (coordinator != null) coordinator.clearObserver(runtimeObserver);
+        if (runtimeSheet != null) runtimeSheet.dialog().dismiss();
+        runtimeSheet = null;
+        runtimeExit = null;
         if (bootstrap != null) bootstrap.close();
         if (repository != null) repository.close(); super.onDestroy();
     }

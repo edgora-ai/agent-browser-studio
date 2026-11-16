@@ -50,6 +50,7 @@ public final class LaunchCoordinator {
     private boolean validatedControl;
     private boolean stopping;
     private long exitWaitGeneration;
+    private long exitControlGeneration;
     private Runnable observer;
     private String status = "无活动环境。";
 
@@ -141,6 +142,7 @@ public final class LaunchCoordinator {
                 return;
             }
             active = store.requestStop(active.launch.sessionId);
+            watchExitControl(active.launch.sessionId);
             if (confirmAbsent(active)) return;
             if (active.pid == 0) {
                 if (active.state == BootstrapStore.State.PUBLISHED) store.revoke(active.launch.sessionId);
@@ -170,7 +172,9 @@ public final class LaunchCoordinator {
         requireMain();
         try {
             BootstrapStore.ActiveLaunch active = store.readActive();
-            if (active != null && !confirmAbsent(active)) {
+            if (active != null && !confirmAbsent(active) && !stopping) {
+                // Foreground/refresh reconciliation must not hide a precise stop timeout,
+                // disconnect or protocol error behind the generic persisted state.
                 update("环境处于 " + active.state.name() + " / " + active.phase.name()
                         + "；停止回执不等于实际退出。");
             }
@@ -197,6 +201,7 @@ public final class LaunchCoordinator {
             machine.observePidCheck(active.launch.sessionId, active.pid, RuntimeStateMachine.ESRCH, true);
         }
         exitWaitGeneration++;
+        exitControlGeneration++;
         unbindControl();
         remote = null;
         current = null;
@@ -214,7 +219,9 @@ public final class LaunchCoordinator {
                 connection.activateOnHello = !stopping;
                 return send(ControlProtocol.HELLO);
             }
-            return true;
+            // An explicit stop/open must not accept a stale, disconnected binding as a
+            // successful control connection. Replace it and validate a fresh HELLO.
+            unbindControl();
         }
         Intent intent = new Intent(context, BrowserControlService.class);
         connection = new Connection(current.sessionId, current.nonce);
@@ -229,8 +236,27 @@ public final class LaunchCoordinator {
         return current != null && machine != null && machine.sessionId.equals(current.sessionId) ? machine : null;
     }
 
+    private void watchExitControl(String session) {
+        long attempt = ++exitControlGeneration;
+        main.postDelayed(() -> {
+            if (attempt != exitControlGeneration || !stopping || current == null
+                    || !session.equals(current.sessionId)) return;
+            try {
+                BootstrapStore.ActiveLaunch active = store.readActive();
+                if (active == null || !session.equals(active.launch.sessionId) || confirmAbsent(active)) return;
+                // A timeout is not exit evidence. Release only this stale control binding
+                // so a user retry can negotiate HELLO afresh; keep the environment gate.
+                unbindControl();
+                update("退出控制超时，请再次点击退出环境重试；环境尚未确认关闭，未解除启动门禁。");
+            } catch (IOException | RuntimeException failure) {
+                update("退出核对失败：" + safeCode(failure));
+            }
+        }, 10000);
+    }
+
     private void beginDrain() {
         stopping = true;
+        watchExitControl(current.sessionId);
         if (validatedControl) store.markExitUnconfirmed(current.sessionId, incarnation);
         LifecycleControlPolicy.DrainAction action = LifecycleControlPolicy.requestDrain(
                 currentMachine(), current.sessionId, validatedControl);
@@ -350,6 +376,7 @@ public final class LaunchCoordinator {
     private void finishExit(String cookie) throws RemoteException {
         if (remote == null || current == null) throw new IllegalStateException("EXIT_CONTROL_MISSING");
         store.markExitUnconfirmed(current.sessionId, incarnation);
+        exitControlGeneration++;
         Message exit = command(ControlProtocol.EXIT_SELF);
         Messenger endpoint = remote;
         unbindControl();
@@ -483,6 +510,36 @@ public final class LaunchCoordinator {
                 update("控制端在握手前死亡；未假定已退出。");
             }
         }
+        @Override public void onBindingDied(ComponentName name) {
+            recoverInvalidBinding();
+        }
+
+        @Override public void onNullBinding(ComponentName name) {
+            if (connection != this || !bound) return;
+            generation++;
+            validated = false;
+            unbindControl();
+            update("浏览进程控制服务不可用；请重试退出，尚未解除启动门禁。");
+        }
+
+        private void recoverInvalidBinding() {
+            if (connection != this || !bound || current == null
+                    || !ownerSession.equals(current.sessionId)
+                    || !ownerNonce.equals(current.nonce)) return;
+            generation++;
+            validated = false;
+            unbindControl();
+            try {
+                BootstrapStore.ActiveLaunch active = store.readActive();
+                if (active == null || confirmAbsent(active)) return;
+                // Do not loop on permanently dead bindings or launch an Activity here.
+                // An explicit retry establishes a new validated connection.
+                update("控制连接失效，请再次点击退出环境重试；尚未解除启动门禁。");
+            } catch (IOException | RuntimeException failure) {
+                update("退出连接恢复失败：" + safeCode(failure));
+            }
+        }
+
         @Override public void onServiceDisconnected(ComponentName name) {
             if (connection != this || !bound || current == null || !ownerSession.equals(current.sessionId)
                     || !ownerNonce.equals(current.nonce)) return;

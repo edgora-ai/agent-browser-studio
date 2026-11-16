@@ -123,7 +123,11 @@ public final class BrowserRuntime implements BrowserProcessRuntime {
         if (webView != null) throw new IllegalStateException("RUNTIME_VIEW_BUSY");
         webView = view;
         WebView.setWebContentsDebuggingEnabled(false);
-        if (launch.profile.proxy.hasCredentials) {
+        if (launch.profile.isDirect()) {
+            update("已阻止：此历史 WebView 验证路径不支持直连，未配置或加载网页；请使用原生内核版本。");
+            return;
+        }
+        if (launch.profile.hasProxyCredentials()) {
             update("已阻止：公开 WebView 认证回调不能安全绑定代理身份，未发送凭据。");
             return;
         }
@@ -390,7 +394,8 @@ public final class BrowserRuntime implements BrowserProcessRuntime {
         revokeObservation(R.string.ping0_observation_leave, true);
         application.requireBrowserActivation();
         if (draining || webView == null || !proxyConfigured || proxyConfigurationExpired
-                || launch.profile.proxy.hasCredentials || launch.profile.deviceMode != ProfileSpec.DeviceMode.NATIVE
+                || launch.profile.isDirect() || launch.profile.hasProxyCredentials()
+                || launch.profile.deviceMode != ProfileSpec.DeviceMode.NATIVE
                 || !launch.profile.deviceModel.equals(Build.MODEL)) {
             throw new IllegalStateException("PING0_OBSERVATION_NOT_READY");
         }

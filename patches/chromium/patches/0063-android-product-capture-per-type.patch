@@ -1,0 +1,109 @@
+From: Agent Browser contributors
+Subject: [PATCH] Android product capture: per-type grant truth and requested-type clamp
+
+Device-verified failure on r13s (OnePlus PKG110): an audio-only getUserMedia
+request crashed the renderer (DCHECK video_capture_settings().HasValue() in
+CreateVideoSource). The 0060 bridge completes with
+callback.Run(granted_now, granted_now) on both paths, losing the per-type
+flags; once the mic was OS-granted, an audio-only request received
+video_granted=true, and the 0062 delegate attached a video device to the
+audio-only answer (the phone enumerates a camera; the emulator's empty video
+cache is why the emulator passed). The renderer then built a video source for
+a request that never set video capture settings.
+
+Fix:
+- agent_browser_android_product_policy.cc: both bridge completion paths
+  report per-type truth (requested && isCaptureGranted(true,false) for
+  audio, requested && isCaptureGranted(false,true) for video; two cheap JNI
+  reads).
+- shell.cc: the delegate clamps the honored types to the REQUESTED types via
+  a NON-CAPTURING lambda with the flags passed as bound arguments
+  (base::BindOnce rejects capturing lambdas), so a stray grant for an
+  unrequested type can never attach a device to that answer.
+
+--- a/content/shell/android/agent_browser_product/chromium/agent_browser_android_product_policy.cc
++++ b/content/shell/android/agent_browser_product/chromium/agent_browser_android_product_policy.cc
+@@ -288,7 +288,22 @@
+         kMediaPermissionPollInterval);
+     return;
+   }
+-  std::move(callback).Run(granted_now, granted_now);
++  // Per-type truth: isCaptureGranted(audio, video) answers the AND of the
++  // requested types, so a granted audio-only request must not report the
++  // camera as granted (the 0062 delegate would then attach a video device
++  // to an audio-only answer and the renderer would DCHECK in
++  // CreateVideoSource). Two cheap JNI reads give the exact per-type state.
++  bool audio_granted = false;
++  bool video_granted = false;
++  {
++    base::AutoLock lock(MediaPermissionLock());
++    auto it = PendingMediaPermissions().find(callback_id);
++    if (it != PendingMediaPermissions().end()) {
++      audio_granted = it->second.audio && OsCaptureGrantedViaJava(true, false);
++      video_granted = it->second.video && OsCaptureGrantedViaJava(false, true);
++    }
++  }
++  std::move(callback).Run(audio_granted, video_granted);
+ }
+ 
+ }  // namespace
+@@ -313,8 +328,12 @@
+     if (it != PendingMediaPermissions().end()) {
+       base::OnceCallback<void(bool, bool)> pending_callback =
+           std::move(it->second.callback);
++      bool fast_audio = it->second.audio;
++      bool fast_video = it->second.video;
+       PendingMediaPermissions().erase(it);
+-      std::move(pending_callback).Run(true, true);
++      // granted_now is the AND of the requested types; each requested type
++      // is granted exactly when it was requested.
++      std::move(pending_callback).Run(fast_audio, fast_video);
+       return;
+     }
+   }
+--- a/content/shell/browser/shell.cc
++++ b/content/shell/browser/shell.cc
+@@ -529,8 +529,8 @@
+           kAgentBrowserProductProfileSwitch) &&
+       (wants_audio || wants_video)) {
+     auto resolve = base::BindOnce(
+-        [](MediaResponseCallback callback, bool audio_granted,
+-           bool video_granted) {
++        [](MediaResponseCallback callback, bool requested_audio,
++           bool requested_video, bool audio_granted, bool video_granted) {
+           if (!audio_granted && !video_granted) {
+             std::move(callback).Run(
+                 blink::mojom::StreamDevicesSet(),
+@@ -538,15 +538,21 @@
+                 std::unique_ptr<MediaStreamUI>());
+             return;
+           }
++          // Clamp to the requested types: the bridge answers per-type truth,
++          // but a stray grant for an unrequested type must never attach a
++          // device to this answer (a video device in an audio-only response
++          // crashes the renderer in CreateVideoSource).
++          const bool honor_audio = audio_granted && requested_audio;
++          const bool honor_video = video_granted && requested_video;
+           auto devices = blink::mojom::StreamDevices::New();
+-          if (audio_granted) {
++          if (honor_audio) {
+             const blink::MediaStreamDevices& audio_devices =
+                 MediaCaptureDevices::GetInstance()->GetAudioCaptureDevices();
+             if (!audio_devices.empty()) {
+               devices->audio_device = audio_devices.front();
+             }
+           }
+-          if (video_granted) {
++          if (honor_video) {
+             const blink::MediaStreamDevices& video_devices =
+                 MediaCaptureDevices::GetInstance()->GetVideoCaptureDevices();
+             if (!video_devices.empty()) {
+@@ -567,7 +573,7 @@
+                                   blink::mojom::MediaStreamRequestResult::OK,
+                                   std::unique_ptr<MediaStreamUI>());
+         },
+-        std::move(callback));
++        std::move(callback), wants_audio, wants_video);
+     AgentBrowserRequestAndroidMediaPermissions(wants_audio, wants_video,
+                                                std::move(resolve));
+     return;

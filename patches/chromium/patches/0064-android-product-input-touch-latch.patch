@@ -1,0 +1,34 @@
+From: Agent Browser contributors
+Subject: [PATCH] Android product input: tolerate touch-sequence latch overlap
+
+Device-verified failure on r13t (OnePlus PKG110): switching tabs while a page
+touch sequence is still latched detaches the content surface mid-touch, the
+TouchEnd never arrives, and the next TouchStart crashes the renderer:
+  FATAL cc/input/input_handler.cc:2689 DCHECK failed:
+  !is_handling_touch_sequence || !is_handling_touch_sequence_
+-> frozen content, then PRE_ANR.
+
+Official Chrome release builds compile this DCHECK out and tolerate the
+overlap; this build runs with DCHECKs enabled, so the product keeps the
+latch instead of crashing (the sequence end clears it) and always applies
+the false transition.
+
+--- a/cc/input/input_handler.cc
++++ b/cc/input/input_handler.cc
+@@ -2685,8 +2685,14 @@
+ }
+ 
+ void InputHandler::SetIsHandlingTouchSequence(bool is_handling_touch_sequence) {
+-  // We should not attempt to start handling a touch sequence twice.
+-  DCHECK(!is_handling_touch_sequence || !is_handling_touch_sequence_);
++  // The product's tab/env switch can detach the content surface mid-touch, so
++  // a TouchEnd may never arrive and the latch stays true into the next
++  // sequence. Official release builds compile this DCHECK out and tolerate
++  // exactly that overlap; keep the latch instead of crashing the renderer
++  // (the sequence end clears it), and always apply the false transition.
++  if (is_handling_touch_sequence && is_handling_touch_sequence_) {
++    return;
++  }
+   is_handling_touch_sequence_ = is_handling_touch_sequence;
+ }
+ 

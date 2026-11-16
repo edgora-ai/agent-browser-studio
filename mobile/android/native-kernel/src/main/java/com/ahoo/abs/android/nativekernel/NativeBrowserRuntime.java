@@ -33,14 +33,17 @@ public final class NativeBrowserRuntime implements BrowserProcessRuntime {
     private Runnable drainTimeout;
     private final Handler main = new Handler(Looper.getMainLooper());
     private static final long DRAIN_TIMEOUT_MS = 5000;
-    private String status = "原生独立环境；固定代理与独立资料目录已配置，完整身份和存储能力需实测验收。";
+    private String status;
 
     NativeBrowserRuntime(NativeBrowserApplication application) {
         requireMain();
         application.requireBrowserActivation();
         this.application = application;
         launch = application.requireLaunch();
-        if (launch.profile.proxy.hasCredentials || launch.profile.deviceMode != ProfileSpec.DeviceMode.NATIVE
+        status = launch.profile.isDirect()
+                ? "原生独立环境；不使用代理（直连），网站可见设备网络出口，DNS 使用正常解析；不提供代理保护。完整身份和存储能力需实测验收。"
+                : "原生独立环境；固定代理与独立资料目录已配置，完整身份和存储能力需实测验收。";
+        if (launch.profile.hasProxyCredentials() || launch.profile.deviceMode != ProfileSpec.DeviceMode.NATIVE
                 || !Build.MODEL.equals(launch.profile.deviceModel)) {
             throw new IllegalStateException("NATIVE_PROFILE_CAPABILITY_UNSUPPORTED");
         }

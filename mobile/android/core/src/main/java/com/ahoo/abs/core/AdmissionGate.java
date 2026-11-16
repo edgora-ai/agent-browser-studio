@@ -47,12 +47,13 @@ public final class AdmissionGate {
         if (profile == null) throw CoreValidation.error("INVALID_PROFILE", "Admission requires a profile");
         if (evidence == null) throw CoreValidation.error("INVALID_EVIDENCE", "Admission requires explicit evidence");
         List<String> reasons = new ArrayList<>();
-        boolean unsupportedAuth = profile.proxy.hasCredentials && !evidence.proxyAuthenticationSupported;
+        boolean unsupportedAuth = profile.hasProxyCredentials() && !evidence.proxyAuthenticationSupported;
         // No physical device-emulation capability exists in this contract: retain the request and block it.
         boolean unsupportedEmulation = profile.deviceMode == ProfileSpec.DeviceMode.DECLARED_ANDROID;
         if (unsupportedAuth) reasons.add("UNSUPPORTED_PROXY_AUTH");
         if (unsupportedEmulation) reasons.add("UNSUPPORTED_DEVICE_EMULATION");
-        if (!evidence.proxyConfigured) reasons.add("PROXY_NOT_CONFIGURED");
+        if (profile.isDirect()) reasons.add("DIRECT_CONNECTION_UNPROTECTED");
+        else if (!evidence.proxyConfigured) reasons.add("PROXY_NOT_CONFIGURED");
         if (!evidence.identityVerified) reasons.add("IDENTITY_UNVERIFIED");
         if (!evidence.networkConfinementVerified) reasons.add("NETWORK_CONFINEMENT_UNVERIFIED");
         if (!evidence.storageLifecycleVerified) reasons.add("STORAGE_LIFECYCLE_UNVERIFIED");

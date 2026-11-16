@@ -46,6 +46,8 @@ public final class FreshSessionLaunchContractTest {
         unsafeEntryPoints();
         handshakeGatesAndStaleConnections();
         stopDoesNotConsume();
+        disconnectedExitCanRetry();
+        exitControlTimeoutIsFailClosed();
         System.out.println("FreshSessionLaunchContractTest: " + checks + " checks passed");
     }
 
@@ -248,6 +250,53 @@ public final class FreshSessionLaunchContractTest {
         }
     }
 
+    private static void disconnectedExitCanRetry() throws Exception {
+        Fixture f = new Fixture();
+        f.openFresh(); f.claimAndConnect(); f.reply(f.hello());
+        ServiceConnection stale = f.context.connection;
+        Messenger staleInbox = f.inbox;
+        stale.onServiceDisconnected(new ComponentName("test.abs", "Control"));
+        f.context.expectPublication = false;
+        f.coordinator.stop();
+        check(f.context.connection != stale, "Disconnected binding must be replaced on explicit exit");
+        f.connect();
+        staleInbox.send(f.hello());
+        check(f.binder.sent.size() == 1, "Old inbox cannot drain through replacement connection");
+        f.reply(f.hello());
+        check(f.binder.sent.get(f.binder.sent.size()-1).what == ControlProtocol.DRAIN,
+                "Reconnected stop must validate HELLO then drain");
+        check(f.context.starts.size() == 1, "Exit reconnect must not reopen browser");
+        ServiceConnection dead = f.context.connection;
+        dead.onBindingDied(new ComponentName("test.abs", "Control"));
+        check(!(boolean) field("bound").get(f.coordinator), "Dead binding must release stuck bound state");
+        f.coordinator.stop();
+        check(f.context.connection != dead, "Retry after binding death must obtain new connection");
+        ServiceConnection empty = f.context.connection;
+        empty.onNullBinding(new ComponentName("test.abs", "Control"));
+        check(!(boolean) field("bound").get(f.coordinator), "Null binding must release stuck bound state");
+        f.coordinator.stop();
+        check(f.context.connection != empty, "Retry after null binding must obtain new connection");
+    }
+
+    private static void exitControlTimeoutIsFailClosed() throws Exception {
+        Fixture f = new Fixture();
+        f.openFresh(); f.claimAndConnect(); f.reply(f.hello());
+        f.coordinator.stop();
+        android.os.Handler handler = (android.os.Handler) field("main").get(f.coordinator);
+        Runnable stale = handler.queued.get(handler.queued.size()-1);
+        f.coordinator.stop();
+        Runnable timeout = handler.queued.get(handler.queued.size()-1);
+        stale.run();
+        check((boolean) field("bound").get(f.coordinator), "Stale timeout must not invalidate new stop attempt");
+        timeout.run();
+        check(!(boolean) field("bound").get(f.coordinator), "Current timeout must release stuck control connection");
+        check(BootstrapStore.active != null && BootstrapStore.active.state != State.EXIT_CONFIRMED,
+                "Timeout cannot clear environment gate or claim process death");
+        check(f.coordinator.status().contains("超时"), "Exit timeout must be visible and actionable");
+        f.coordinator.reconcile();
+        check(f.coordinator.status().contains("超时"), "Refresh cannot replace exit failure with generic persisted state");
+    }
+
     private static ProfileSpec profile(String id, String revision) {
         return new ProfileSpec(id, revision, "host-only", new ProxySpec(ProxySpec.Scheme.HTTP, "192.0.2.1", 8080, false),
                 "US", "America/New_York", List.of("en-US"), ProfileSpec.DeviceMode.NATIVE, "host-only-model", "");
@@ -342,11 +391,12 @@ public final class FreshSessionLaunchContractTest {
         final List<Intent> starts = new ArrayList<>();
         ServiceConnection connection;
         boolean failStart;
+        boolean expectPublication = true;
         int badEntry = -1;
         int extraFlags;
         Runnable duringStart;
         @Override public boolean bindService(Intent i, ServiceConnection c, int f) {
-            check(ProcessLifecycle.publicationHeld, "Open must bind inside the original publication hold");
+            check(!expectPublication || ProcessLifecycle.publicationHeld, "Open must bind inside the original publication hold");
             connection = c;
             return true;
         }

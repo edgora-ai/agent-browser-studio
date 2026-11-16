@@ -1,0 +1,202 @@
+From: Agent Browser contributors
+Subject: [PATCH] Android product noise seeds: dedicated gates, payload parse, renderer forwarding (rev4)
+
+rev4 extends rev3 with the missing renderer forwarding: the browser process
+froze the payload but AppendExtraCommandLineSwitches only forwarded the
+timezone switches to Android renderers, so the noise consumers (who run in
+the renderer and parse the child process command line) never saw
+agent-browser-noise-seeds. rev4 forwards agent-browser-product-profile and
+agent-browser-noise-seeds alongside the timezone switches (the 0057 block).
+
+rev3 fixes the r13o real-device finding: the noise payload was frozen under
+agent-browser-noise-seeds, but RoxyFingerprintConfig only PARSES
+agent-browser-fingerprint-config, which on Android carries the timezone
+payload (no seed). seed_ stayed 0, enabled_ stayed false, and the canvas/
+audio noise never applied on any device - different profiles shipped
+identical fingerprints.
+
+rev4 design:
+- The noise-seeds payload is parsed for the noise fields only (schema
+  version 1, canvas/audio dicts, decimal string seeds via exact uint64
+  conversion). The historical fingerprint-config switch stays owned by the
+  timezone config; JSON number seeds are rejected as a format because they
+  lose precision above 2^53.
+- enabled_ is not flipped on Android: the 35+ desktop consumers (UA,
+  platform, fonts, plugins, webgl vendor spoof, ...) keep today's inert
+  behavior there. The noise consumers instead gate on dedicated
+  canvas_noise_active()/audio_noise_active() accessors.
+- The noise switches are forwarded to Android renderers next to the 0057
+  timezone switches; CopySwitchesFrom copies only switches that are
+  present, so absent payloads change nothing.
+- Desktop behavior is unchanged: on desktop the canvas gate equals
+  enabled() && canvas_noise_enabled() (HashSeed never yields 0) and audio
+  additionally requires positive amplitude, which only makes an existing
+  arithmetic no-op explicit.
+
+Runtime acceptance (cross-profile canvas divergence on a real device)
+remains a separate requirement.
+
+--- a/third_party/blink/public/common/roxy_fingerprint_config.h
++++ b/third_party/blink/public/common/roxy_fingerprint_config.h
+@@ -16,6 +16,7 @@
+ #include "base/command_line.h"
+ #include "base/json/json_reader.h"
+ #include "base/no_destructor.h"
++#include "base/strings/string_number_conversions.h"
+ #include "base/values.h"
+ #include "build/build_config.h"
+ #include "third_party/blink/public/common/user_agent/user_agent_metadata.h"
+@@ -88,6 +89,19 @@
+   bool audio_noise_enabled() const { return audio_noise_enabled_; }
+   uint64_t audio_noise_seed() const { return audio_noise_seed_; }
+   double audio_noise_amplitude() const { return audio_noise_amplitude_; }
++  // Per-profile noise gates. The Android product profile drives canvas and
++  // audio differentiation through these without flipping enabled(), so the
++  // desktop platform/UA overrides stay inert there; on desktop the canvas
++  // gate equals enabled() && canvas_noise_enabled() because HashSeed never
++  // yields 0, and audio additionally requires a positive amplitude (a
++  // zero-amplitude desktop payload was an arithmetic no-op anyway).
++  bool canvas_noise_active() const {
++    return canvas_noise_enabled_ && canvas_noise_seed_ != 0;
++  }
++  bool audio_noise_active() const {
++    return audio_noise_enabled_ && audio_noise_seed_ != 0 &&
++           audio_noise_amplitude_ > 0.0;
++  }
+   const std::string& webrtc_mode() const { return webrtc_mode_; }
+   const std::string& webrtc_public_ip() const { return webrtc_public_ip_; }
+   const std::string& webgl_vendor() const { return webgl_vendor_; }
+@@ -559,6 +573,45 @@
+       }
+     }
+ 
++    // The Android product profile provisions per-profile canvas/audio
++    // differentiation through its own reviewed frozen argv
++    // (agent-browser-noise-seeds). That payload is parsed ONLY for the
++    // noise fields: the historical agent-browser-fingerprint-config switch
++    // carries the timezone payload on Android, and the desktop
++    // platform/UA gates and overrides do not apply there, so enabled_
++    // stays false and the noise consumers gate on the dedicated
++    // *_noise_active() accessors. Seeds are decimal strings parsed with
++    // exact uint64 conversion because JSON numbers lose precision above
++    // 2^53.
++    if (command_line->HasSwitch("agent-browser-product-profile") &&
++        command_line->HasSwitch("agent-browser-noise-seeds")) {
++      std::string decoded_noise;
++      const std::string encoded_noise =
++          command_line->GetSwitchValueASCII("agent-browser-noise-seeds");
++      if (encoded_noise.size() <= kMaxConfigBytes &&
++          base::Base64UrlDecode(encoded_noise,
++                                base::Base64UrlDecodePolicy::IGNORE_PADDING,
++                                &decoded_noise)) {
++        auto noise_root =
++            base::JSONReader::ReadDict(decoded_noise, base::JSON_PARSE_RFC);
++        if (noise_root &&
++            noise_root->FindInt("schemaVersion").value_or(0) == 1) {
++          if (const base::DictValue* canvas =
++                  noise_root->FindDict("canvas")) {
++            canvas_noise_enabled_ =
++                canvas->FindBool("enabled").value_or(false);
++            canvas_noise_seed_ = ParseNoiseSeed(*canvas, "seed");
++          }
++          if (const base::DictValue* audio = noise_root->FindDict("audio")) {
++            audio_noise_enabled_ = audio->FindBool("enabled").value_or(false);
++            audio_noise_seed_ = ParseNoiseSeed(*audio, "seed");
++            audio_noise_amplitude_ =
++                audio->FindDouble("amplitude").value_or(0.0);
++          }
++        }
++      }
++      return;
++    }
+     enabled_ = seed_ > 0 &&
+                (platform_ == "Win32" || platform_ == "MacIntel") &&
+                !user_agent_.empty() && !languages_.empty() &&
+@@ -569,6 +622,17 @@
+                                 std::string_view key) {
+     const std::string* value = dict.FindString(key);
+     return value ? *value : std::string();
++  }
++
++  static uint64_t ParseNoiseSeed(const base::DictValue& dict,
++                                 std::string_view key) {
++    const std::string* value = dict.FindString(key);
++    uint64_t seed = 0;
++    if (!value || value->empty() || value->size() > 20 ||
++        !base::StringToUint64(*value, &seed)) {
++      return 0;
++    }
++    return seed;
+   }
+ 
+   static uint64_t HashSeed(std::string_view value) {
+--- a/third_party/blink/renderer/platform/graphics/image_data_buffer.cc
++++ b/third_party/blink/renderer/platform/graphics/image_data_buffer.cc
+@@ -147,7 +147,7 @@
+ void ImageDataBuffer::ApplyRoxyFingerprintNoise(SkPixmap pixmap) {
+   const RoxyFingerprintConfig& config = RoxyFingerprintConfig::Get();
+   const size_t bytes_per_pixel = pixmap.info().bytesPerPixel();
+-  if (!config.enabled() || !config.canvas_noise_enabled() ||
++  if (!config.canvas_noise_active() ||
+       (bytes_per_pixel != 4 && bytes_per_pixel != 8 &&
+        bytes_per_pixel != 16) ||
+       !pixmap.writable_addr()) {
+@@ -202,7 +202,7 @@
+ void ImageDataBuffer::ApplyRoxyFingerprintNoise() {
+   const RoxyFingerprintConfig& config = RoxyFingerprintConfig::Get();
+   const size_t bytes_per_pixel = pixmap_.info().bytesPerPixel();
+-  if (!config.enabled() || !config.canvas_noise_enabled() ||
++  if (!config.canvas_noise_active() ||
+       (bytes_per_pixel != 4 && bytes_per_pixel != 8 &&
+        bytes_per_pixel != 16)) {
+     return;
+--- a/third_party/blink/renderer/modules/webaudio/realtime_analyser.cc
++++ b/third_party/blink/renderer/modules/webaudio/realtime_analyser.cc
+@@ -80,7 +80,7 @@
+ 
+ void ApplyRoxyFloatNoise(base::span<float> values, uint64_t salt) {
+   const RoxyFingerprintConfig& config = RoxyFingerprintConfig::Get();
+-  if (!config.enabled() || !config.audio_noise_enabled())
++  if (!config.audio_noise_active())
+     return;
+   const double amplitude = config.audio_noise_amplitude() * 1000.0;
+   uint64_t state = config.audio_noise_seed() ^ salt;
+@@ -93,7 +93,7 @@
+ 
+ void ApplyRoxyByteNoise(base::span<unsigned char> values, uint64_t salt) {
+   const RoxyFingerprintConfig& config = RoxyFingerprintConfig::Get();
+-  if (!config.enabled() || !config.audio_noise_enabled())
++  if (!config.audio_noise_active())
+     return;
+   uint64_t state = config.audio_noise_seed() ^ salt;
+   for (size_t index = 0; index < values.size(); ++index) {
+--- a/third_party/blink/renderer/modules/webaudio/audio_buffer.cc
++++ b/third_party/blink/renderer/modules/webaudio/audio_buffer.cc
+@@ -238,7 +238,7 @@
+ 
+ void AudioBuffer::ApplyRoxyFingerprintNoise(unsigned channel_index) {
+   const RoxyFingerprintConfig& config = RoxyFingerprintConfig::Get();
+-  if (!config.enabled() || !config.audio_noise_enabled() ||
++  if (!config.audio_noise_active() ||
+       config.audio_noise_amplitude() <= 0 ||
+       channel_index >= channels_.size() ||
+       roxy_noised_channels_[channel_index]) {
+--- a/content/shell/browser/shell_content_browser_client.cc
++++ b/content/shell/browser/shell_content_browser_client.cc
+@@ -493,6 +493,16 @@
+     };
+     command_line->CopySwitchesFrom(*base::CommandLine::ForCurrentProcess(),
+                                    kTimezoneSwitches);
++    // Per-profile canvas/audio differentiation seeds ride their own switch
++    // and must reach the renderer: the noise consumers run there and parse
++    // the child process command line. Without forwarding, the browser
++    // process verifies a frozen payload the renderers never see.
++    static const char* const kAgentBrowserNoiseSwitches[] = {
++        "agent-browser-product-profile",
++        "agent-browser-noise-seeds",
++    };
++    command_line->CopySwitchesFrom(*base::CommandLine::ForCurrentProcess(),
++                                   kAgentBrowserNoiseSwitches);
+   }
+ #endif
+ 

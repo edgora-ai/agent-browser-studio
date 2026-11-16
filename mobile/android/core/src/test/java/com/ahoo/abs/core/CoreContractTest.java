@@ -25,6 +25,7 @@ public final class CoreContractTest {
         } else {
             proxies();
             profiles();
+            DirectProfileContractTest.main(new String[0]);
             launches();
             nativeTimezoneLaunches();
             navigation();

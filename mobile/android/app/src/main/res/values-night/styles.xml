@@ -4,13 +4,13 @@
 <resources>
     <style name="AppTheme" parent="android:style/Theme.Material.NoActionBar">
         <item name="android:fontFamily">sans</item>
-        <item name="android:colorAccent">#818CF8</item>
+        <item name="android:colorAccent">#F3F3F3</item>
         <item name="android:windowLightStatusBar">false</item>
-        <item name="android:statusBarColor">#0E1016</item>
-        <item name="android:navigationBarColor">#0E1016</item>
+        <item name="android:statusBarColor">#141414</item>
+        <item name="android:navigationBarColor">#141414</item>
         <item name="android:windowLightNavigationBar">false</item>
         <item name="android:windowActionModeOverlay">true</item>
         <item name="android:forceDarkAllowed">false</item>
-        <item name="android:windowBackground">#0E1016</item>
+        <item name="android:windowBackground">#141414</item>
     </style>
 </resources>

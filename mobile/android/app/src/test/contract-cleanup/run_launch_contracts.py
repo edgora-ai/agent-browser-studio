@@ -33,6 +33,8 @@ public final class ComponentName {
 public interface ServiceConnection {
  void onServiceConnected(ComponentName n, android.os.IBinder b);
  void onServiceDisconnected(ComponentName n);
+ default void onBindingDied(ComponentName n) { }
+ default void onNullBinding(ComponentName n) { }
 }""",
     "android/content/Intent.java": """package android.content;
 public class Intent {
