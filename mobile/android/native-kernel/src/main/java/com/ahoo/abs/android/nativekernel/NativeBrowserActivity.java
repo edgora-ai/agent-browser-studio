@@ -169,6 +169,8 @@ public final class NativeBrowserActivity extends Activity {
     private final java.util.HashMap<Shell, String> previewUrls = new java.util.HashMap<>();
     private boolean previewInFlight;
     private boolean previewRequested;
+    // One next-frame task per dirty batch; callbacks/lifecycle events rearm blocked sources.
+    private boolean previewCapturePosted;
     private int previewRetries;
     private long previewEpoch;
     private ContentViewRenderView renderView;
@@ -213,6 +215,7 @@ public final class NativeBrowserActivity extends Activity {
     private boolean ntpRenderDirty;
     private FrameLayout pageContainer;
     private BrowserHistoryStore historyStore;
+    private final BrowserHistoryStore.LoadListener historyLoaded = this::onHistoryLoaded;
     private long lastBackExitHint;
     private NewTabPage newTab;
     private HistoryPanel historyPanel;
@@ -724,12 +727,14 @@ public final class NativeBrowserActivity extends Activity {
         chromeDivider = divider;
         divider.setBackgroundColor(DIVIDER);
         bar.addView(divider, new LinearLayout.LayoutParams(-1, 1));
-        // Thin determinate-free load bar under the URL row; driven by navigation observers.
+        // Reserve the same thin load-feedback slot while idle: GONE/VISIBLE would resize
+        // the shared renderer surface on every navigation. INVISIBLE also stops its animation.
+        // Navigation ownership/first paint still decide whether feedback is actually visible.
         android.widget.ProgressBar loadBar = new android.widget.ProgressBar(this, null,
                 android.R.attr.progressBarStyleHorizontal);
         loadBar.setIndeterminate(true);
         loadBar.getIndeterminateDrawable().setColorFilter(ACCENT, android.graphics.PorterDuff.Mode.SRC_IN);
-        loadBar.setVisibility(View.GONE);
+        loadBar.setVisibility(View.INVISIBLE);
         progressBar = loadBar;
         bar.addView(progressBar, new LinearLayout.LayoutParams(-1, dp(3)));
         // URL suggestions (history-ranked) plus paste-and-go; pushes the page down while open.
@@ -1075,14 +1080,17 @@ public final class NativeBrowserActivity extends Activity {
             updateNtpVisibility();
         }
         // Reconcile the load bar with the now-active shell so it can never stick after a switch.
-        if (progressBar != null) {
-            Shell barOwner = loadingShell;
-            boolean loading = barOwner != null && !barOwner.isDestroyed() && barOwner == active;
-            progressBar.setVisibility(loading ? View.VISIBLE : View.GONE);
-        }
+        Shell barOwner = loadingShell;
+        setLoadFeedbackVisible(barOwner != null && !barOwner.isDestroyed() && barOwner == active);
         reconcilePageRestoring();
         refreshTabSwitcher(false);
         syncWebContentsVisibility();
+    }
+
+    private void setLoadFeedbackVisible(boolean loading) {
+        if (progressBar == null) return;
+        int visibility = loading ? View.VISIBLE : View.INVISIBLE;
+        if (progressBar.getVisibility() != visibility) progressBar.setVisibility(visibility);
     }
 
     /** Only the selected, actually foreground web page may be visible to Chromium. */
@@ -1163,7 +1171,6 @@ public final class NativeBrowserActivity extends Activity {
             if (!interactive()) return;
             dismissTabSwitcher();
             syncWebContentsVisibility();
-            requestActivePreview(manager.getActiveShell());
         }
     };
 
@@ -1173,7 +1180,7 @@ public final class NativeBrowserActivity extends Activity {
     }
 
     private void showTabSwitcher() {
-        if (!interactive() || tabSwitcher == null) return;
+        if (!interactive() || tabSwitcher == null || tabSwitcher.isShowing()) return;
         cancelNavigationFocus();
         if (historyPanel != null) historyPanel.dismiss();
         address.clearFocus();
@@ -1247,6 +1254,7 @@ public final class NativeBrowserActivity extends Activity {
             @Override public void surfaceDestroyed(SurfaceHolder holder) {
                 previewEpoch++;
                 browserFrame.removeCallbacks(previewCapture);
+                previewCapturePosted = false;
             }
         };
         renderView.getSurfaceView().getHolder().addCallback(previewSurfaceObserver);
@@ -1254,20 +1262,21 @@ public final class NativeBrowserActivity extends Activity {
 
     private void requestActivePreview(Shell shell) {
         if (!resumed || !validTab(shell) || manager.getActiveShell() != shell) return;
+        if (!previewRequested) previewRetries = 0;
         previewRequested = true;
-        previewRetries = 0;
         schedulePreviewCapture();
     }
 
     private void schedulePreviewCapture() {
-        if (!previewRequested || previewInFlight || !resumed || !current()) return;
-        browserFrame.removeCallbacks(previewCapture);
+        if (!previewRequested || previewInFlight || previewCapturePosted || !resumed || !current()) return;
+        previewCapturePosted = true;
         // Let the real view/surface lifecycle draw; this does not alter the renderer's cadence.
         browserFrame.postOnAnimation(previewCapture);
     }
 
     /** Memory-only real pixels; never fake a page preview, capture an API, or write it to disk. */
     private void captureActivePreview() {
+        previewCapturePosted = false;
         Shell shell = manager == null ? null : manager.getActiveShell();
         if (!previewRequested || !resumed || !validTab(shell) || previewInFlight) return;
         // Copy only the renderer SurfaceView (or the NTP subtree), never the Window. A native
@@ -1428,11 +1437,24 @@ public final class NativeBrowserActivity extends Activity {
 
     // ------------------------------------------------------------- history surfaces
 
-    /** Owns the per-profile store and the two overlays; key is the immutable launch profile id. */
+    /** Runtime owns persistence across Activity recreation; these views own removable listeners. */
     private void attachHistorySurfaces(LaunchSpec launch) {
         profileName = launch.profile.name;
-        historyStore = new BrowserHistoryStore(this, launch.profile.id);
+        historyStore = runtime.historyStore();
         createHistorySurfaces();
+        historyStore.addLoadListener(historyLoaded);
+    }
+
+    private void onHistoryLoaded() {
+        if (!current() || cleanupComplete) return;
+        ntpRenderDirty = true;
+        if (newTab != null && newTab.getVisibility() == View.VISIBLE) {
+            newTab.refresh();
+            ntpRenderDirty = false;
+            requestActivePreview(manager == null ? null : manager.getActiveShell());
+        }
+        if (historyPanel != null) historyPanel.refreshIfVisible();
+        if (address != null && address.hasFocus()) refreshUrlSuggestions();
     }
 
     private void createHistorySurfaces() {
@@ -1646,6 +1668,7 @@ public final class NativeBrowserActivity extends Activity {
                 previewEpoch++;
                 previewRequested = false;
                 browserFrame.removeCallbacks(previewCapture);
+                previewCapturePosted = false;
                 // No automatic reload/POST replay, and no same-Shell identity-change dependency.
                 showPageRestoring(shell);
             }
@@ -1671,6 +1694,7 @@ public final class NativeBrowserActivity extends Activity {
                 previewEpoch++;
                 previewRequested = false;
                 browserFrame.removeCallbacks(previewCapture);
+                previewCapturePosted = false;
                 if (!navigation.isSameDocument()) loadingShell = shell;
             }
             requestChromeRefresh();
@@ -1833,8 +1857,9 @@ public final class NativeBrowserActivity extends Activity {
         chromeShell = null;
         chromeContents = null;
         hideUrlSuggestions();
-        if (progressBar != null) progressBar.setVisibility(View.GONE);
+        setLoadFeedbackVisible(false);
         if (browserFrame != null) browserFrame.removeCallbacks(previewCapture);
+        previewCapturePosted = false;
         // Do not cancel previewResults: PixelCopy still owns any in-flight destination.
     }
 
@@ -1893,6 +1918,7 @@ public final class NativeBrowserActivity extends Activity {
         closed = true;
         cancelUiWork();
         if (historyStore != null) {
+            historyStore.removeLoadListener(historyLoaded);
             try { historyStore.flush(); } catch (RuntimeException ignored) { }
         }
         for (ShellHistoryObserver observer : historyObservers.values()) observer.retire();
@@ -1901,6 +1927,7 @@ public final class NativeBrowserActivity extends Activity {
         tabPreviews.clear();
         previewUrls.clear();
         dismissTabSwitcher();
+        if (tabSwitcher != null) tabSwitcher.release();
         if (renderView != null && previewSurfaceObserver != null) {
             renderView.getSurfaceView().getHolder().removeCallback(previewSurfaceObserver);
             previewSurfaceObserver = null;
@@ -2091,7 +2118,6 @@ public final class NativeBrowserActivity extends Activity {
         if (tabSwitcher != null && tabSwitcher.isShowing()) {
             dismissTabSwitcher();
             syncWebContentsVisibility();
-            requestActivePreview(manager.getActiveShell());
             return;
         }
         if (historyPanel != null && historyPanel.getVisibility() == View.VISIBLE) {

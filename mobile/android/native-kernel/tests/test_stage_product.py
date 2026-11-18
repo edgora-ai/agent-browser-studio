@@ -125,6 +125,7 @@ class ProductStageTests(unittest.TestCase):
         self.assertIn("chromium/product-policy-tests.patch", destinations)
         for release_patch in ("runtime", "dns", "java", "security", "packaging"):
             self.assertIn(f"chromium/product-{release_patch}-release.patch", destinations)
+        self.assertIn("chromium/product-input-lifecycle.patch", destinations)
         self.assertIn("chromium/agent_browser_android_product_policy_unittest.cc", destinations)
         product_gni = next(row["data"] for row in rows if row["destination"] == "agent_browser_product.gni")
         # Chromium's android_apk template consumes its version code as a GN string.
@@ -143,7 +144,9 @@ class ProductStageTests(unittest.TestCase):
         self.assertIn("BrowserStartupController.getInstance().isFullBrowserStarted()", runtime)
         self.assertLess(runtime.index("isFullBrowserStarted()"),
                         runtime.index("ShellManager.flushPersistentStorageForShutdown("))
-        self.assertIn('finishDrain(drainGeneration, current, callback, "NOT_ATTEMPTED")', runtime)
+        self.assertIn('barrier.nativeOutcome = "NOT_ATTEMPTED";', runtime)
+        self.assertIn('historyConfirmed == null || nativeOutcome == null', runtime)
+        self.assertNotIn('finishDrain(drainGeneration, current, callback, "NOT_ATTEMPTED")', runtime)
 
     def test_security_overlay_disables_devtools_for_independent_product_or_preflight(self):
         rows = stage.collect_inputs()
@@ -171,7 +174,8 @@ class ProductStageTests(unittest.TestCase):
                 ("chromium/product-dns-release.patch", "patch"),
                 ("chromium/product-java-release.patch", "patch"),
                 ("chromium/product-security-release.patch", "patch"),
-                ("chromium/product-packaging-release.patch", "patch")):
+                ("chromium/product-packaging-release.patch", "patch"),
+                ("chromium/product-input-lifecycle.patch", "patch")):
             with self.subTest(relative=relative):
                 row = next(item for item in rows if item["destination"] == relative)
                 data = stage.read_source(stage.MODULE / relative)

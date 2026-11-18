@@ -65,7 +65,7 @@ public final class NativeBrowserFocusHostTest {
         }
         for (String name : List.of("navigate", "cancelNavigationFocus", "completeNavigationFocus",
                 "requestChromeRefresh", "refreshChrome", "syncWebContentsVisibility", "updateNtpVisibility",
-                "loadResolvedUrl", "loadResolvedUrlInternal", "current", "interactive", "validTab", "cancelUiWork",
+                "loadResolvedUrl", "loadResolvedUrlInternal", "current", "interactive", "validTab", "cancelUiWork", "setLoadFeedbackVisible",
                 "dispatchTouchEvent", "dispatchKeyEvent", "onWindowFocusChanged", "onPause", "onStop", "onResume",
                 "installShellObserverHooks", "showHistoryPanel", "hideUrlSuggestions", "dismissAddressEditor", "onBackPressed")) members += required(methods, name) + "\n";
         require(rootListener != null, "actual root ownership listener exists");
@@ -134,14 +134,14 @@ public final class NativeBrowserFocusHostTest {
                 }
                 interface FocusListener { void changed(View view, boolean focused); }
                 static class View {
-                    static final int VISIBLE = 0, GONE = 8;
+                    static final int VISIBLE = 0, INVISIBLE = 4, GONE = 8;
                     static final int IMPORTANT_FOR_ACCESSIBILITY_AUTO = 0, IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS = 4;
                     int accessibility;
                     void setImportantForAccessibility(int value) { accessibility = value; }
                     static View focus;
                     final Activity owner;
                     final String name;
-                    int visibility = VISIBLE, requests;
+                    int visibility = VISIBLE, requests, visibilityWrites;
                     boolean attached = true, shown = true, allowFocus = true;
                     FocusListener listener;
                     Runnable onRequest;
@@ -160,7 +160,7 @@ public final class NativeBrowserFocusHostTest {
                     void clearFocus() { if (focus == this) { focus = null; if (listener != null) listener.changed(this, false); } }
                     void setOnFocusChangeListener(FocusListener value) { listener = value; }
                     int getVisibility() { return visibility; }
-                    void setVisibility(int value) { visibility = value; events.add(name + (value == GONE ? "_HIDE" : "_SHOW")); }
+                    void setVisibility(int value) { visibilityWrites++; visibility = value; events.add(name + (value == VISIBLE ? "_SHOW" : "_HIDE")); }
                     boolean isAttachedToWindow() { return attached; }
                     boolean isShown() { return shown && visibility == VISIBLE; }
                     Object getWindowToken() { return this; }
@@ -308,7 +308,7 @@ public final class NativeBrowserFocusHostTest {
                     void returnToList() { returns++; }
                     void closeTab(Shell shell) { closedTabs++; manager.shells.remove(shell); }
                     boolean resumed = true, uiBuilt = true, closed, quiescing, cleanupComplete, chromeRefreshPosted;
-                    boolean ntpRenderDirty, previewRequested;
+                    boolean ntpRenderDirty, previewRequested, previewCapturePosted;
                     Activity() { @ROOT_LISTENER@ installShellObserverHooks(); address.requestFocus(); events.clear(); }
                     Object getSystemService(String service) { return ime; }
                     // Recovery has its own source-extracted scheduler/owner host; focus tests
@@ -449,6 +449,48 @@ public final class NativeBrowserFocusHostTest {
                     check(a.manager.active.loads == 0 && a.manager.active.contentAccesses == 0, "uninitialized Shell cannot load or dereference content getter");
                     a = new Activity(); a.requestChromeRefresh(); a.main.all();
                     check(a.manager.active.content.requests == 0, "empty intent: refresh never mints focus request");
+                    // Source-extracted presentation/ownership checks; not Android layout/render timings.
+                    a = new Activity();
+                    a.setLoadFeedbackVisible(true);
+                    check(a.progressBar == null, "load feedback safely ignores an unbuilt view");
+                    a.progressBar = new View(a, "LOAD");
+                    a.progressBar.visibility = View.INVISIBLE;
+                    a.refreshChrome();
+                    check(a.progressBar.visibility == View.INVISIBLE && a.progressBar.visibilityWrites == 0,
+                            "idle slot remains invisible without redundant writes");
+                    Shell loadOwner = a.manager.active;
+                    a.loadingShell = loadOwner; a.refreshChrome();
+                    check(a.progressBar.visibility == View.VISIBLE && a.progressBar.visibilityWrites == 1,
+                            "current navigation owner displays real load feedback once");
+                    for (int i = 0; i < 20; i++) a.requestChromeRefresh(); a.main.all();
+                    check(a.progressBar.visibilityWrites == 1, "coalesced unchanged loading events do not rewrite feedback");
+                    Shell otherLoadTab = new Shell(a); a.manager.shells.add(otherLoadTab);
+                    a.manager.selectShell(otherLoadTab); a.main.all();
+                    check(a.progressBar.visibility == View.INVISIBLE && a.progressBar.visibilityWrites == 2,
+                            "switch away hides animation without removing reserved slot");
+                    a.manager.selectShell(loadOwner); a.main.all();
+                    check(a.progressBar.visibility == View.VISIBLE && a.progressBar.visibilityWrites == 3,
+                            "switch back restores feedback only for its live owner");
+                    loadOwner.destroyed = true; a.refreshChrome();
+                    check(a.progressBar.visibility == View.INVISIBLE, "destroyed owner cannot display loading feedback");
+                    loadOwner.destroyed = false; a.loadingShell = null; a.refreshChrome();
+                    check(a.progressBar.visibilityWrites == 4, "completed navigation stays hidden without duplicate writes");
+                    a.loadingShell = loadOwner; a.refreshChrome(); a.onPause();
+                    check(a.progressBar.visibility == View.INVISIBLE && a.progressBar.visibilityWrites == 6,
+                            "pause stops loading animation while retaining slot");
+                    a.onStop();
+                    check(a.progressBar.visibility == View.INVISIBLE && a.progressBar.visibilityWrites == 6,
+                            "stop cancellation is idempotent after pause");
+                    a.onResume(); a.main.all();
+                    check(a.progressBar.visibility == View.VISIBLE && a.progressBar.visibilityWrites == 7,
+                            "resume reconciles the actual current loading owner");
+                    a.loadingShell = null; a.refreshChrome();
+                    check(a.progressBar.visibility == View.INVISIBLE && a.progressBar.visibilityWrites == 8,
+                            "first-paint or load-stop owner retirement removes only presentation");
+                    a.cancelUiWork(); a.cancelUiWork();
+                    check(a.progressBar.visibilityWrites == 8, "repeated teardown does not churn load feedback");
+                    check(a.pendingFocusShell == null && a.manager.active.content.requests == 0,
+                            "load presentation changes never mint navigation focus or page work");
                     return checks;
                 }
             }

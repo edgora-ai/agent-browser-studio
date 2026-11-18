@@ -4,6 +4,7 @@ import com.sun.source.tree.MethodTree;
 import com.sun.source.tree.Tree;
 import com.sun.source.tree.VariableTree;
 import com.sun.source.util.JavacTask;
+import java.lang.reflect.InvocationTargetException;
 import java.net.URL;
 import java.net.URLClassLoader;
 import java.nio.charset.StandardCharsets;
@@ -61,8 +62,92 @@ public final class NativeTabSwitcherHostTest {
             if (!windowMembers.containsKey(name)) throw new AssertionError("Missing production member " + name);
             windowCode += windowMembers.get(name) + "\n";
         }
+        Path overview = root.resolve("mobile/android/native-kernel/src/main/java/com/ahoo/abs/android/nativekernel/TabSwitcherView.java");
+        int checks = execute(compiler, output.resolve("positive"), overview, windowCode);
+        String source = Files.readString(overview, StandardCharsets.UTF_8);
+        int rejected = 0;
+        rejected += rejects(compiler, output, windowCode, source, "metadata-rebinds-bitmap",
+                "if (boundPreview != nextPreview || previous == null) {\n                if (boundPreview != nextPreview) image.setImageBitmap(nextPreview);",
+                "if (true) {\n                image.setImageBitmap(nextPreview);",
+                "metadata-only update leaves preview untouched");
+        rejected += rejects(compiler, output, windowCode, source, "repeated-show-restarts-open",
+                "if (isShowing()) {", "if (false) {", "repeated show never restarts opening animation");
+        rejected += rejects(compiler, output, windowCode, source, "cold-reopen-rebuilds",
+                "revealOnLayout = true;\n        refresh(items);", "revealOnLayout = true;\n        rebuild(items, columnCount());",
+                "dismiss then reopen retains card/grid identity without removeAllViews");
+        rejected += rejects(compiler, output, windowCode, source, "hidden-item-retains-preview",
+                "item = new TabItem(null, item.title, item.displayUrl, item.active, null);", ";",
+                "dismiss clears every retained preview reference");
+        rejected += rejects(compiler, output, windowCode, source, "permanent-release-retains-cards",
+                "dismiss();\n        releaseCards();\n        gridColumns = 0;", "dismiss();\n        gridColumns = 0;",
+                "final detach releases every retained card/Shell");
+        rejected += rejects(compiler, output, windowCode, source, "ignore-recycled-bound-preview",
+                "|| binding.boundPreview != preview", "", "same-item recycled preview clears the stale bound image");
+        rejected += rejects(compiler, output, windowCode, source, "ignore-title-only-update",
+                "|| !java.util.Objects.equals(previous.title, next.title)", "", "title-only update changes actual title");
+        rejected += rejects(compiler, output, windowCode, source, "ignore-url-only-update",
+                "|| !java.util.Objects.equals(previous.displayUrl, next.displayUrl)", "", "url-only update changes actual host");
+        rejected += rejects(compiler, output, windowCode, source, "ignore-active-only-update",
+                "previous.active != next.active || ", "", "active-only update changes actual selected badge");
+        rejected += rejects(compiler, output, windowCode, source, "omit-native-zero-fling",
+                "            scroll.fling(0);", "            ;",
+                "warm dismiss settles pending motion at its current in-range offset");
+        rejected += rejects(compiler, output, windowCode, source, "omit-immediate-native-compute",
+                "            scroll.computeScroll();\n        } finally", "            ;\n        } finally",
+                "warm dismiss settles pending motion at its current in-range offset");
+        rejected += rejects(compiler, output, windowCode, source, "reverse-native-compute-and-fling",
+                "            scroll.fling(0);\n            // Consume its final absolute offset now, not on a frame after the next reveal.\n            scroll.computeScroll();", "            scroll.computeScroll();\n            scroll.fling(0);",
+                "warm dismiss settles pending motion at its current in-range offset");
+        rejected += rejects(compiler, output, windowCode, source, "omit-native-preclamp",
+                "            scroll.scrollTo(0, scroll.getScrollY());", "            ;",
+                "lifecycle clamp prevents unfinished zero-speed edge work");
+        rejected += rejects(compiler, output, windowCode, source, "omit-dismiss-native-settlement",
+                "        setVisibility(View.GONE);\n        stopScrollAnimation();", "        setVisibility(View.GONE);",
+                "warm dismiss settles pending motion at its current in-range offset");
+        rejected += rejects(compiler, output, windowCode, source, "omit-hidden-show-native-settlement",
+                "        stopScrollAnimation();\n        setVisibility(View.VISIBLE);", "        setVisibility(View.VISIBLE);",
+                "hidden show settles before visibility and first layout");
+        rejected += rejects(compiler, output, windowCode, source, "omit-first-reveal-native-settlement",
+                "        // super.onLayout may have created fresh native focus/size scrolling since show().\n        stopScrollAnimation();", "        // First-reveal settlement intentionally omitted.",
+                "first reveal settles native work created during super layout");
+        rejected += rejects(compiler, output, windowCode, source, "show-native-settlement-after-visible",
+                "        stopScrollAnimation();\n        setVisibility(View.VISIBLE);", "        setVisibility(View.VISIBLE);\n        stopScrollAnimation();",
+                "only the first active reveal adds a visible settlement");
+        rejected += rejects(compiler, output, windowCode, source, "dismiss-native-settlement-before-gone",
+                "        setVisibility(View.GONE);\n        stopScrollAnimation();", "        stopScrollAnimation();\n        setVisibility(View.GONE);",
+                "dismiss settlement runs only while overview is GONE");
+        System.out.println(checks + " actual-view overview host checks passed, " + rejected
+                + " behavioral mutation controls rejected (not Android runtime acceptance)");
+    }
+
+    private static int rejects(JavaCompiler compiler, Path output, String windowCode, String source,
+            String label, String before, String after, String expectedFailure) throws Exception {
+        int first = source.indexOf(before);
+        if (first < 0 || source.indexOf(before, first + before.length()) >= 0) {
+            throw new AssertionError("Mutation must replace one unambiguous expression: " + label);
+        }
+        Path changed = output.resolve(label).resolve("actual/TabSwitcherView.java");
+        Files.createDirectories(changed.getParent());
+        Files.writeString(changed, source.substring(0, first) + after + source.substring(first + before.length()),
+                StandardCharsets.UTF_8);
+        // A compile error is never counted as a killed behavioral mutation.
+        try {
+            execute(compiler, output.resolve(label), changed, windowCode);
+        } catch (InvocationTargetException failure) {
+            Throwable cause = failure.getCause();
+            if (cause instanceof AssertionError && cause.getMessage() != null
+                    && cause.getMessage().contains(expectedFailure)) {
+                System.out.println("Rejected behavioral mutation " + label + ": " + cause.getMessage());
+                return 1;
+            }
+            throw new AssertionError("Mutation failed for the wrong reason: " + label, cause);
+        }
+        throw new AssertionError("Behavioral mutation survived: " + label);
+    }
+
+    private static int execute(JavaCompiler compiler, Path output, Path overview, String windowCode) throws Exception {
         List<Path> sources = new ArrayList<>();
-        sources.add(root.resolve("mobile/android/native-kernel/src/main/java/com/ahoo/abs/android/nativekernel/TabSwitcherView.java"));
+        sources.add(overview);
         for (String[] fixture : FIXTURES) {
             Path source = output.resolve(fixture[0] + ".java");
             Files.createDirectories(source.getParent());
@@ -79,8 +164,7 @@ public final class NativeTabSwitcherHostTest {
             if (!compiled) throw new AssertionError("Actual overview did not compile against host fixtures");
         }
         try (URLClassLoader loader = new URLClassLoader(new URL[]{output.toUri().toURL()}, NativeTabSwitcherHostTest.class.getClassLoader())) {
-            Object count = loader.loadClass("com.ahoo.abs.android.nativekernel.TabSwitcherChecks").getMethod("run").invoke(null);
-            System.out.println(count + " actual-view overview host checks passed (not Android runtime acceptance)");
+            return (Integer) loader.loadClass("com.ahoo.abs.android.nativekernel.TabSwitcherChecks").getMethod("run").invoke(null);
         }
     }
 
@@ -242,7 +326,7 @@ public final class NativeTabSwitcherHostTest {
                 private OnClickListener click;
                 private final ViewTreeObserver observer = new ViewTreeObserver();
                 public android.view.ViewGroup.LayoutParams layoutParams;
-                public int layoutRequests, posts, invalidations;
+                public int layoutRequests, posts, invalidations, descriptionWrites, animationStarts;
                 public View(android.content.Context context) { this.context = context; }
                 public interface OnClickListener { void onClick(View view); }
                 public static final class MeasureSpec {
@@ -259,7 +343,7 @@ public final class NativeTabSwitcherHostTest {
                 public Object getForeground() { return foreground; }
                 public void setVisibility(int value) { visibility = value; }
                 public int getVisibility() { return visibility; }
-                public void setContentDescription(CharSequence value) { description = value; }
+                public void setContentDescription(CharSequence value) { description = value; descriptionWrites++; }
                 public CharSequence getContentDescription() { return description; }
                 public void setOnClickListener(OnClickListener listener) { click = listener; }
                 public boolean performClick() { if (click != null) click.onClick(this); return click != null; }
@@ -280,7 +364,7 @@ public final class NativeTabSwitcherHostTest {
                 public View alpha(float value) { return this; }
                 public View translationY(float value) { return this; }
                 public View setDuration(long value) { return this; }
-                public void start() { }
+                public void start() { animationStarts++; }
                 public ViewParent getParent() { return parent; }
                 public int getLeft() { return left; }
                 public int getRight() { return left + width; }
@@ -349,6 +433,14 @@ public final class NativeTabSwitcherHostTest {
                     public LayoutParams(int width, int height, int gravity) { super(width, height); }
                 }
                 public FrameLayout(android.content.Context context) { super(context); }
+                // Host-only injection of work created during super.onLayout, not Android layout emulation.
+                public Runnable modelSuperLayoutWork;
+                @Override protected void onLayout(boolean changed, int left, int top, int right, int bottom) {
+                    super.onLayout(changed, left, top, right, bottom);
+                    if (modelSuperLayoutWork != null) {
+                        Runnable work = modelSuperLayoutWork; modelSuperLayoutWork = null; work.run();
+                    }
+                }
                 public android.view.WindowInsets onApplyWindowInsets(android.view.WindowInsets insets) {
                     insets.applications++;
                     if (insets.apply != null) insets.apply.run();
@@ -372,9 +464,10 @@ public final class NativeTabSwitcherHostTest {
         {"android/widget/ScrollView", """
             package android.widget;
             public class ScrollView extends FrameLayout {
-                public int maxScroll = 2000, scrollCalls, layoutClamps;
+                public int maxScroll = 2000, scrollCalls, layoutClamps, zeroFlings, visibleZeroFlings;
                 private int scrollY;
                 private Integer pendingScroll;
+                private boolean pendingSpringback;
                 public boolean nativeLayoutRange;
                 public ScrollView(android.content.Context context) { super(context); }
                 public void setFillViewport(boolean value) { }
@@ -394,12 +487,38 @@ public final class NativeTabSwitcherHostTest {
                         if (old != scrollY) layoutClamps++;
                     }
                 }
-                public void fling(int velocityY) { }
-                public final void smoothScrollTo(int x, int y) { pendingScroll = y; }
+                // Bounded state model derived from API35 source, NOT a velocity/timing implementation
+                // and NOT evidence of the guest's native scroller state or real rendering.
+                public boolean failZeroFling, failCompute;
+                public boolean hasPendingScroll() { return pendingScroll != null; }
+                public void modelNativeOffset(int y) { scrollY = y; } // Model an overfling position.
+                public void fling(int velocityY) {
+                    if (velocityY == 0) {
+                        if (failZeroFling) throw new IllegalStateException("modeled fling failure");
+                        zeroFlings++;
+                        boolean hidden = false;
+                        for (android.view.View current = this; current != null;
+                                current = current.parent instanceof android.view.View parent ? parent : null) {
+                            if (current.getVisibility() == GONE) hidden = true;
+                        }
+                        if (!hidden) visibleZeroFlings++;
+                        pendingSpringback = scrollY < 0 || scrollY > maxScroll;
+                        pendingScroll = Math.max(0, Math.min(scrollY, maxScroll));
+                    } else {
+                        pendingSpringback = false;
+                        pendingScroll = Math.max(0, Math.min(scrollY + velocityY / 4, maxScroll));
+                    }
+                }
+                public final void smoothScrollTo(int x, int y) {
+                    pendingSpringback = false; pendingScroll = Math.max(0, Math.min(y, maxScroll));
+                }
                 public void computeScroll() {
+                    if (failCompute) throw new IllegalStateException("modeled compute failure");
                     if (pendingScroll == null) return;
-                    int old = scrollY; scrollY = Math.max(0, Math.min(pendingScroll, maxScroll)); pendingScroll = null;
-                    // Framework animation moves directly, without our scrollTo override.
+                    // Model unfinished edge work as a separate transition, not any number of ms/frames.
+                    if (pendingSpringback) { pendingSpringback = false; return; }
+                    int old = scrollY; scrollY = pendingScroll; pendingScroll = null;
+                    // Framework animation applies an absolute offset without our scrollTo override.
                     if (old != scrollY) onScrollChanged(0, scrollY, 0, old);
                 }
                 public void layoutRange(int range) {
@@ -517,10 +636,11 @@ public final class NativeTabSwitcherHostTest {
             }
             private static final class Recorder implements TabSwitcherView.Listener {
                 Shell selected, closed;
-                public void onSelect(Shell shell) { selected = shell; }
-                public void onClose(Shell shell) { closed = shell; }
-                public void onNewTab() { }
-                public void onDismiss() { }
+                int selects, closes, news, dismisses;
+                public void onSelect(Shell shell) { selected = shell; selects++; }
+                public void onClose(Shell shell) { closed = shell; closes++; }
+                public void onNewTab() { news++; }
+                public void onDismiss() { dismisses++; }
             }
             private static final class Fixture {
                 final Context context = new Context();
@@ -740,6 +860,7 @@ public final class NativeTabSwitcherHostTest {
                     ViewTreeObserver.OnPreDrawListener obsolete = f.view.getViewTreeObserver().listeners.get(0);
                     f.view.getViewTreeObserver().dispatchOnPreDraw();
                     check((Boolean) field(f.view, "insetAnchorPending"), "cancellation fixture is genuinely pending " + mode);
+                    int stops = f.scroll.zeroFlings;
                     switch (mode) {
                         case 0 -> f.view.dispatchTouchEvent(new MotionEvent(MotionEvent.ACTION_DOWN));
                         case 1 -> f.view.dispatchGenericMotionEvent(new MotionEvent(MotionEvent.ACTION_SCROLL));
@@ -752,12 +873,13 @@ public final class NativeTabSwitcherHostTest {
                         case 8 -> { f.scroll.smoothScrollTo(0, 11); f.scroll.computeScroll(); }
                         case 9 -> f.view.dismiss();
                         case 10 -> f.view.detach();
-                        case 11 -> f.view.show(f.items);
+                        case 11 -> { f.view.dismiss(); f.view.show(f.items); }
                         default -> throw new AssertionError("unreachable");
                     }
                     check(!(Boolean) field(f.view, "insetAnchorPending") && field(f.view, "anchorShell") == null
                             && f.view.getViewTreeObserver().listeners.isEmpty(), "real navigation/lifecycle wins over logical anchor " + mode);
                     if (mode >= 9) continue;
+                    check(f.scroll.zeroFlings == stops, "real input/navigation cancellation never replaces native motion " + mode);
                     f.scroll.scrollTo(0, 11);
                     f.scroll.layout(0, 0, 400, 600); f.view.layout(0, 0, 400, 600);
                     obsolete.onPreDraw();
@@ -837,8 +959,16 @@ public final class NativeTabSwitcherHostTest {
                 check(old != next && f.view.getViewTreeObserver().listeners.size() == 1, "obsolete dispatch snapshot cannot consume a newer palette transaction");
                 f.scroll.layoutRange(50); f.layoutOnly(400, 200); f.scroll.layoutRange(2000); f.finishLayout(400, 200);
                 check(f.scroll.getScrollY() == 144, "a fresh palette restores only the user's newer anchor");
-                f.view.retainPaletteAnchor(); f.view.show(f.items);
-                check(f.view.getViewTreeObserver().listeners.isEmpty(), "new show cancels the old palette observer before active-card reveal");
+                f.view.retainPaletteAnchor();
+                ViewTreeObserver.OnPreDrawListener retained = f.view.getViewTreeObserver().listeners.get(0);
+                f.view.show(f.items);
+                check(f.view.getViewTreeObserver().listeners.size() == 1
+                        && f.view.getViewTreeObserver().listeners.get(0) == retained,
+                        "repeated show preserves existing palette restoration ownership");
+                f.finishLayout(400, 200);
+                check(f.scroll.getScrollY() == 144, "repeated show cannot replace the user's anchor with active-card reveal");
+                f.view.retainPaletteAnchor(); f.view.dismiss(); f.view.show(f.items);
+                check(f.view.getViewTreeObserver().listeners.isEmpty(), "dismiss then new show cancels the old palette observer");
                 f.finishLayout(400, 200);
                 check(f.scroll.getScrollY() == 424, "fresh show still performs its one initial active-card reveal");
                 f.view.dismiss(); f.view.applyPalette();
@@ -926,7 +1056,8 @@ public final class NativeTabSwitcherHostTest {
                 f.view.dismiss();
                 int calls = f.scroll.scrollCalls;
                 f.finishLayout(400, 200); f.view.refresh(f.items);
-                check(f.grid.getChildCount() == 0 && ((List<?>) field(f.view, "cards")).isEmpty(), "dismiss releases cards and ImageView ownership");
+                check(f.grid.getChildCount() == 2 && ((List<?>) field(f.view, "cards")).size() == 4
+                        && f.image(0).bitmap == null, "dismiss retains current card structure but releases ImageView ownership");
                 check(f.scroll.scrollCalls == calls && !(Boolean) field(f.view, "restoreOnLayout"), "dismiss cancels pending structural restoration");
                 f.view.show(f.items); f.view.detach(); f.scroll.scrollTo(0, 112);
                 calls = f.scroll.scrollCalls; f.measure(400); f.finishLayout(400, 200);
@@ -934,7 +1065,395 @@ public final class NativeTabSwitcherHostTest {
                 f.view.dismiss(); f.view.show(null); f.measure(400); f.finishLayout(400, 200);
                 check(f.grid.getChildCount() == 1 && ((TextView) field(f.view, "emptyLabel")).getVisibility() == View.VISIBLE, "empty state remains honest and usable");
             }
+            private static int[] metadataWrites(Fixture f, int index) throws Exception {
+                return new int[]{f.text(index, "title").textWrites, f.text(index, "url").textWrites,
+                        f.text(index, "hostLabel").textWrites, f.text(index, "avatar").textWrites,
+                        f.card(index).descriptionWrites, f.text(index, "close").descriptionWrites};
+            }
+            private static int[] paletteColors(Fixture f, int index) throws Exception {
+                return ((GradientDrawable) field(f.binding(index), "previewBackground")).colors;
+            }
+            private static View headerAction(Fixture f, int index) {
+                return ((ViewGroup) ((ViewGroup) f.view.getChildAt(0)).getChildAt(0)).getChildAt(index);
+            }
+            private static View.OnClickListener clickListener(View view) throws Exception {
+                Field field = View.class.getDeclaredField("click"); field.setAccessible(true);
+                return (View.OnClickListener) field.get(view);
+            }
+            private static void unchangedRefreshAndShowCoalesce() throws Exception {
+                Fixture f = new Fixture(); f.open();
+                View row = f.grid.getChildAt(0), target = f.card(4);
+                ImageView image = f.image(4);
+                int removals = f.grid.removals, scrollCalls = f.scroll.scrollCalls, animations = f.view.animationStarts;
+                int[][] metadata = new int[5][], colors = new int[5][];
+                int[] bitmapWrites = new int[5];
+                for (int i = 0; i < 5; i++) {
+                    metadata[i] = metadataWrites(f, i); colors[i] = paletteColors(f, i);
+                    bitmapWrites[i] = f.image(i).bitmapWrites;
+                    TabSwitcherView.TabItem old = f.items.get(i);
+                    f.replace(i, new String(old.title), new String(old.displayUrl), old.active, old.preview);
+                }
+                for (int i = 0; i < 20; i++) f.view.refresh(f.items);
+                for (int i = 0; i < 5; i++) {
+                    check(java.util.Arrays.equals(metadataWrites(f, i), metadata[i])
+                            && f.image(i).bitmapWrites == bitmapWrites[i] && paletteColors(f, i) == colors[i],
+                            "unchanged refresh performs no metadata, bitmap or palette writes " + i);
+                }
+                for (int changedField = 0; changedField < 3; changedField++) {
+                    int changed = changedField == 2 ? 4 : changedField;
+                    TabSwitcherView.TabItem old = f.items.get(changed);
+                    f.replace(changed, changedField == 0 ? "Only title changed" : old.title,
+                            changedField == 1 ? "https://different.test/url-only" : old.displayUrl,
+                            changedField == 2 ? !old.active : old.active, old.preview);
+                    f.view.refresh(f.items);
+                    if (changedField == 0) check(f.text(0, "title").getText().toString().equals("Only title changed"),
+                            "title-only update changes actual title");
+                    if (changedField == 1) check(f.text(1, "hostLabel").getText().toString().equals("different.test"),
+                            "url-only update changes actual host");
+                    if (changedField == 2) check(f.text(4, "badge").getVisibility() == View.GONE,
+                            "active-only update changes actual selected badge");
+                    for (int i = 0; i < 5; i++) {
+                        int[] actual = metadataWrites(f, i);
+                        for (int j = 0; j < actual.length; j++) {
+                            boolean titleWrite = changedField == 0 && i == changed && (j == 0 || j >= 3);
+                            boolean urlWrite = changedField == 1 && i == changed && (j == 1 || j == 2);
+                            check(actual[j] == metadata[i][j] + (titleWrite || urlWrite ? 1 : 0),
+                                    "field-specific metadata/a11y writes " + changedField + "/" + i + "/" + j);
+                        }
+                        check(f.image(i).bitmapWrites == bitmapWrites[i], "metadata-only update leaves preview untouched " + i);
+                        check((paletteColors(f, i) != colors[i]) == (changedField == 2 && i == changed),
+                                "only selection changes repaint a data-bound card " + changedField + "/" + i);
+                        metadata[i] = actual; colors[i] = paletteColors(f, i);
+                    }
+                }
+                Bitmap replacement = new Bitmap();
+                f.replace(4, "Tab 4", "https://example.test/4", false, replacement);
+                for (int i = 0; i < 20; i++) f.view.show(f.items);
+                check(f.view.animationStarts == animations, "repeated show never restarts opening animation");
+                check(f.grid.getChildAt(0) == row && f.card(4) == target && f.image(4) == image
+                        && f.grid.removals == removals && f.scroll.getScrollY() == 63
+                        && f.scroll.scrollCalls == scrollCalls, "repeated show retains card identities and scroll");
+                check(image.bitmap == replacement && image.bitmapWrites == bitmapWrites[4] + 1,
+                        "repeated show still writes one changed preview once");
+                for (int i = 0; i < 5; i++) {
+                    check(java.util.Arrays.equals(metadataWrites(f, i), metadata[i]) && paletteColors(f, i) == colors[i],
+                            "preview-only update leaves all metadata/a11y and palette untouched " + i);
+                }
+                replacement.recycle(); f.view.refresh(f.items);
+                check(image.bitmap == null && image.getVisibility() == View.GONE
+                        && image.bitmapWrites == bitmapWrites[4] + 2,
+                        "same-item recycled preview clears the stale bound image");
+                f.view.refresh(f.items);
+                check(image.bitmapWrites == bitmapWrites[4] + 2
+                        && java.util.Arrays.equals(metadataWrites(f, 4), metadata[4]) && paletteColors(f, 4) == colors[4],
+                        "sanitized null preview performs no further writes or metadata work");
+                NativeBrowserActivity.C_SURFACE = 0xff323232; f.view.applyPalette();
+                check(((GradientDrawable) target.getBackground()).color == NativeBrowserActivity.C_SURFACE
+                        && paletteColors(f, 4) != colors[4], "explicit palette repaint remains independent of bind skipping");
+                f.view.dismiss(); f.view.show(f.items); f.measure(400); f.finishLayout(400, 200);
+                check(f.view.animationStarts == animations + 1 && f.grid.getChildCount() == 3
+                        && f.grid.getChildAt(0) == row && f.card(4) == target && f.grid.removals == removals,
+                        "dismiss then reopen retains card/grid identity without removeAllViews");
+            }
+            private static void repeatedWarmDismissAndOpen() throws Exception {
+                Fixture f = new Fixture(); f.open();
+                List<View> oldCards = new ArrayList<>(), rows = new ArrayList<>();
+                List<Object> bindings = new ArrayList<>();
+                Bitmap[] reusable = new Bitmap[5];
+                for (int i = 0; i < 5; i++) { oldCards.add(f.card(i)); bindings.add(f.binding(i)); reusable[i] = f.image(i).bitmap; }
+                for (int i = 0; i < f.grid.getChildCount(); i++) rows.add(f.grid.getChildAt(i));
+                int removals = f.grid.removals, paletteSize = ((List<?>) field(field(f.view, "cardPalette"), "bindings")).size();
+                int fontSize = ((List<?>) field(field(f.view, "cardFonts"), "bindings")).size();
+                for (int cycle = 0; cycle < 16; cycle++) {
+                    int[][] metadata = new int[5][];
+                    List<Bitmap> published = new ArrayList<>();
+                    for (int i = 0; i < 5; i++) {
+                        metadata[i] = metadataWrites(f, i);
+                        if (f.image(i).bitmap != null) published.add(f.image(i).bitmap);
+                    }
+                    f.view.retainPaletteAnchor();
+                    ViewTreeObserver.OnPreDrawListener stale = f.view.getViewTreeObserver().listeners.get(0);
+                    f.view.dismiss();
+                    check(!f.view.isShowing() && field(f.view, "activeCard") == null
+                            && ((List<?>) field(f.view, "shownItems")).isEmpty(), "warm dismiss drops pending input snapshot and active reveal");
+                    check(f.grid.removals == removals && f.grid.getChildCount() == rows.size(),
+                            "warm dismiss never removes retained grid rows " + cycle);
+                    for (int i = 0; i < 5; i++) {
+                        TabSwitcherView.TabItem hidden = (TabSwitcherView.TabItem) field(f.binding(i), "item");
+                        check(f.binding(i) == bindings.get(i) && f.card(i) == oldCards.get(i)
+                                && hidden.shell == null && hidden.preview == null
+                                && ((java.lang.ref.WeakReference<?>) field(f.binding(i), "shellIdentity")).get() == f.items.get(i).shell
+                                && field(f.binding(i), "boundPreview") == null && f.image(i).bitmap == null,
+                                "dismiss clears every retained preview reference " + cycle + "/" + i);
+                        check(f.image(i).getVisibility() == View.GONE
+                                && ((View) field(f.binding(i), "placeholder")).getVisibility() == View.VISIBLE,
+                                "hidden preview state is ready for null/recycled reuse " + i);
+                    }
+                    for (Bitmap bitmap : published) check(!bitmap.isRecycled(), "dismiss never recycles a published preview");
+                    f.card(0).performClick(); f.text(0, "close").performClick();
+                    headerAction(f, 0).performClick(); headerAction(f, 3).performClick();
+                    check(f.recorder.selects == 0 && f.recorder.closes == 0 && f.recorder.news == 0 && f.recorder.dismisses == 0,
+                            "GONE cards/header cannot dispatch stale select/close/new/dismiss actions");
+                    int selected = cycle % 5;
+                    for (int i = 0; i < 5; i++) {
+                        TabSwitcherView.TabItem old = f.items.get(i);
+                        int kind = (cycle + i) % 4;
+                        Bitmap preview = kind == 2 ? null : kind == 3 ? reusable[i] : new Bitmap();
+                        if (kind == 1) preview.recycle();
+                        f.replace(i, old.title, old.displayUrl, i == selected, preview);
+                    }
+                    f.view.refresh(f.items);
+                    check(((List<?>) field(f.view, "shownItems")).isEmpty() && f.grid.removals == removals,
+                            "hidden refresh cannot reacquire a strong input snapshot or rebuild rows");
+                    for (int i = 0; i < 5; i++) {
+                        TabSwitcherView.TabItem hidden = (TabSwitcherView.TabItem) field(f.binding(i), "item");
+                        check(hidden.shell == null && hidden.preview == null && f.image(i).bitmap == null,
+                                "hidden refresh cannot reacquire Shells or previews " + i);
+                    }
+                    f.view.show(f.items); int calls = f.scroll.scrollCalls;
+                    stale.onPreDraw();
+                    check(f.scroll.scrollCalls == calls && (Boolean) field(f.view, "revealOnLayout")
+                            && !(Boolean) field(f.view, "restoreOnLayout"), "obsolete dismissed pre-draw cannot steal a new active reveal");
+                    f.measure(400); f.finishLayout(400, 200);
+                    check(f.scroll.getScrollY() == ((View) f.card(selected).getParent()).getTop() - 8,
+                            "every new open reveals the newly selected active card " + selected);
+                    for (int i = 0; i < 5; i++) {
+                        Bitmap expected = f.items.get(i).preview;
+                        if (expected != null && expected.isRecycled()) expected = null;
+                        check(f.card(i) == oldCards.get(i) && f.image(i).bitmap == expected
+                                && ((TabSwitcherView.TabItem) field(f.binding(i), "item")).shell == f.items.get(i).shell
+                                && java.util.Arrays.equals(metadataWrites(f, i), metadata[i]),
+                                "warm reopen preserves cards and binds only current valid previews " + cycle + "/" + i);
+                    }
+                    for (int i = 0; i < rows.size(); i++) check(f.grid.getChildAt(i) == rows.get(i), "warm reopen preserves row identity " + i);
+                    check(f.grid.removals == removals && ((List<?>) field(f.view, "cards")).size() == 5
+                            && ((List<?>) field(field(f.view, "cardPalette"), "bindings")).size() == paletteSize
+                            && ((List<?>) field(field(f.view, "cardFonts"), "bindings")).size() == fontSize,
+                            "repeated warm reopen retains one bounded set of card/palette/font bindings");
+                    f.scroll.scrollTo(0, 63);
+                }
+                TabSwitcherView.TabItem old = f.items.get(4);
+                f.replace(4, old.title, old.displayUrl, old.active, new Bitmap()); f.view.refresh(f.items); f.finishLayout(400, 200);
+                check(f.scroll.getScrollY() == 63 && f.grid.removals == removals, "warm live preview refresh preserves browsing viewport");
+                headerAction(f, 3).performClick(); headerAction(f, 0).performClick();
+                check(f.recorder.news == 1 && f.recorder.dismisses == 1, "visible retained header new/dismiss actions stay usable");
+            }
+            private static void retainedMotionSettlesBeforeReveal() throws Exception {
+                for (int motion = 0; motion < 3; motion++) for (int active : new int[]{0, 4}) {
+                    Fixture f = new Fixture(); f.open(); f.scroll.maxScroll = 700;
+                    for (int i = 0; i < f.items.size(); i++) {
+                        TabSwitcherView.TabItem item = f.items.get(i);
+                        f.replace(i, item.title, item.displayUrl, i == active, item.preview);
+                    }
+                    f.view.refresh(f.items); f.finishLayout(400, 200);
+                    f.scroll.scrollTo(0, active == 0 ? 170 : 530);
+                    int original = f.scroll.getScrollY();
+                    View card = f.card(active), row = (View) card.getParent();
+                    int removals = f.grid.removals, visibleStops = f.scroll.visibleZeroFlings;
+                    if (motion < 2) f.scroll.fling(motion == 0 ? 900 : -900);
+                    else f.scroll.smoothScrollTo(0, 690);
+                    check(f.scroll.hasPendingScroll(), "motion fixture has a pending absolute offset");
+                    f.view.retainPaletteAnchor();
+                    ViewTreeObserver.OnPreDrawListener obsolete = f.view.getViewTreeObserver().listeners.get(0);
+                    f.view.dismiss();
+                    check(!f.scroll.hasPendingScroll() && f.scroll.getScrollY() == original,
+                            "warm dismiss settles pending motion at its current in-range offset");
+                    check(f.scroll.visibleZeroFlings == visibleStops, "dismiss settlement runs only while overview is GONE");
+                    check(!(Boolean) field(f.view, "internalScroll"), "settlement restores internal-scroll ownership");
+                    f.scroll.computeScroll();
+                    check(f.scroll.getScrollY() == original, "hidden compute cannot continue a retired trajectory");
+                    f.view.show(f.items); f.measure(400); f.finishLayout(400, 200);
+                    int activeTop = Math.max(0, Math.min(row.getTop() - 8, f.scroll.maxScroll));
+                    f.scroll.computeScroll(); f.scroll.computeScroll(); obsolete.onPreDraw();
+                    check(f.scroll.getScrollY() == activeTop && !f.scroll.hasPendingScroll(),
+                            "warm active reveal survives later modeled draws and obsolete anchor callbacks");
+                    check(f.scroll.visibleZeroFlings <= visibleStops + 1, "only the first active reveal adds a visible settlement");
+                    check(f.card(active) == card && card.getParent() == row && f.grid.removals == removals,
+                            "motion cancellation retains warm card and row identity");
+                    int stops = f.scroll.zeroFlings;
+                    f.scroll.fling(600); f.view.show(f.items); f.view.refresh(f.items); f.view.applyPalette();
+                    check(f.scroll.hasPendingScroll() && f.scroll.zeroFlings == stops,
+                            "visible refresh/show/palette never replace normal native navigation");
+                    f.scroll.computeScroll();
+                    check(f.scroll.getScrollY() > activeTop && f.scroll.zeroFlings == stops,
+                            "ordinary fling still moves after a warm reopen");
+                    f.scroll.smoothScrollTo(0, 11); f.scroll.computeScroll();
+                    check(f.scroll.getScrollY() == 11 && f.scroll.zeroFlings == stops,
+                            "ordinary smooth navigation remains native after a warm reopen");
+                }
+            }
+            private static void hiddenMotionAndEdgesSettle() throws Exception {
+                for (int edge : new int[]{-35, 735, 0, 700}) {
+                    Fixture f = new Fixture(); f.open(); f.scroll.maxScroll = 700;
+                    f.scroll.modelNativeOffset(edge); f.scroll.fling(edge < 0 ? -900 : 900);
+                    f.view.dismiss();
+                    int clamped = Math.max(0, Math.min(edge, 700));
+                    check(f.scroll.getScrollY() == clamped && !f.scroll.hasPendingScroll(),
+                            "lifecycle clamp prevents unfinished zero-speed edge work");
+                    f.scroll.computeScroll();
+                    check(f.scroll.getScrollY() == clamped, "retired overfling cannot move the hidden viewport");
+                    f.view.dismiss(); f.view.show(f.items); f.measure(400); f.finishLayout(400, 200);
+                    int target = f.scroll.getScrollY(); f.scroll.computeScroll();
+                    check(f.scroll.getScrollY() == target && !f.scroll.hasPendingScroll(), "edge settlement and repeated dismiss are idempotent");
+                }
+                for (int motion = 0; motion < 2; motion++) {
+                    Fixture f = new Fixture(); f.open(); f.view.dismiss();
+                    // Deliberately seed public scroll work while hidden to test show independently of dismiss.
+                    if (motion == 0) f.scroll.fling(900); else f.scroll.smoothScrollTo(0, 1111);
+                    check(f.scroll.hasPendingScroll(), "hidden motion fixture genuinely has pending work");
+                    int visibleStops = f.scroll.visibleZeroFlings;
+                    f.view.show(f.items);
+                    check(!f.scroll.hasPendingScroll(), "hidden show settles before visibility and first layout");
+                    check(f.scroll.visibleZeroFlings == visibleStops, "hidden show settlement precedes visibility");
+                    f.measure(400); f.finishLayout(400, 200);
+                    int activeTop = ((View) f.card(4).getParent()).getTop() - 8;
+                    f.scroll.computeScroll();
+                    check(f.scroll.getScrollY() == activeTop && !f.scroll.hasPendingScroll(),
+                            "hidden pending motion cannot overwrite the next active reveal");
+                    check(f.scroll.visibleZeroFlings <= visibleStops + 1, "only the first active reveal adds a visible settlement");
+                    f.scroll.fling(900); f.view.release();
+                    check(!f.scroll.hasPendingScroll() && ((List<?>) field(f.view, "cards")).isEmpty(),
+                            "permanent release settles motion and releases retained bindings");
+                    f.view.release(); f.scroll.computeScroll();
+                    check(!f.scroll.hasPendingScroll(), "repeated permanent teardown never leaves native work");
+                }
+                Fixture empty = new Fixture(); empty.open(); empty.view.dismiss(); empty.items.clear();
+                empty.scroll.maxScroll = 0; empty.scroll.modelNativeOffset(35); empty.scroll.smoothScrollTo(0, 700);
+                empty.view.show(empty.items); empty.measure(400); empty.finishLayout(400, 200); empty.scroll.computeScroll();
+                check(empty.scroll.getScrollY() == 0 && !empty.scroll.hasPendingScroll(),
+                        "zero-range empty overview settles without an active card");
+            }
+            private static void firstRevealSettlesLateLayoutWork() throws Exception {
+                Fixture f = new Fixture(); f.open(); f.view.dismiss(); f.view.show(f.items);
+                f.view.modelSuperLayoutWork = () -> f.scroll.smoothScrollTo(0, 1111);
+                f.measure(400); f.finishLayout(400, 200);
+                int activeTop = ((View) f.card(4).getParent()).getTop() - 8;
+                f.scroll.computeScroll();
+                check(f.view.modelSuperLayoutWork == null && f.scroll.getScrollY() == activeTop
+                        && !f.scroll.hasPendingScroll(), "first reveal settles native work created during super layout");
+                int stops = f.scroll.zeroFlings;
+                f.finishLayout(400, 200); f.view.refresh(f.items); f.finishLayout(400, 200);
+                f.view.applyPalette(); f.view.getViewTreeObserver().dispatchOnPreDraw();
+                check(f.scroll.zeroFlings == stops, "later layouts live refresh and palette never repeat lifecycle settlement");
+            }
+            private static void settlementGuardSurvivesFailure() throws Exception {
+                for (int operation = 0; operation < 2; operation++) {
+                    Fixture f = new Fixture(); f.open();
+                    f.scroll.failZeroFling = operation == 0; f.scroll.failCompute = operation == 1;
+                    try {
+                        f.view.dismiss(); throw new AssertionError("modeled native failure was not exercised");
+                    } catch (IllegalStateException expected) {
+                        check(expected.getMessage().startsWith("modeled "), "only the intentional fixture failure is accepted");
+                    }
+                    check(!(Boolean) field(f.view, "internalScroll"), "settlement guard restores ownership after native exception");
+                    f.scroll.failZeroFling = false; f.scroll.failCompute = false; f.view.release();
+                    check(!(Boolean) field(f.view, "internalScroll") && !f.scroll.hasPendingScroll(),
+                            "subsequent teardown remains usable after a modeled native exception");
+                }
+            }
+            private static void hiddenChangesRevalidateStructure() throws Exception {
+                for (int change = 0; change < 7; change++) {
+                    Fixture f = new Fixture(); f.open();
+                    View oldCard = f.card(0); Object oldBinding = f.binding(0);
+                    View.OnClickListener staleSelect = clickListener(oldCard), staleClose = clickListener(f.text(0, "close"));
+                    int removals = f.grid.removals, width = 400, rowHeight = 200;
+                    f.view.dismiss();
+                    if (change == 0) {
+                        NativeBrowserActivity.C_SURFACE = 0xff454545; f.view.applyPalette();
+                        check(((GradientDrawable) oldCard.getBackground()).color == NativeBrowserActivity.C_SURFACE,
+                                "hidden theme updates retained card surfaces in place");
+                        f.replace(0, "Hidden updated", "https://hidden.test/path", false, new Bitmap());
+                    } else if (change == 1) {
+                        f.context.getResources().getConfiguration().fontScale = 1.5f; f.view.applyFontScale(); rowHeight = 300;
+                        check(f.text(0, "title").textSizePx == 19.5f
+                                && ((TextView) field(f.view, "countLabel")).textSizePx == 18.75f,
+                                "hidden font event updates retained card and static SP bindings");
+                    } else if (change == 2) {
+                        f.context.getResources().getDisplayMetrics().density = 2f; width = 800;
+                        f.view.applyFontScale();
+                    } else if (change == 3) width = 250;
+                    else if (change == 4) {
+                        TabSwitcherView.TabItem old = f.items.get(1);
+                        f.items.set(1, new TabSwitcherView.TabItem(new Shell(), old.title, old.displayUrl, old.active, new Bitmap()));
+                        Collections.reverse(f.items);
+                    } else if (change == 5) {
+                        f.items.remove(4); TabSwitcherView.TabItem old = f.items.get(3);
+                        f.replace(3, old.title, old.displayUrl, true, old.preview);
+                    } else f.items.clear();
+                    f.measure(width); f.finishLayout(width, rowHeight);
+                    check(f.grid.removals == removals && f.view.getViewTreeObserver().listeners.isEmpty(),
+                            "hidden config/state changes do not rebuild or arm viewport callbacks " + change);
+                    f.view.show(f.items); f.measure(width); f.finishLayout(width, rowHeight);
+                    check(f.grid.removals == removals + (change == 0 ? 0 : 1), "reopen rebuilds exactly for real structural/metric changes " + change);
+                    if (change == 0) {
+                        check(f.card(0) == oldCard && f.text(0, "title").getText().toString().equals("Hidden updated")
+                                && f.text(0, "url").getText().toString().equals("hidden.test")
+                                && oldCard.getContentDescription().toString().endsWith("Hidden updated"),
+                                "hidden content/theme changes bind without replacing card/accessibility identity");
+                    } else {
+                        check(field(oldBinding, "item") == null && field(oldBinding, "boundPreview") == null,
+                                "reflow retires old Shell and preview references " + change);
+                        staleSelect.onClick(oldCard); staleClose.onClick(oldCard);
+                        check(f.recorder.selects == 0 && f.recorder.closes == 0, "retired callbacks ignore closed/reordered Shells after reopen " + change);
+                    }
+                    for (int i = 0; i < f.items.size(); i++) {
+                        TabSwitcherView.TabItem actual = (TabSwitcherView.TabItem) field(f.binding(i), "item");
+                        check(actual.shell == f.items.get(i).shell, "reopened card follows current live Shell order " + change + "/" + i);
+                        if (actual.active) check(f.scroll.getScrollY() == Math.max(0, ((View) f.card(i).getParent()).getTop()
+                                - Math.round(8 * f.context.getResources().getDisplayMetrics().density)),
+                                "structural reopen reveals current selection instead of a stale hidden anchor " + change);
+                    }
+                    if (change == 6) {
+                        check(((List<?>) field(f.view, "cards")).isEmpty() && f.grid.getChildCount() == 1,
+                                "all closed Shells reopen as the existing honest empty state");
+                    } else {
+                        f.card(0).performClick(); f.text(0, "close").performClick();
+                        check(f.recorder.selected == f.items.get(0).shell && f.recorder.closed == f.items.get(0).shell,
+                                "reopened select/close callbacks target current Shell identity " + change);
+                    }
+                }
+            }
+            private static void finalReleaseAndObsoleteCallbacks() throws Exception {
+                Fixture f = new Fixture(); f.open();
+                List<Object> oldBindings = new ArrayList<>();
+                List<Bitmap> published = new ArrayList<>();
+                for (int i = 0; i < 5; i++) { oldBindings.add(f.binding(i)); published.add(f.image(i).bitmap); }
+                View oldCard = f.card(0), oldClose = f.text(0, "close");
+                View.OnClickListener staleSelect = clickListener(oldCard), staleClose = clickListener(oldClose);
+                f.view.retainInsetsAnchor();
+                ViewTreeObserver.OnPreDrawListener staleDraw = f.view.getViewTreeObserver().listeners.get(0);
+                f.view.detach();
+                check(!f.view.isShowing() && f.grid.getChildCount() == 0 && ((List<?>) field(f.view, "cards")).isEmpty()
+                        && ((List<?>) field(f.view, "shownItems")).isEmpty() && field(f.view, "activeCard") == null
+                        && field(f.view, "anchorShell") == null && f.view.getViewTreeObserver().listeners.isEmpty(),
+                        "final detach releases every retained card/Shell and viewport callback");
+                check(((List<?>) field(field(f.view, "cardPalette"), "bindings")).isEmpty()
+                        && ((List<?>) field(field(f.view, "cardFonts"), "bindings")).isEmpty(),
+                        "final detach releases palette/font closures retaining old views");
+                for (Object binding : oldBindings) {
+                    check(field(binding, "item") == null && field(binding, "boundPreview") == null
+                            && ((java.lang.ref.WeakReference<?>) field(binding, "shellIdentity")).get() == null
+                            && ((ImageView) field(binding, "image")).bitmap == null,
+                            "even externally held retired card bindings release Shell/bitmap references");
+                }
+                int removals = f.grid.removals;
+                f.view.release(); f.view.detach();
+                check(f.grid.removals == removals, "permanent release and detach are idempotent");
+                for (Bitmap bitmap : published) check(!bitmap.isRecycled(), "final cleanup never recycles published display-list bitmaps");
+                f.view.show(f.items); f.measure(400); f.finishLayout(400, 200);
+                check(f.card(0) != oldCard && f.grid.getChildCount() == 3, "a later attach/open starts with fresh bounded cards");
+                f.scroll.scrollTo(0, 63); f.view.retainPaletteAnchor();
+                Object currentGuard = field(f.view, "paletteAnchorRestore"); int calls = f.scroll.scrollCalls;
+                staleDraw.onPreDraw(); staleSelect.onClick(oldCard); staleClose.onClick(oldClose);
+                oldCard.performClick(); oldClose.performClick();
+                check(f.scroll.scrollCalls == calls && field(f.view, "paletteAnchorRestore") == currentGuard
+                        && f.recorder.selects == 0 && f.recorder.closes == 0,
+                        "old detached callbacks cannot act on a new open or cancel its current viewport guard");
+                f.view.release();
+            }
             public static int run() throws Exception {
+                unchangedRefreshAndShowCoalesce(); repeatedWarmDismissAndOpen();
+                hiddenChangesRevalidateStructure(); finalReleaseAndObsoleteCallbacks();
                 paletteAndPreviewKeepIdentity(); paletteSurvivesTransientRangeWithoutRebuild();
                 paletteAndStructuralReflowShareOriginalShell(); actualWindowPaletteRetainsDrawableAndCapturesEarly();
                 paletteCancellationAndObsoleteSnapshots();
@@ -942,6 +1461,8 @@ public final class NativeTabSwitcherHostTest {
                 insetThenPermanentMetricsClamp();
                 closeTargetFitsItsPreviewSlot(); contentAndCallbacksStayCurrent();
                 coalescedStructureRestoresAfterLayout(); measuredResizeAndFontReflow(); firstRevealDismissAndDetach();
+                retainedMotionSettlesBeforeReveal(); hiddenMotionAndEdgesSettle();
+                firstRevealSettlesLateLayoutWork(); settlementGuardSurvivesFailure();
                 return checks;
             }
         }

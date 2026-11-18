@@ -207,11 +207,17 @@ final class HistoryPanel extends FrameLayout {
     /** Makes the panel visible and rebuilds its rows from the store. */
     void show() {
         if (quiescing) return;
+        if (getVisibility() != View.VISIBLE && store.hasLoadError()) store.flush();
         setVisibility(View.VISIBLE);
         searchField.setVisibility(View.VISIBLE);
         // Opening history never implicitly opens the keyboard; its filter remains opt-in.
         requestFocus();
         rebuild();
+    }
+
+    /** Refresh loaded data without taking focus or resetting the user's filter. */
+    void refreshIfVisible() {
+        if (!quiescing && getVisibility() == View.VISIBLE) rebuild();
     }
 
     void dismiss() {
@@ -249,9 +255,12 @@ final class HistoryPanel extends FrameLayout {
             }
         }
         boolean searching = !searchQuery.isEmpty();
-        emptyTitle.setText(searching ? "没有匹配的站点\n\n试试其他关键词" : "暂无历史记录\n\n浏览过的网站会记录在这里");
-        emptyTitle.setVisibility(visible.isEmpty() ? View.VISIBLE : View.GONE);
-        if (visible.isEmpty()) list.addView(emptyTitle, new LinearLayout.LayoutParams(-1, -2));
+        emptyTitle.setText(!store.isLoaded() ? "正在加载历史记录…"
+                : store.hasLoadError() ? "历史记录暂时无法读取\n\n仍可正常浏览；重新打开历史记录时会重试读取。"
+                : searching ? "没有匹配的站点\n\n试试其他关键词" : "暂无历史记录\n\n浏览过的网站会记录在这里");
+        boolean showStatus = visible.isEmpty() || !store.isLoaded() || store.hasLoadError();
+        emptyTitle.setVisibility(showStatus ? View.VISIBLE : View.GONE);
+        if (showStatus) list.addView(emptyTitle, new LinearLayout.LayoutParams(-1, -2));
         String previousGroup = null;
         for (final BrowserHistory.SiteVisit visit : visible) {
             String group = dayGroup(visit.lastVisitMillis);

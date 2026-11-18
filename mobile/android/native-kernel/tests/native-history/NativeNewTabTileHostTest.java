@@ -236,8 +236,8 @@ public final class NativeNewTabTileHostTest {
                 replaceOnce(tested, "all.setMinimumHeight(dp(48));", "all.setMinimumHeight(dp(40));"),
                 history, realBindings, false, false), "HISTORY_TARGET");
         rejected("history-hidden-when-empty", run(compiler, output.resolve("history-empty"),
-                replaceOnce(tested, "emptyState.setVisibility(empty ? View.VISIBLE : View.GONE);",
-                        "emptyState.setVisibility(empty ? View.VISIBLE : View.GONE);\n        ((LinearLayout) emptyState.getParent()).getChildAt(1).setVisibility(empty ? View.GONE : View.VISIBLE);"),
+                replaceOnce(tested, "emptyState.setVisibility(showStatus ? View.VISIBLE : View.GONE);",
+                        "emptyState.setVisibility(showStatus ? View.VISIBLE : View.GONE);\n        ((LinearLayout) emptyState.getParent()).getChildAt(1).setVisibility(empty ? View.GONE : View.VISIBLE);"),
                 history, realBindings, false, false), "HISTORY_REACHABLE");
         rejected("ntp-steals-toolbar-focus", run(compiler, output.resolve("focus-owner"),
                 replaceOnce(tested, "setClickable(true);", "setClickable(true); requestFocus();"),
@@ -257,8 +257,11 @@ public final class NativeNewTabTileHostTest {
         rejected("quiescent-refresh-requeries", run(compiler, output.resolve("quiescent-refresh"),
                 replaceOnce(tested, "void refresh() {\n        if (quiescing) return;", "void refresh() {"),
                 history, realBindings, false, false), "QUIESCENT_QUERY");
+        rejected("partial-history-conceals-load-state", run(compiler, output.resolve("partial-history-state"),
+                replaceOnce(tested, "boolean showStatus = empty || pending || failed;", "boolean showStatus = empty;"),
+                history, realBindings, false, false), "ASYNC_PARTIAL");
         if (!Files.readString(source.resolve("NewTabPage.java")).equals(original)) throw new AssertionError("Production source changed during run: unstable receipt");
-        System.out.println("PASS " + positive.checks + " geometry/state assertions; 108 cases / 540 constrained layout states; 24 empty-profile cases / 120 additional states; 16 mutations rejected");
+        System.out.println("PASS " + positive.checks + " geometry/state assertions; 108 cases / 540 constrained layout states; 24 empty-profile cases / 120 additional states; 17 mutations rejected");
         System.out.println("EVIDENCE_LIMIT synthetic JDK host only; labels/colors/listeners/scroll are fixture state; actual toolbar source parsed, buildChrome not executed; no Android shaping/conversion/rendering/device/visual/TalkBack/real-touch/IME claim");
     }
 
@@ -369,6 +372,11 @@ public final class NativeNewTabTileHostTest {
                 List<BrowserHistory.SiteVisit> visits;
                 private BrowserHistory model;
                 int rankedCalls, removeCalls;
+                boolean loaded = true, loadError;
+                int flushCalls;
+                public void flush() { flushCalls++; }
+                public boolean isLoaded() { return loaded; }
+                public boolean hasLoadError() { return loaded && loadError; }
                 String removedOrigin;
                 BrowserHistoryStore(List<BrowserHistory.SiteVisit> visits) { this.visits = List.copyOf(visits); }
                 BrowserHistoryStore(BrowserHistory model) { this.model = model; }
@@ -1211,6 +1219,59 @@ public final class NativeNewTabTileHostTest {
                 require(last.size() == 0 && tileList(lastPage).isEmpty() && ((View) field(lastPage, "emptyState")).getVisibility() == View.VISIBLE, "REMOVAL_EMPTY last-site confirm exposes real empty state");
                 layout(lastPage, lastPage.getContext(), 288, 720); headerGeometry(lastPage, lastPage.getContext());
             }
+            private static void asynchronousHistoryStates() throws Exception {
+                for (int width : new int[]{288, 320, 412}) for (float scale : new float[]{1, 2}) {
+                    scenario = "async-history width=" + width + " scale=" + scale;
+                    setPalette(false); Context context = new Context();
+                    context.getResources().getConfiguration().fontScale = scale;
+                    BrowserHistoryStore store = new BrowserHistoryStore(List.of()); store.loaded = false;
+                    Actions actions = new Actions();
+                    NewTabPage page = new NewTabPage(context, store, "history", actions); page.onShown();
+                    Header original = header(page);
+                    TextView title = (TextView) field(page, "emptyTitle"), body = (TextView) field(page, "emptyBody");
+                    layout(page, context, width, 720);
+                    require(title.getText().toString().equals("正在加载历史记录…") && tileList(page).isEmpty(),
+                            "ASYNC_HISTORY pending is not falsely empty");
+                    completeText(title, "ASYNC_LOADING_TEXT"); completeText(body, "ASYNC_LOADING_BODY");
+                    BrowserHistory.SiteVisit pending = new BrowserHistory.SiteVisit("https://pending.example", "pending", 946771200000L, 1);
+                    store.visits = List.of(pending); page.refresh(); layout(page, context, width, 720);
+                    View status = (View) field(page, "emptyState"), grid = (View) field(page, "tiles");
+                    require(title.getText().toString().equals("正在加载历史记录…") && status.getVisibility() == View.VISIBLE
+                                    && tileList(page).size() == 1,
+                            "ASYNC_PARTIAL pending tiles cannot conceal unread disk history");
+                    require(column(page).getChildAt(2) == status && column(page).getChildAt(3) == grid
+                                    && status.getBottom() <= grid.getTop(),
+                            "ASYNC_PARTIAL status precedes known tiles rather than hiding below them");
+                    completeText(title, "ASYNC_PARTIAL_LOADING_TEXT"); completeText(body, "ASYNC_PARTIAL_LOADING_BODY");
+                    store.loaded = true; store.loadError = true; page.refresh(); layout(page, context, width, 720);
+                    require(status.getVisibility() == View.VISIBLE && title.getText().toString().equals("历史记录暂时无法读取")
+                                    && tileList(page).size() == 1 && status.getBottom() <= grid.getTop(),
+                            "ASYNC_PARTIAL error remains visible with pending rows");
+                    completeText(title, "ASYNC_PARTIAL_ERROR_TEXT"); completeText(body, "ASYNC_PARTIAL_ERROR_BODY");
+                    tileList(page).get(0).performClick();
+                    require(actions.navigations.equals(List.of(pending.origin)), "ASYNC_PARTIAL known tile remains actionable");
+                    store.loadError = false; page.refresh(); layout(page, context, width, 720);
+                    require(status.getVisibility() == View.GONE && tileList(page).size() == 1,
+                            "ASYNC_PARTIAL recovery removes error without concealing known rows");
+                    store.visits = List.of(); store.loadError = true; page.refresh(); layout(page, context, width, 720);
+                    require(title.getText().toString().equals("历史记录暂时无法读取")
+                                    && body.getText().toString().contains("仍可正常浏览"),
+                            "ASYNC_HISTORY read failure is not normal empty");
+                    completeText(title, "ASYNC_ERROR_TEXT"); completeText(body, "ASYNC_ERROR_BODY");
+                    page.setVisibility(View.GONE); page.onShown();
+                    require(store.flushCalls == 1, "ASYNC_HISTORY reopening explicitly retries unread history");
+                    page.onShown();
+                    require(store.flushCalls == 1, "ASYNC_HISTORY repeated visible onShown does not retry/spin");
+                    store.loadError = false; page.refresh(); layout(page, context, width, 720);
+                    require(title.getText().toString().equals("还没有浏览记录"), "ASYNC_HISTORY loaded empty becomes real empty");
+                    store.visits = List.of(new BrowserHistory.SiteVisit("https://loaded.example", "loaded", 946771200000L, 2));
+                    page.refresh(); layout(page, context, width, 720);
+                    require(tileList(page).size() == 1 && ((View) field(page, "emptyState")).getVisibility() == View.GONE,
+                            "ASYNC_HISTORY loaded results become actual tiles");
+                    require(header(page).wrapper() == original.wrapper() && header(page).history() == original.history(),
+                            "ASYNC_HISTORY completion retains header and history destination identity");
+                }
+            }
             private static void nonzeroScrollState() throws Exception {
                 scenario = "nonzero retained synthetic scroll, not Android lifecycle"; setPalette(false); Context context = new Context(); List<BrowserHistory.SiteVisit> visits = new ArrayList<>();
                 for (int i = 0; i < 9; i++) visits.add(new BrowserHistory.SiteVisit("https://scroll-" + i + ".example", "scroll", 946771200000L, 9999));
@@ -1234,7 +1295,7 @@ public final class NativeNewTabTileHostTest {
                             runEmptyCase(width, density, profile); emptyCases++;
                         }
                     require(emptyCases == 24 && emptyStates == 120, "separate24case/120state empty-profile matrix");
-                    retiredBindings(); rankedProfilesAndConfirmation(); nonzeroScrollState();
+                    retiredBindings(); rankedProfilesAndConfirmation(); nonzeroScrollState(); asynchronousHistoryStates();
                     return checks;
                 }
             }

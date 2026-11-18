@@ -49,6 +49,8 @@ final class NewTabPage extends FrameLayout {
     private final Listener listener;
     private final LinearLayout tiles;
     private final View emptyState;
+    private TextView emptyTitle;
+    private TextView emptyBody;
     private Dialog removalDialog;
     private boolean quiescing;
 
@@ -80,9 +82,10 @@ final class NewTabPage extends FrameLayout {
         column.addView(buildSectionRow(context));
         tiles = new LinearLayout(context);
         tiles.setOrientation(LinearLayout.VERTICAL);
-        column.addView(tiles, new LinearLayout.LayoutParams(-1, -2));
         emptyState = buildEmptyState(context);
+        // Unknown disk history must remain visible even when pending visits supply tiles.
         column.addView(emptyState);
+        column.addView(tiles, new LinearLayout.LayoutParams(-1, -2));
 
         TextView footer = new TextView(context);
         footer.setText("长按站点可移除 · 历史记录仅保存在本设备的当前环境，不会上传");
@@ -188,14 +191,16 @@ final class NewTabPage extends FrameLayout {
         empty.setPadding(0, dp(20), 0, dp(24));
 
         TextView title = new TextView(context);
-        title.setText("还没有浏览记录");
+        emptyTitle = title;
+        title.setText("正在加载历史记录…");
         staticFonts.bind(title, 16);
         title.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
         staticPaletteBindings.add(() -> title.setTextColor(INK));
         empty.addView(title, new LinearLayout.LayoutParams(-1, -2));
 
         TextView body = new TextView(context);
-        body.setText("使用顶部地址栏搜索或输入网址，访问过的站点会显示在这里。");
+        emptyBody = body;
+        body.setText("你可以继续使用顶部地址栏输入网址或搜索。");
         staticFonts.bind(body, 13.5f);
         staticPaletteBindings.add(() -> body.setTextColor(MUTED));
         body.setLineSpacing(dp(3), 1f);
@@ -211,6 +216,7 @@ final class NewTabPage extends FrameLayout {
         if (quiescing) return;
         if (getVisibility() != View.VISIBLE) {
             setVisibility(View.VISIBLE);
+            if (store.hasLoadError()) store.flush();
             refresh();
         }
     }
@@ -220,7 +226,17 @@ final class NewTabPage extends FrameLayout {
         if (quiescing) return;
         List<BrowserHistory.SiteVisit> ranked = store.ranked();
         boolean empty = ranked.isEmpty();
-        emptyState.setVisibility(empty ? View.VISIBLE : View.GONE);
+        boolean pending = !store.isLoaded();
+        boolean failed = store.hasLoadError();
+        boolean showStatus = empty || pending || failed;
+        if (showStatus) {
+            emptyTitle.setText(pending ? "正在加载历史记录…"
+                    : failed ? "历史记录暂时无法读取" : "还没有浏览记录");
+            emptyBody.setText(pending ? "你可以继续使用顶部地址栏输入网址或搜索。"
+                    : failed ? "仍可正常浏览；重新打开历史记录时会重试读取。"
+                    : "使用顶部地址栏搜索或输入网址，访问过的站点会显示在这里。");
+        }
+        emptyState.setVisibility(showStatus ? View.VISIBLE : View.GONE);
         tilePaletteBindings.clear();
         tileFonts.clear();
         tiles.removeAllViews();

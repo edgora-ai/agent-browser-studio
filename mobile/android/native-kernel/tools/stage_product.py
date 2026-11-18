@@ -104,6 +104,7 @@ def collect_inputs(android=ANDROID):
         (module / "chromium/product-java-release.patch", "chromium/product-java-release.patch", "patch"),
         (module / "chromium/product-security-release.patch", "chromium/product-security-release.patch", "patch"),
         (module / "chromium/product-packaging-release.patch", "chromium/product-packaging-release.patch", "patch"),
+        (module / "chromium/product-input-lifecycle.patch", "chromium/product-input-lifecycle.patch", "patch"),
     ])
     if len(selected) > MAX_FILES:
         raise ValueError("Selected source count exceeds the limit")
