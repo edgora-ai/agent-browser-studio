@@ -1,6 +1,7 @@
 import com.sun.source.tree.ClassTree;
 import com.sun.source.tree.CompilationUnitTree;
 import com.sun.source.tree.MethodTree;
+import com.sun.source.tree.NewClassTree;
 import com.sun.source.tree.Tree;
 import com.sun.source.tree.VariableTree;
 import com.sun.source.util.JavacTask;
@@ -27,17 +28,18 @@ public final class NativeBrowserRecoveryHostTest {
     private static final List<String> FIELD_NAMES = List.of(
             "MAX_PREVIEW_RETRIES", "restoreSplashShown", "restoreInterrupted", "restoreEpoch", "restoreShell",
             "restoreContents", "restoreUrl", "restoreGeneration", "restoreTimeout", "chromeShell",
-            "chromeContents", "previewInFlight", "previewRequested", "previewRetries", "previewEpoch",
+            "chromeContents", "previewInFlight", "previewRequested", "previewCapturePosted", "previewRetries", "previewEpoch",
             "previewCapture", "tabPreviews", "previewUrls", "newTabUrls", "historyObservers", "lastBackExitHint");
     private static final List<String> METHOD_NAMES = List.of(
             "showPageRestoring", "beginPageRestoring", "pageInterruption", "reloadPage",
             "ownsPageRestoring", "hidePageRestoring", "retryPageRestoring",
             "reconcilePageRestoring", "completePageRestoring", "requestActivePreview",
             "schedulePreviewCapture", "captureActivePreview", "current", "interactive", "validTab",
-            "visibleUrl", "isBlankPage", "tabTitle", "isPageReady", "hideSplash", "cancelUiWork",
+            "visibleUrl", "isBlankPage", "tabTitle", "isPageReady", "hideSplash", "cancelUiWork", "setLoadFeedbackVisible",
             "onPause", "onStop", "onResume", "syncWebContentsVisibility", "installShellObserverHooks",
             "installPreviewSurfaceHooks", "observeShell", "trackHistory", "contents",
-            "performMenuAction", "ShellHistoryObserver");
+            "performMenuAction", "showTabSwitcher", "dismissTabSwitcher", "dismissFromSwitcherListener",
+            "onBackPressed", "ShellHistoryObserver");
 
     private NativeBrowserRecoveryHostTest() { }
 
@@ -63,7 +65,20 @@ public final class NativeBrowserRecoveryHostTest {
                                 throw new AssertionError("Ambiguous production method: " + name);
                             }
                         }
-                        if (member instanceof VariableTree field) fields.put(field.getName().toString(), field + ";\n");
+                        if (member instanceof VariableTree field) {
+                            fields.put(field.getName().toString(), field + ";\n");
+                            if (field.getName().contentEquals("tabSwitcherListener")
+                                    && field.getInitializer() instanceof NewClassTree listener) {
+                                for (Tree callback : listener.getClassBody().getMembers()) {
+                                    if (callback instanceof MethodTree method
+                                            && method.getName().contentEquals("onDismiss")) {
+                                        // Execute the production callback body, not a handwritten equivalent.
+                                        methods.put("dismissFromSwitcherListener",
+                                                "private void dismissFromSwitcherListener() " + method.getBody());
+                                    }
+                                }
+                            }
+                        }
                         if (member instanceof ClassTree nested && nested.getSimpleName().contentEquals("ShellHistoryObserver")) {
                             methods.put("ShellHistoryObserver", nested.toString());
                         }
@@ -73,6 +88,15 @@ public final class NativeBrowserRecoveryHostTest {
         }
         int checks = execute(compiler, output.resolve("positive"), members(fields, methods));
         int rejected = 0;
+        rejected += rejects(compiler, output, fields, methods, "load-feedback-removes-slot",
+                "setLoadFeedbackVisible", "View.INVISIBLE", "View.GONE",
+                "unchanged load feedback retains its invisible slot without writes");
+        rejected += rejects(compiler, output, fields, methods, "load-feedback-rewrites-unchanged",
+                "setLoadFeedbackVisible", "progressBar.getVisibility() != visibility", "true",
+                "unchanged load feedback retains its invisible slot without writes");
+        rejected += rejects(compiler, output, fields, methods, "cancel-leaves-load-animation-visible",
+                "cancelUiWork", "setLoadFeedbackVisible(false);", "",
+                "UI cancellation stops loading feedback without removing its slot");
         rejected += rejects(compiler, output, fields, methods, "old-inverted-retry-gate",
                 "retryPageRestoring", "restoreRetry.getVisibility() != View.VISIBLE",
                 "restoreRetry.getVisibility() == View.VISIBLE", "retry reloads exactly once");
@@ -81,7 +105,32 @@ public final class NativeBrowserRecoveryHostTest {
         rejected += rejects(compiler, output, fields, methods, "missing-timeout-epoch",
                 "beginPageRestoring", "restoreEpoch != epoch ||", "", "old deadline cannot expire renewed retry");
         rejected += rejects(compiler, output, fields, methods, "missing-preview-reschedule",
-                "captureActivePreview", "schedulePreviewCapture();", "", "NO_DATA schedules next frame without a native event");
+                "captureActivePreview", "schedulePreviewCapture();", "", "successful old copy schedules exactly one dirty follow-up");
+        rejected += rejects(compiler, output, fields, methods, "missing-preview-posted-gate",
+                "schedulePreviewCapture", "|| previewCapturePosted", "", "same-frame burst posts once without remove/repost churn");
+        rejected += rejects(compiler, output, fields, methods, "missing-preview-posted-mark",
+                "schedulePreviewCapture", "previewCapturePosted = true;", "", "same-frame burst posts once without remove/repost churn");
+        rejected += rejects(compiler, output, fields, methods, "missing-preview-entry-clear",
+                "captureActivePreview", "previewCapturePosted = false;", "", "frame entry retires the posted gate");
+        rejected += rejects(compiler, output, fields, methods, "duplicate-dirty-request-resets-budget",
+                "requestActivePreview", "!previewRequested", "true", "merged dirty requests preserve retry budget");
+        rejected += rejects(compiler, output, fields, methods, "swallowed-inflight-dirty-demand",
+                "requestActivePreview", "previewRequested = true;", "if (!previewInFlight) previewRequested = true;",
+                "content demand while copy in flight remains dirty");
+        rejected += rejects(compiler, output, fields, methods, "surface-cancel-keeps-posted-gate",
+                "installPreviewSurfaceHooks", "previewCapturePosted = false;", "", "cancelled preview clears posted gate 0");
+        rejected += rejects(compiler, output, fields, methods, "ui-cancel-keeps-posted-gate",
+                "cancelUiWork", "previewCapturePosted = false;", "", "cancelled preview clears posted gate 3");
+        rejected += rejects(compiler, output, fields, methods, "duplicate-activity-show",
+                "showTabSwitcher", "|| tabSwitcher.isShowing()", "", "duplicate Activity show cannot repeat opening side effects");
+        rejected += rejects(compiler, output, fields, methods, "listener-dismiss-captures-again",
+                "dismissFromSwitcherListener", "syncWebContentsVisibility();",
+                "syncWebContentsVisibility(); requestActivePreview(manager.getActiveShell());",
+                "listener dismiss does not schedule another capture");
+        rejected += rejects(compiler, output, fields, methods, "back-dismiss-captures-again",
+                "onBackPressed", "if (tabSwitcher != null && tabSwitcher.isShowing()) {",
+                "if (tabSwitcher != null && tabSwitcher.isShowing()) { requestActivePreview(manager.getActiveShell());",
+                "back dismiss does not schedule another capture");
         rejected += rejects(compiler, output, fields, methods, "saved-ready-suppresses-death",
                 "beginPageRestoring", "!reloading && interrupted == null && isPageReady(shell)",
                 "!reloading && isPageReady(shell)",
@@ -183,11 +232,18 @@ public final class NativeBrowserRecoveryHostTest {
                     }
                 }
                 static class View {
-                    static final int VISIBLE = 0, GONE = 8;
-                    int visibility = VISIBLE, width = 1080, height = 1920, draws;
-                    boolean attached = true, shown = true;
+                    static final int VISIBLE = 0, INVISIBLE = 4, GONE = 8;
+                    static final int IMPORTANT_FOR_ACCESSIBILITY_AUTO = 0,
+                            IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS = 4;
+                    int visibility = VISIBLE, width = 1080, height = 1920, draws, visibilityWrites;
+                    boolean attached = true, shown = true, focused;
+                    void clearFocus() { focused = false; }
+                    boolean hasFocus() { return focused; }
+                    void requestFocus() { focused = true; }
+                    Object getWindowToken() { return this; }
+                    void setImportantForAccessibility(int value) { }
                     int getVisibility() { return visibility; }
-                    void setVisibility(int value) { visibility = value; }
+                    void setVisibility(int value) { visibilityWrites++; visibility = value; }
                     boolean isAttachedToWindow() { return attached; }
                     boolean isShown() { return shown && visibility == VISIBLE; }
                     int getWidth() { return width; }
@@ -211,9 +267,15 @@ public final class NativeBrowserRecoveryHostTest {
                     }
                     final List<Task> tasks = new ArrayList<>();
                     long now;
-                    void postOnAnimation(Runnable task) { tasks.add(new Task(task, now + 16)); }
+                    int animationPosts, callbackRemovals;
+                    void postOnAnimation(Runnable task) { animationPosts++; tasks.add(new Task(task, now + 16)); }
                     void postOnAnimationDelayed(Runnable task, long delay) { tasks.add(new Task(task, now + delay)); }
-                    void removeCallbacks(Runnable task) { tasks.removeIf(item -> item.runnable == task); }
+                    void removeCallbacks(Runnable task) { callbackRemovals++; tasks.removeIf(item -> item.runnable == task); }
+                    int count(Runnable task) {
+                        int count = 0;
+                        for (Task item : tasks) if (item.runnable == task) count++;
+                        return count;
+                    }
                     long deadline(Runnable task) {
                         for (Task item : tasks) if (item.runnable == task) return item.due;
                         return -1;
@@ -235,7 +297,15 @@ public final class NativeBrowserRecoveryHostTest {
                 }
                 static final class NewTabPage extends View { void dismissDialogs() { } }
                 static final class HistoryPanel extends View { void dismiss() { visibility = GONE; } }
-                static final class TabSwitcher { boolean showing; }
+                static final class TabSwitcherView {
+                    static final class TabItem { }
+                    boolean showing;
+                    int shows;
+                    boolean isShowing() { return showing; }
+                    void show(List<TabItem> items) { showing = true; shows++; }
+                    void dismiss() { showing = false; }
+                    void bringToFront() { }
+                }
                 static final class Popup { int dismisses; void dismiss() { dismisses++; } }
                 static final class Store {
                     int flushes, visits, titles;
@@ -248,6 +318,13 @@ public final class NativeBrowserRecoveryHostTest {
                 }
                 // Monotonic Android clock and Chromium are host API fakes; the observer below is extracted.
                 static final class android {
+                    static final class view {
+                        static final class inputmethod {
+                            static final class InputMethodManager {
+                                void hideSoftInputFromWindow(Object token, int flags) { }
+                            }
+                        }
+                    }
                     static final class os {
                         static final class SystemClock {
                             static long now;
@@ -298,7 +375,9 @@ public final class NativeBrowserRecoveryHostTest {
                     int reloads;
                     boolean lastCheckForRepost;
                     boolean canGoForward() { return false; }
+                    boolean canGoBack() { return false; }
                     void goForward() { }
+                    void goBack() { }
                     Runnable onReload;
                     void reload(boolean checkForRepost) {
                         reloads++; lastCheckForRepost = checkForRepost;
@@ -390,10 +469,14 @@ public final class NativeBrowserRecoveryHostTest {
                 static final class Bitmap {
                     enum Config { ARGB_8888 }
                     final int width, height;
+                    static int allocations;
                     boolean recycled;
                     View drawnFrom;
                     Bitmap(int width, int height) { this.width = width; this.height = height; }
-                    static Bitmap createBitmap(int width, int height, Config config) { return new Bitmap(width, height); }
+                    static Bitmap createBitmap(int width, int height, Config config) {
+                        allocations++;
+                        return new Bitmap(width, height);
+                    }
                     int getWidth() { return width; }
                     int getHeight() { return height; }
                     void recycle() {
@@ -425,7 +508,7 @@ public final class NativeBrowserRecoveryHostTest {
                     static final List<Request> submitted = new ArrayList<>();
                     static final ArrayDeque<Request> pending = new ArrayDeque<>();
                     static int windowRequests;
-                    static void reset() { submitted.clear(); pending.clear(); windowRequests = 0; }
+                    static void reset() { submitted.clear(); pending.clear(); windowRequests = 0; Bitmap.allocations = 0; }
                     static void request(SurfaceView source, Bitmap bitmap, CopyResult callback, Handler handler) {
                         if (bitmap.recycled) throw new AssertionError("copy submitted recycled destination");
                         Request request = new Request(source, bitmap, callback, handler);
@@ -456,17 +539,20 @@ public final class NativeBrowserRecoveryHostTest {
                     protected void onPause() { pauses++; }
                     protected void onStop() { stops++; }
                     protected void onResume() { }
+                    public void onBackPressed() { }
                 }
                 static final class Activity extends BaseActivity {
-                    static final String TAG = "Host";
+                    static final String TAG = "Host", INPUT_METHOD_SERVICE = "input_method";
                     static final int MAX_TABS = 10;
                     final Handler main = new Handler(), previewResults = new Handler();
                     final Frame browserFrame = new Frame();
                     final View splash = new View(), splashSpinner = new View(), progressBar = new View();
+                    final View root = new View(), address = new View(), urlSuggest = new View();
                     final TextView splashTitle = new TextView(), splashStatus = new TextView(), restoreRetry = new TextView();
                     final NewTabPage newTab = new NewTabPage();
                     final HistoryPanel historyPanel = new HistoryPanel();
-                    final TabSwitcher tabSwitcher = new TabSwitcher();
+                    final TabSwitcherView tabSwitcher = new TabSwitcherView();
+                    List<TabSwitcherView.TabItem> shownTabs = new ArrayList<>();
                     final Store historyStore = new Store();
                     final Runtime runtime = new Runtime();
                     final ContentViewRenderView renderView = new ContentViewRenderView();
@@ -481,30 +567,32 @@ public final class NativeBrowserRecoveryHostTest {
                     Activity(boolean ready) {
                         android.os.SystemClock.now = 0;
                         splash.visibility = View.GONE; restoreRetry.visibility = View.GONE;
-                        newTab.visibility = View.GONE; historyPanel.visibility = View.GONE;
+                        newTab.visibility = View.GONE; historyPanel.visibility = View.GONE; urlSuggest.visibility = View.GONE;
                         manager.retain("https://a.invalid/page", ready);
                         installShellObserverHooks(); installPreviewSurfaceHooks();
                         observeShell(manager.active);
                         // Start from settled bootstrap, with the real production observer installed.
-                        previewRequested = false; browserFrame.removeCallbacks(previewCapture);
+                        previewRequested = false; previewCapturePosted = false; browserFrame.removeCallbacks(previewCapture);
+                        browserFrame.animationPosts = 0; browserFrame.callbackRemovals = 0;
                         main.queue.clear(); chromeRefreshPosted = false;
                     }
                     void cancelNavigationFocus() { focusCancellations++; }
                     void hideUrlSuggestions() { }
-                    void dismissTabSwitcher() { tabSwitcher.showing = false; }
+                    void dismissAddressEditor() { address.clearFocus(); urlSuggest.visibility = View.GONE; }
                     void refreshTabSwitcher(boolean force) { if (force) switcherRefreshes++; }
                     void requestChromeRefresh() {
                         if (!chromeRefreshPosted) { chromeRefreshPosted = true; main.post(chromeRefresh); }
                     }
-                    // These non-recovery destinations have dedicated suites; only their menu seams are fake.
+                    // Rendering/card construction have dedicated suites; these destinations remain fake.
+                    List<TabSwitcherView.TabItem> tabItems() { return List.of(); }
                     void createBlankTab() { manager.retain("about:blank", true); }
-                    void showTabSwitcher() { tabSwitcher.showing = true; }
                     void showHistoryPanel() { historyPanel.visibility = View.VISIBLE; }
                     void closeTab(Shell shell) { manager.closeShell(shell); }
                     void returnToList() { }
                     void requestEnvironmentExit() { quiescing = true; cancelUiWork(); }
                     void refreshChrome() { trackHistory(); reconcilePageRestoring(); }
                     Window getWindow() { return new Window(); }
+                    Object getSystemService(String service) { return null; }
                     @ACTUAL@
                 }
                 static void covered(Activity a, Shell shell, String message) {
@@ -733,6 +821,174 @@ public final class NativeBrowserRecoveryHostTest {
                     paused.onStop();
                     uncovered(paused, "actual onStop also cancels recovery");
                 }
+                static void previewRequestCoalescing() {
+                    PixelCopy.reset();
+                    Activity a = new Activity(true);
+                    Shell shell = a.manager.active;
+                    for (int i = 0; i < 20; i++) a.requestActivePreview(shell);
+                    check(a.browserFrame.animationPosts == 1 && a.browserFrame.callbackRemovals == 0
+                            && a.browserFrame.count(a.previewCapture) == 1 && a.previewCapturePosted,
+                            "same-frame burst posts once without remove/repost churn");
+                    check(Bitmap.allocations == 0 && PixelCopy.submitted.isEmpty(), "coalesced request does not allocate inline");
+                    a.browserFrame.frame();
+                    check(!a.previewCapturePosted && !a.browserFrame.has(a.previewCapture), "frame entry retires the posted gate");
+                    check(a.previewInFlight && PixelCopy.submitted.size() == 1 && Bitmap.allocations == 1,
+                            "same-frame burst allocates and submits one destination");
+                    Activity.ShellHistoryObserver observer = a.historyObservers.get(shell);
+                    for (int i = 0; i < 20; i++) {
+                        if ((i & 1) == 0) observer.didFirstVisuallyNonEmptyPaint();
+                        else observer.didStopLoading(new GURL(shell.contents.url), true);
+                    }
+                    check(a.previewRequested, "content demand while copy in flight remains dirty");
+                    check(a.browserFrame.animationPosts == 1 && PixelCopy.submitted.size() == 1
+                            && Bitmap.allocations == 1 && !a.previewCapturePosted,
+                            "in-flight burst neither queues frames nor allocates another destination");
+                    PixelCopy.Request first = PixelCopy.submitted.get(0);
+                    finish(a, PixelCopy.SUCCESS);
+                    check(a.browserFrame.animationPosts == 2 && a.browserFrame.count(a.previewCapture) == 1
+                            && a.previewCapturePosted && a.tabPreviews.get(shell) == first.bitmap,
+                            "successful old copy schedules exactly one dirty follow-up");
+                    a.browserFrame.frame(); finish(a, PixelCopy.SUCCESS);
+                    check(PixelCopy.submitted.size() == 2 && Bitmap.allocations == 2
+                            && a.tabPreviews.get(shell) == PixelCopy.submitted.get(1).bitmap
+                            && !first.bitmap.recycled && !a.previewRequested && !a.previewCapturePosted
+                            && !a.browserFrame.has(a.previewCapture), "follow-up publishes fresh pixels once then becomes idle");
+
+                    PixelCopy.reset();
+                    Activity home = new Activity(false);
+                    home.newTab.visibility = View.VISIBLE;
+                    for (int i = 0; i < 20; i++) home.requestActivePreview(home.manager.active);
+                    home.browserFrame.frame();
+                    check(home.browserFrame.animationPosts == 1 && home.browserFrame.callbackRemovals == 0
+                            && home.newTab.draws == 1 && Bitmap.allocations == 1 && PixelCopy.submitted.isEmpty()
+                            && !home.previewCapturePosted && !home.previewRequested,
+                            "same-frame native-home burst draws once and retires its posted gate");
+
+                    PixelCopy.reset();
+                    Activity retry = new Activity(true);
+                    retry.requestActivePreview(retry.manager.active); retry.browserFrame.frame();
+                    for (int failure = 1; failure <= Activity.MAX_PREVIEW_RETRIES; failure++) {
+                        finish(retry, failure == 1 ? PixelCopy.ERROR_SOURCE_NO_DATA : PixelCopy.ERROR_TIMEOUT);
+                        for (int i = 0; i < 20; i++) retry.requestActivePreview(retry.manager.active);
+                        check(retry.previewRetries == failure, "merged dirty requests preserve retry budget " + failure);
+                        check(retry.browserFrame.count(retry.previewCapture) == 1, "merged retry demand retains one scheduled task");
+                        retry.browserFrame.frame();
+                    }
+                    finish(retry, PixelCopy.ERROR_SOURCE_NO_DATA);
+                    check(PixelCopy.submitted.size() == 1 + Activity.MAX_PREVIEW_RETRIES && !retry.previewRequested
+                            && !retry.previewCapturePosted && !retry.browserFrame.has(retry.previewCapture),
+                            "duplicate requests within an already-dirty retry batch cannot renew its budget");
+                    retry.requestActivePreview(retry.manager.active);
+                    check(retry.previewRetries == 0 && retry.previewCapturePosted, "new dirty batch receives a new retry budget");
+                    retry.browserFrame.frame(); finish(retry, PixelCopy.SUCCESS);
+                }
+                static void previewPostedCancellationAndRearm() {
+                    List<Invalidate> cancellations = List.of(
+                            (a, s) -> a.renderView.surface.holder.destroy(),
+                            (a, s) -> a.historyObservers.get(s).didStartNavigationInPrimaryMainFrame(new NavigationHandle(s.contents.url)),
+                            (a, s) -> a.historyObservers.get(s).primaryMainFrameRenderProcessGone(1),
+                            (a, s) -> a.onPause(),
+                            (a, s) -> a.onStop(),
+                            (a, s) -> { a.quiescing = true; a.cancelUiWork(); },
+                            (a, s) -> { a.closed = true; a.cancelUiWork(); });
+                    for (int i = 0; i < cancellations.size(); i++) {
+                        PixelCopy.reset();
+                        Activity a = new Activity(true);
+                        Shell shell = a.manager.active;
+                        a.requestActivePreview(shell);
+                        check(a.previewCapturePosted && a.browserFrame.has(a.previewCapture), "cancellation starts with one posted request " + i);
+                        cancellations.get(i).apply(a, shell);
+                        check(!a.previewCapturePosted && !a.browserFrame.has(a.previewCapture), "cancelled preview clears posted gate " + i);
+                        for (int frame = 0; frame < 4; frame++) a.browserFrame.frame();
+                        check(Bitmap.allocations == 0 && PixelCopy.submitted.isEmpty(), "cancelled task never allocates or submits " + i);
+                    }
+                    PixelCopy.reset();
+                    Activity surface = new Activity(true);
+                    surface.requestActivePreview(surface.manager.active); surface.renderView.surface.holder.destroy();
+                    surface.renderView.surface.holder.surface.valid = true;
+                    surface.renderView.surface.holder.change();
+                    check(surface.previewCapturePosted && surface.browserFrame.count(surface.previewCapture) == 1,
+                            "surface recreation rearms a previously cancelled posted gate");
+                    surface.browserFrame.frame(); finish(surface, PixelCopy.SUCCESS);
+
+                    PixelCopy.reset();
+                    Activity navigation = new Activity(true);
+                    Shell shell = navigation.manager.active;
+                    navigation.requestActivePreview(shell);
+                    Activity.ShellHistoryObserver observer = navigation.historyObservers.get(shell);
+                    observer.didStartNavigationInPrimaryMainFrame(new NavigationHandle(shell.contents.url));
+                    observer.didFirstVisuallyNonEmptyPaint();
+                    check(navigation.previewCapturePosted, "fresh paint rearms navigation-cancelled preview");
+                    navigation.browserFrame.frame(); finish(navigation, PixelCopy.SUCCESS);
+
+                    PixelCopy.reset();
+                    Activity paused = new Activity(true);
+                    paused.requestActivePreview(paused.manager.active); paused.onPause(); paused.onResume();
+                    check(paused.previewCapturePosted, "resume rearms a pause-cancelled preview");
+                    paused.browserFrame.frame(); finish(paused, PixelCopy.SUCCESS);
+                }
+                static void previewBlockedFrameDoesNotSpin() {
+                    List<Invalidate> blocks = List.of(
+                            (a, s) -> a.historyPanel.visibility = View.VISIBLE,
+                            (a, s) -> a.historyObservers.get(s).awaitingPaint = true,
+                            (a, s) -> a.renderView.surface.attached = false,
+                            (a, s) -> a.renderView.surface.shown = false,
+                            (a, s) -> a.renderView.surface.width = 0,
+                            (a, s) -> s.contents.renderer.ready = false,
+                            (a, s) -> a.renderView.surface.holder.surface.valid = false);
+                    List<Invalidate> unblock = List.of(
+                            (a, s) -> a.historyPanel.visibility = View.GONE,
+                            (a, s) -> a.historyObservers.get(s).didFirstVisuallyNonEmptyPaint(),
+                            (a, s) -> a.renderView.surface.attached = true,
+                            (a, s) -> a.renderView.surface.shown = true,
+                            (a, s) -> a.renderView.surface.width = 1080,
+                            (a, s) -> s.contents.renderer.ready = true,
+                            (a, s) -> a.renderView.surface.holder.surface.valid = true);
+                    for (int i = 0; i < blocks.size(); i++) {
+                        PixelCopy.reset();
+                        Activity a = new Activity(true);
+                        Shell shell = a.manager.active;
+                        blocks.get(i).apply(a, shell);
+                        a.requestActivePreview(shell); a.browserFrame.frame();
+                        check(a.previewRequested && !a.previewCapturePosted && !a.previewInFlight,
+                                "blocked frame retires posted gate but retains dirty demand " + i);
+                        for (int frame = 0; frame < 5; frame++) a.browserFrame.frame();
+                        check(a.browserFrame.animationPosts == 1 && Bitmap.allocations == 0
+                                && PixelCopy.submitted.isEmpty(), "blocked source never spins or allocates " + i);
+                        unblock.get(i).apply(a, shell);
+                        a.requestActivePreview(shell);
+                        check(a.previewCapturePosted && a.browserFrame.count(a.previewCapture) == 1,
+                                "a later ready event rearms exactly one frame " + i);
+                        a.browserFrame.frame(); finish(a, PixelCopy.SUCCESS);
+                        check(a.tabPreviews.containsKey(shell) && !a.previewCapturePosted, "unblocked source publishes once " + i);
+                    }
+                }
+                static void previewSwitcherDismissAndReopen() {
+                    PixelCopy.reset();
+                    Activity a = new Activity(true);
+                    Shell shell = a.manager.active;
+                    String url = shell.contents.url;
+                    int focus = a.focusCancellations;
+                    for (int i = 0; i < 20; i++) a.showTabSwitcher();
+                    check(a.tabSwitcher.shows == 1 && a.focusCancellations == focus + 1
+                            && a.browserFrame.animationPosts == 1, "duplicate Activity show cannot repeat opening side effects");
+                    a.browserFrame.frame(); finish(a, PixelCopy.SUCCESS);
+                    Bitmap first = a.tabPreviews.get(shell);
+                    a.dismissFromSwitcherListener();
+                    check(!a.tabSwitcher.isShowing() && !a.previewRequested && !a.previewCapturePosted
+                            && a.browserFrame.animationPosts == 1 && PixelCopy.submitted.size() == 1,
+                            "listener dismiss does not schedule another capture");
+                    a.showTabSwitcher(); a.browserFrame.frame(); finish(a, PixelCopy.SUCCESS);
+                    check(url.equals(shell.contents.url) && PixelCopy.submitted.size() == 2
+                            && a.tabPreviews.get(shell) != first && !first.recycled,
+                            "reopening same URL explicitly captures fresh pixels");
+                    a.onBackPressed();
+                    check(!a.tabSwitcher.isShowing() && !a.previewRequested && !a.previewCapturePosted
+                            && a.browserFrame.animationPosts == 2 && PixelCopy.submitted.size() == 2,
+                            "back dismiss does not schedule another capture");
+                    a.showTabSwitcher(); a.browserFrame.frame(); finish(a, PixelCopy.SUCCESS);
+                    check(PixelCopy.submitted.size() == 3 && a.tabSwitcher.isShowing(), "reopening after Back still captures afresh");
+                }
                 static void previewNoDataAndBounds() {
                     PixelCopy.reset();
                     Activity a = new Activity(true);
@@ -836,13 +1092,17 @@ public final class NativeBrowserRecoveryHostTest {
                     Shell next = a.manager.retain("https://b.invalid/pending", true);
                     a.requestActivePreview(old); a.browserFrame.frame();
                     a.manager.selectShell(next);
-                    a.requestActivePreview(next);
-                    check(PixelCopy.submitted.size() == 1, "new active request waits for old in-flight destination");
+                    for (int i = 0; i < 20; i++) a.requestActivePreview(next);
+                    check(PixelCopy.submitted.size() == 1 && !a.previewCapturePosted
+                            && !a.browserFrame.has(a.previewCapture), "new active request waits for old in-flight destination");
+                    Bitmap oldDestination = PixelCopy.submitted.get(0).bitmap;
                     finish(a, PixelCopy.SUCCESS);
-                    check(a.tabPreviews.isEmpty() && a.browserFrame.has(a.previewCapture),
+                    check(a.tabPreviews.isEmpty() && oldDestination.recycled && a.previewCapturePosted
+                            && a.browserFrame.count(a.previewCapture) == 1,
                             "stale completion still schedules an already requested new owner");
                     a.browserFrame.frame(); finish(a, PixelCopy.SUCCESS);
-                    check(a.tabPreviews.get(next) == PixelCopy.submitted.get(1).bitmap && !a.tabPreviews.containsKey(old),
+                    check(a.tabPreviews.get(next) == PixelCopy.submitted.get(1).bitmap && !a.tabPreviews.containsKey(old)
+                            && !a.previewCapturePosted && !a.browserFrame.has(a.previewCapture),
                             "new owner preview progresses after stale owner result");
                 }
                 static void previewSourceAndOverlays() {
@@ -1407,7 +1667,31 @@ public final class NativeBrowserRecoveryHostTest {
                         uncovered(exit, "late exit callbacks cannot recreate interruption " + quiesce);
                     }
                 }
+                static void loadFeedbackPresentation() {
+                    Activity a = new Activity(true);
+                    a.progressBar.visibility = View.INVISIBLE;
+                    a.progressBar.visibilityWrites = 0;
+                    for (int i = 0; i < 20; i++) a.setLoadFeedbackVisible(false);
+                    check(a.progressBar.visibility == View.INVISIBLE && a.progressBar.visibilityWrites == 0,
+                            "unchanged load feedback retains its invisible slot without writes");
+                    a.setLoadFeedbackVisible(true); a.setLoadFeedbackVisible(true);
+                    check(a.progressBar.visibility == View.VISIBLE && a.progressBar.visibilityWrites == 1,
+                            "changed loading presentation writes visible once");
+                    a.cancelUiWork();
+                    check(a.progressBar.visibility == View.INVISIBLE && a.progressBar.visibilityWrites == 2,
+                            "UI cancellation stops loading feedback without removing its slot");
+                    a.cancelUiWork();
+                    check(a.progressBar.visibilityWrites == 2, "cancelled loading feedback stays idempotent");
+                    a.setLoadFeedbackVisible(true); a.onPause(); a.onStop();
+                    check(a.progressBar.visibility == View.INVISIBLE && a.progressBar.visibilityWrites == 4,
+                            "pause plus stop retire loading animation with one hidden write");
+                }
                 public static int run() {
+                    loadFeedbackPresentation();
+                    previewRequestCoalescing();
+                    previewPostedCancellationAndRearm();
+                    previewBlockedFrameDoesNotSpin();
+                    previewSwitcherDismissAndReopen();
                     restorationDeadline();
                     restorationTransitions();
                     restorationOwnership();

@@ -1,0 +1,43 @@
+{
+  "scope": "CONTROL_FLOW_ONLY",
+  "status": "PREPARED_NOT_COMPILED_OR_EXECUTED",
+  "upstreamPath": "components/viz/service/input/input_manager.cc",
+  "authoritativeCaptureSha256": "449cbbdbf146bf9a632b854430e3f17bcd322894267a99e7c55d8ae09fd7024e",
+  "capturedMethodLines": [
+    741,
+    753
+  ],
+  "methodBytes": 554,
+  "originalMethodSha256": "b7c81622a78135acbc67f4a400849ebdf5f0ab6f46e26d2d88a234921ec1edeb",
+  "runtimeCaptureDependency": false,
+  "productionPatch": "mobile/android/native-kernel/chromium/product-input-lifecycle.patch",
+  "realMethod": "InputManager::RecreateRenderInputRouterSupport",
+  "stubs": [
+    "FrameSinkId",
+    "parent/root maps",
+    "InputManager factory",
+    "support root/child classification",
+    "provider identity",
+    "std::weak_ptr lifetime tokens",
+    "RIR identity",
+    "mobile optimization notification"
+  ],
+  "notProven": [
+    "real base::WeakPtr",
+    "FilteredGestureProvider",
+    "ACK queue or gesture delivery",
+    "Android transfer pointers",
+    "Chromium native unit compilation/execution",
+    "device freeze recovery"
+  ],
+  "parentLookupAuthority": {
+    "upstreamPath": "components/viz/service/frame_sinks/frame_sink_manager_impl.cc",
+    "authoritativeCaptureSha256": "25ed3f1ccd56c24f34a0c868a3c27ff24b1ab95ff7ae2f335261d6f035aaacda",
+    "lines": [
+      974,
+      983
+    ],
+    "stubSemantics": "CHECK child nonroot; no mapping is invalid 0; oldest direct parent via at(); never recursive",
+    "scope": "single oldest direct parent only; no multiple-parent simulation"
+  }
+}

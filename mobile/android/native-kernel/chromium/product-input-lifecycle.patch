@@ -1,0 +1,408 @@
+diff --git a/components/viz/service/input/input_manager.cc b/components/viz/service/input/input_manager.cc
+--- a/components/viz/service/input/input_manager.cc
++++ b/components/viz/service/input/input_manager.cc
+@@ -745,6 +745,18 @@
+   CHECK(rir_map_it != rir_map_.end());
+   input::RenderInputRouter* rir = rir_map_it->second.get();
+ 
++  // Reattaching a top-level view does not change its input support type.
++  // Keep its gesture provider, pending touch ACKs and transfer weak pointers
++  // together with the surviving RIR. Replacing only the provider can leave the
++  // RIR in a scroll whose end was queued in the discarded provider.
++  const auto parent_frame_sink_id =
++      frame_sink_manager_->GetOldestParentByChildFrameId(child_frame_sink_id);
++  if (frame_sink_metadata.rir_support &&
++      !frame_sink_metadata.rir_support->IsRenderInputRouterSupportChildFrame() &&
++      frame_sink_manager_->IsFrameSinkIdInRootSinkMap(parent_frame_sink_id)) {
++    return;
++  }
++
+   frame_sink_metadata.rir_support.reset();
+   frame_sink_metadata.rir_support =
+       MakeRenderInputRouterSupport(rir, child_frame_sink_id);
+diff --git a/components/viz/service/frame_sinks/frame_sink_manager_unittest.cc b/components/viz/service/frame_sinks/frame_sink_manager_unittest.cc
+--- a/components/viz/service/frame_sinks/frame_sink_manager_unittest.cc
++++ b/components/viz/service/frame_sinks/frame_sink_manager_unittest.cc
+@@ -4,12 +4,14 @@
+ 
+ #include <stddef.h>
+ 
++#include <array>
+ #include <tuple>
+ 
+ #include "base/run_loop.h"
+ #include "base/strings/string_number_conversions.h"
+ #include "base/test/scoped_feature_list.h"
+ #include "base/test/tracing/test_trace_processor.h"
++#include "build/build_config.h"
+ #include "components/input/features.h"
+ #include "components/viz/common/constants.h"
+ #include "components/viz/common/frame_sinks/begin_frame_source.h"
+@@ -31,6 +33,13 @@
+ #include "mojo/public/cpp/bindings/remote.h"
+ #include "testing/gtest/include/gtest/gtest.h"
+ #include "third_party/perfetto/include/perfetto/tracing/tracing.h"
++
++#if BUILDFLAG(IS_ANDROID)
++#include "base/memory/raw_ptr.h"
++#include "base/time/time.h"
++#include "components/viz/service/input/render_input_router_support_android.h"
++#include "ui/events/velocity_tracker/motion_event_generic.h"
++#endif
+ 
+ namespace viz {
+ namespace {
+@@ -1898,6 +1907,353 @@
+   manager_->InvalidateFrameSinkId(kFrameSinkIdC, {});
+ }
+ 
++TEST_P(AndroidFrameSinkManagerTest,
++       PreservesRootSupportAndPendingProviderAcrossRepeatedThreeTabReattach) {
++  if (!ExpectedInputManagerCreation()) {
++    GTEST_SKIP() << "Requires supported, enabled InputOnViz";
++  }
++
++  RootCompositorFrameSinkData root_data;
++  manager_->CreateRootCompositorFrameSink(
++      root_data.BuildParams(kFrameSinkIdRoot));
++  ASSERT_TRUE(CompositorFrameSinkExists(kFrameSinkIdRoot));
++
++  auto* input_manager = GetMockInputManager();
++  ASSERT_TRUE(input_manager);
++
++  struct RootSupportState {
++    FrameSinkId frame_sink_id;
++    base::WeakPtr<RenderInputRouterSupportAndroid> support;
++    base::WeakPtr<input::RenderWidgetHostViewInput> input_view;
++    scoped_refptr<ui::FilteredGestureProvider> provider;
++    raw_ptr<input::RenderInputRouter> rir = nullptr;
++    raw_ptr<const ui::MotionEvent> current_down = nullptr;
++    uint32_t pending_down_id = 0;
++  };
++  std::array<RootSupportState, 3> tabs;
++  tabs[0].frame_sink_id = kFrameSinkIdA;
++  tabs[1].frame_sink_id = kFrameSinkIdB;
++  tabs[2].frame_sink_id = kFrameSinkIdC;
++
++  for (auto& tab : tabs) {
++    SCOPED_TRACE(tab.frame_sink_id.ToString());
++    manager_->RegisterFrameSinkId(tab.frame_sink_id,
++                                  true /* report_activation */);
++    // Separate pages/tabs have independent page input routers.
++    CreateCompositorFrameSink(
++        tab.frame_sink_id,
++        CreateRIRConfig(base::UnguessableToken::Create()));
++    manager_->RegisterFrameSinkHierarchy(kFrameSinkIdRoot, tab.frame_sink_id);
++    ASSERT_FALSE(IsRenderInputRouterSupportChildFrame(tab.frame_sink_id));
++    auto* support = static_cast<RenderInputRouterSupportAndroid*>(
++        input_manager->GetSupportForFrameSink(tab.frame_sink_id));
++    ASSERT_TRUE(support);
++    tab.support = support->GetWeakPtr();
++    tab.input_view = support->GetInputWeakPtr();
++    tab.provider = support->GetGestureProvider();
++    tab.rir = input_manager->GetRenderInputRouterForId(tab.frame_sink_id);
++    ASSERT_TRUE(tab.provider);
++    ASSERT_TRUE(tab.rir);
++    ASSERT_EQ(tab.rir, support->GetViewRenderInputRouter());
++
++    // Seed only the real provider's pending unacknowledged-touch state. Do not
++    // route an invented WebTouch through a fake renderer or claim RIR acceptance.
++    ui::PointerProperties pointer(10.f, 20.f, 8.f);
++    pointer.tool_type = ui::MotionEvent::ToolType::FINGER;
++    pointer.pressure = 1.f;
++    ui::MotionEventGeneric down(ui::MotionEvent::Action::DOWN,
++                                base::TimeTicks::Now(), pointer);
++    ASSERT_TRUE(tab.provider->OnTouchEvent(down).succeeded);
++    // Intentionally do not call OnTouchEventAck().
++    tab.current_down = tab.provider->GetCurrentDownEvent();
++    tab.pending_down_id = down.GetUniqueEventId();
++    ASSERT_TRUE(tab.current_down);
++    EXPECT_EQ(tab.pending_down_id, tab.current_down->GetUniqueEventId());
++
++    manager_->UnregisterFrameSinkHierarchy(kFrameSinkIdRoot,
++                                            tab.frame_sink_id);
++    EXPECT_EQ(0, manager_->GetNumParents(tab.frame_sink_id));
++    ASSERT_TRUE(tab.support);
++    ASSERT_TRUE(tab.input_view);
++    EXPECT_EQ(tab.current_down, tab.provider->GetCurrentDownEvent());
++  }
++
++  // Like a persistent tab host, only one tab is attached at a time. Every visit
++  // traverses 0 -> 1 parents, not the distinct multiple-parent transition path.
++  for (int round = 0; round < 30; ++round) {
++    SCOPED_TRACE(round);
++    for (auto& tab : tabs) {
++      SCOPED_TRACE(tab.frame_sink_id.ToString());
++      EXPECT_EQ(0, manager_->GetNumParents(tab.frame_sink_id));
++      manager_->RegisterFrameSinkHierarchy(kFrameSinkIdRoot, tab.frame_sink_id);
++      EXPECT_EQ(1, manager_->GetNumParents(tab.frame_sink_id));
++
++      // Weak pointers, unlike raw address equality, cannot falsely survive an
++      // old support's deletion followed by allocator reuse at the same address.
++      ASSERT_TRUE(tab.support);
++      ASSERT_TRUE(tab.input_view);
++      ASSERT_EQ(tab.support.get(),
++                input_manager->GetSupportForFrameSink(tab.frame_sink_id));
++      EXPECT_EQ(tab.support.get(), tab.input_view.get());
++      EXPECT_FALSE(tab.support->IsRenderInputRouterSupportChildFrame());
++      EXPECT_EQ(tab.provider.get(),
++                tab.support->GetGestureProvider().get());
++      EXPECT_EQ(tab.rir,
++                input_manager->GetRenderInputRouterForId(tab.frame_sink_id));
++      EXPECT_EQ(tab.rir, tab.support->GetViewRenderInputRouter());
++      EXPECT_EQ(kFrameSinkIdRoot, tab.support->GetRootFrameSinkId());
++      ASSERT_EQ(tab.current_down,
++                tab.support->GetGestureProvider()->GetCurrentDownEvent());
++      EXPECT_EQ(tab.pending_down_id, tab.current_down->GetUniqueEventId());
++      EXPECT_EQ(ui::MotionEvent::Action::DOWN, tab.current_down->GetAction());
++
++      manager_->UnregisterFrameSinkHierarchy(kFrameSinkIdRoot,
++                                              tab.frame_sink_id);
++      EXPECT_EQ(0, manager_->GetNumParents(tab.frame_sink_id));
++      ASSERT_TRUE(tab.support);
++      ASSERT_TRUE(tab.input_view);
++      EXPECT_EQ(tab.provider.get(),
++                tab.support->GetGestureProvider().get());
++      EXPECT_EQ(tab.current_down,
++                tab.support->GetGestureProvider()->GetCurrentDownEvent());
++    }
++  }
++
++  // Release external provider refs while their support-owned reference is
++  // still alive. Support destruction will Shutdown() and destroy the provider,
++  // cancelling its timers rather than retaining a provider with a dead client.
++  for (auto& tab : tabs) {
++    tab.current_down = nullptr;
++    tab.rir = nullptr;
++    tab.provider.reset();
++    manager_->InvalidateFrameSinkId(tab.frame_sink_id, {});
++    EXPECT_FALSE(tab.support);
++    EXPECT_FALSE(tab.input_view);
++  }
++  manager_->InvalidateFrameSinkId(kFrameSinkIdRoot, {});
++}
++
++TEST_P(AndroidFrameSinkManagerTest,
++       PreservesRootSupportWhenOldRootIsDestroyedAndNewRootCreated) {
++  if (!ExpectedInputManagerCreation()) {
++    GTEST_SKIP() << "Requires supported, enabled InputOnViz";
++  }
++
++  RootCompositorFrameSinkData old_root_data;
++  manager_->CreateRootCompositorFrameSink(
++      old_root_data.BuildParams(kFrameSinkIdRoot));
++  manager_->RegisterFrameSinkId(kFrameSinkIdA, true /* report_activation */);
++  CreateCompositorFrameSink(
++      kFrameSinkIdA, CreateRIRConfig(base::UnguessableToken::Create()));
++  manager_->RegisterFrameSinkHierarchy(kFrameSinkIdRoot, kFrameSinkIdA);
++  ASSERT_FALSE(IsRenderInputRouterSupportChildFrame(kFrameSinkIdA));
++
++  auto* input_manager = GetMockInputManager();
++  auto* support = static_cast<RenderInputRouterSupportAndroid*>(
++      input_manager->GetSupportForFrameSink(kFrameSinkIdA));
++  auto support_weak = support->GetWeakPtr();
++  auto input_weak = support->GetInputWeakPtr();
++  auto provider = support->GetGestureProvider();
++  auto* rir = input_manager->GetRenderInputRouterForId(kFrameSinkIdA);
++  EXPECT_EQ(kFrameSinkIdRoot, support->GetRootFrameSinkId());
++
++  manager_->UnregisterFrameSinkHierarchy(kFrameSinkIdRoot, kFrameSinkIdA);
++  EXPECT_EQ(0, manager_->GetNumParents(kFrameSinkIdA));
++  manager_->InvalidateFrameSinkId(kFrameSinkIdRoot, {});
++  EXPECT_FALSE(CompositorFrameSinkExists(kFrameSinkIdRoot));
++  ASSERT_TRUE(support_weak);
++  ASSERT_TRUE(input_weak);
++
++  RootCompositorFrameSinkData new_root_data;
++  manager_->CreateRootCompositorFrameSink(
++      new_root_data.BuildParams(kFrameSinkIdRoot2));
++  ASSERT_TRUE(CompositorFrameSinkExists(kFrameSinkIdRoot2));
++  ASSERT_TRUE(support_weak);
++  manager_->RegisterFrameSinkHierarchy(kFrameSinkIdRoot2, kFrameSinkIdA);
++
++  ASSERT_TRUE(support_weak);
++  ASSERT_TRUE(input_weak);
++  EXPECT_EQ(support_weak.get(),
++            input_manager->GetSupportForFrameSink(kFrameSinkIdA));
++  EXPECT_EQ(provider.get(), support_weak->GetGestureProvider().get());
++  EXPECT_EQ(rir, input_manager->GetRenderInputRouterForId(kFrameSinkIdA));
++  EXPECT_EQ(rir, support_weak->GetViewRenderInputRouter());
++  // Reuse must not retain a cached reference to the old compositor root.
++  EXPECT_EQ(kFrameSinkIdRoot2, support_weak->GetRootFrameSinkId());
++
++  provider.reset();
++  manager_->UnregisterFrameSinkHierarchy(kFrameSinkIdRoot2, kFrameSinkIdA);
++  manager_->InvalidateFrameSinkId(kFrameSinkIdA, {});
++  manager_->InvalidateFrameSinkId(kFrameSinkIdRoot2, {});
++}
++
++TEST_P(AndroidFrameSinkManagerTest,
++       PreservesRootSupportWhenOldestOfTwoRootParentsIsRemoved) {
++  if (!ExpectedInputManagerCreation()) {
++    GTEST_SKIP() << "Requires supported, enabled InputOnViz";
++  }
++
++  RootCompositorFrameSinkData root_data;
++  manager_->CreateRootCompositorFrameSink(
++      root_data.BuildParams(kFrameSinkIdRoot));
++  RootCompositorFrameSinkData root_data2;
++  manager_->CreateRootCompositorFrameSink(
++      root_data2.BuildParams(kFrameSinkIdRoot2));
++  manager_->RegisterFrameSinkId(kFrameSinkIdA, true /* report_activation */);
++  CreateCompositorFrameSink(
++      kFrameSinkIdA, CreateRIRConfig(base::UnguessableToken::Create()));
++  manager_->RegisterFrameSinkHierarchy(kFrameSinkIdRoot, kFrameSinkIdA);
++  ASSERT_FALSE(IsRenderInputRouterSupportChildFrame(kFrameSinkIdA));
++
++  auto* input_manager = GetMockInputManager();
++  auto* support = static_cast<RenderInputRouterSupportAndroid*>(
++      input_manager->GetSupportForFrameSink(kFrameSinkIdA));
++  auto support_weak = support->GetWeakPtr();
++  auto provider = support->GetGestureProvider();
++  auto* rir = input_manager->GetRenderInputRouterForId(kFrameSinkIdA);
++
++  manager_->RegisterFrameSinkHierarchy(kFrameSinkIdRoot2, kFrameSinkIdA);
++  EXPECT_EQ(2, manager_->GetNumParents(kFrameSinkIdA));
++  ASSERT_TRUE(support_weak);
++  EXPECT_EQ(kFrameSinkIdRoot, support_weak->GetRootFrameSinkId());
++  manager_->UnregisterFrameSinkHierarchy(kFrameSinkIdRoot, kFrameSinkIdA);
++  EXPECT_EQ(1, manager_->GetNumParents(kFrameSinkIdA));
++
++  ASSERT_TRUE(support_weak);
++  EXPECT_EQ(support_weak.get(),
++            input_manager->GetSupportForFrameSink(kFrameSinkIdA));
++  EXPECT_EQ(provider.get(), support_weak->GetGestureProvider().get());
++  EXPECT_EQ(rir, input_manager->GetRenderInputRouterForId(kFrameSinkIdA));
++  EXPECT_EQ(kFrameSinkIdRoot2, support_weak->GetRootFrameSinkId());
++
++  provider.reset();
++  manager_->UnregisterFrameSinkHierarchy(kFrameSinkIdRoot2, kFrameSinkIdA);
++  manager_->InvalidateFrameSinkId(kFrameSinkIdA, {});
++  manager_->InvalidateFrameSinkId(kFrameSinkIdRoot, {});
++  manager_->InvalidateFrameSinkId(kFrameSinkIdRoot2, {});
++}
++
++TEST_P(AndroidFrameSinkManagerTest,
++       ReconstructsSupportOnActualRootChildRootTransitions) {
++  if (!ExpectedInputManagerCreation()) {
++    GTEST_SKIP() << "Requires supported, enabled InputOnViz";
++  }
++
++  RootCompositorFrameSinkData root_data;
++  manager_->CreateRootCompositorFrameSink(
++      root_data.BuildParams(kFrameSinkIdRoot));
++  const auto grouping_id = base::UnguessableToken::Create();
++  manager_->RegisterFrameSinkId(kFrameSinkIdA, true /* report_activation */);
++  manager_->RegisterFrameSinkId(kFrameSinkIdB, true /* report_activation */);
++  CreateCompositorFrameSink(kFrameSinkIdA, CreateRIRConfig(grouping_id));
++  CreateCompositorFrameSink(kFrameSinkIdB, CreateRIRConfig(grouping_id));
++  manager_->RegisterFrameSinkHierarchy(kFrameSinkIdRoot, kFrameSinkIdA);
++  manager_->RegisterFrameSinkHierarchy(kFrameSinkIdRoot, kFrameSinkIdB);
++  ASSERT_FALSE(IsRenderInputRouterSupportChildFrame(kFrameSinkIdA));
++
++  auto* input_manager = GetMockInputManager();
++  auto* root_support = static_cast<RenderInputRouterSupportAndroid*>(
++      input_manager->GetSupportForFrameSink(kFrameSinkIdA));
++  auto old_root_weak = root_support->GetWeakPtr();
++  auto old_root_input_weak = root_support->GetInputWeakPtr();
++  auto old_provider = root_support->GetGestureProvider();
++  auto* rir = input_manager->GetRenderInputRouterForId(kFrameSinkIdA);
++
++  // root -> A and root -> B -> A: two parents defer kind reconstruction.
++  manager_->RegisterFrameSinkHierarchy(kFrameSinkIdB, kFrameSinkIdA);
++  EXPECT_EQ(2, manager_->GetNumParents(kFrameSinkIdA));
++  ASSERT_TRUE(old_root_weak);
++  manager_->UnregisterFrameSinkHierarchy(kFrameSinkIdRoot, kFrameSinkIdA);
++  ASSERT_TRUE(IsRenderInputRouterSupportChildFrame(kFrameSinkIdA));
++  EXPECT_FALSE(old_root_weak);
++  EXPECT_FALSE(old_root_input_weak);
++  EXPECT_EQ(rir, input_manager->GetRenderInputRouterForId(kFrameSinkIdA));
++  auto* child_support = input_manager->GetSupportForFrameSink(kFrameSinkIdA);
++  ASSERT_TRUE(child_support);
++  auto child_weak = child_support->GetInputWeakPtr();
++  EXPECT_EQ(rir, child_support->GetViewRenderInputRouter());
++
++  // Adding a direct root parent still defers until B -> A is removed.
++  manager_->RegisterFrameSinkHierarchy(kFrameSinkIdRoot, kFrameSinkIdA);
++  EXPECT_EQ(2, manager_->GetNumParents(kFrameSinkIdA));
++  ASSERT_TRUE(child_weak);
++  manager_->UnregisterFrameSinkHierarchy(kFrameSinkIdB, kFrameSinkIdA);
++  ASSERT_FALSE(IsRenderInputRouterSupportChildFrame(kFrameSinkIdA));
++  EXPECT_FALSE(child_weak);
++  EXPECT_EQ(rir, input_manager->GetRenderInputRouterForId(kFrameSinkIdA));
++  auto* new_root_support = static_cast<RenderInputRouterSupportAndroid*>(
++      input_manager->GetSupportForFrameSink(kFrameSinkIdA));
++  auto new_root_weak = new_root_support->GetWeakPtr();
++  auto new_provider = new_root_support->GetGestureProvider();
++  // old_provider remains refcounted here, so provider address reuse cannot make
++  // this inequality accidentally fail after a valid kind transition.
++  EXPECT_NE(old_provider.get(), new_provider.get());
++  EXPECT_EQ(rir, new_root_support->GetViewRenderInputRouter());
++  EXPECT_EQ(kFrameSinkIdRoot, new_root_support->GetRootFrameSinkId());
++
++  // After promotion, another same-kind detach/reattach must preserve this new
++  // Android support, not resurrect the original one or reconstruct again.
++  manager_->UnregisterFrameSinkHierarchy(kFrameSinkIdRoot, kFrameSinkIdA);
++  manager_->RegisterFrameSinkHierarchy(kFrameSinkIdRoot, kFrameSinkIdA);
++  ASSERT_TRUE(new_root_weak);
++  EXPECT_EQ(new_root_weak.get(),
++            input_manager->GetSupportForFrameSink(kFrameSinkIdA));
++  EXPECT_EQ(new_provider.get(), new_root_weak->GetGestureProvider().get());
++
++  old_provider.reset();
++  new_provider.reset();
++  manager_->UnregisterFrameSinkHierarchy(kFrameSinkIdRoot, kFrameSinkIdA);
++  manager_->UnregisterFrameSinkHierarchy(kFrameSinkIdRoot, kFrameSinkIdB);
++  manager_->InvalidateFrameSinkId(kFrameSinkIdA, {});
++  manager_->InvalidateFrameSinkId(kFrameSinkIdB, {});
++  manager_->InvalidateFrameSinkId(kFrameSinkIdRoot, {});
++}
++
++TEST_P(AndroidFrameSinkManagerTest,
++       StillReconstructsChildSupportOnChildToChildReparent) {
++  if (!ExpectedInputManagerCreation()) {
++    GTEST_SKIP() << "Requires supported, enabled InputOnViz";
++  }
++
++  RootCompositorFrameSinkData root_data;
++  manager_->CreateRootCompositorFrameSink(
++      root_data.BuildParams(kFrameSinkIdRoot));
++  const auto grouping_id = base::UnguessableToken::Create();
++  for (const auto& id : {kFrameSinkIdA, kFrameSinkIdB, kFrameSinkIdC}) {
++    manager_->RegisterFrameSinkId(id, true /* report_activation */);
++    CreateCompositorFrameSink(id, CreateRIRConfig(grouping_id));
++  }
++  manager_->RegisterFrameSinkHierarchy(kFrameSinkIdRoot, kFrameSinkIdB);
++  manager_->RegisterFrameSinkHierarchy(kFrameSinkIdRoot, kFrameSinkIdC);
++  manager_->RegisterFrameSinkHierarchy(kFrameSinkIdB, kFrameSinkIdA);
++  ASSERT_TRUE(IsRenderInputRouterSupportChildFrame(kFrameSinkIdA));
++
++  auto* input_manager = GetMockInputManager();
++  auto* child_support = input_manager->GetSupportForFrameSink(kFrameSinkIdA);
++  auto old_child_weak = child_support->GetInputWeakPtr();
++  auto* rir = input_manager->GetRenderInputRouterForId(kFrameSinkIdA);
++  manager_->RegisterFrameSinkHierarchy(kFrameSinkIdC, kFrameSinkIdA);
++  EXPECT_EQ(2, manager_->GetNumParents(kFrameSinkIdA));
++  ASSERT_TRUE(old_child_weak);
++  manager_->UnregisterFrameSinkHierarchy(kFrameSinkIdB, kFrameSinkIdA);
++
++  // Deliberately keep the preexisting child->child reconstruction semantics.
++  // Its screen-stability/bubbling caches require a separate reuse design.
++  EXPECT_FALSE(old_child_weak);
++  ASSERT_TRUE(IsRenderInputRouterSupportChildFrame(kFrameSinkIdA));
++  EXPECT_EQ(rir, input_manager->GetRenderInputRouterForId(kFrameSinkIdA));
++  EXPECT_EQ(input_manager->GetSupportForFrameSink(kFrameSinkIdC),
++            input_manager->GetParentRenderInputRouterSupport(kFrameSinkIdA));
++
++  manager_->UnregisterFrameSinkHierarchy(kFrameSinkIdC, kFrameSinkIdA);
++  manager_->UnregisterFrameSinkHierarchy(kFrameSinkIdRoot, kFrameSinkIdB);
++  manager_->UnregisterFrameSinkHierarchy(kFrameSinkIdRoot, kFrameSinkIdC);
++  manager_->InvalidateFrameSinkId(kFrameSinkIdA, {});
++  manager_->InvalidateFrameSinkId(kFrameSinkIdB, {});
++  manager_->InvalidateFrameSinkId(kFrameSinkIdC, {});
++  manager_->InvalidateFrameSinkId(kFrameSinkIdRoot, {});
++}
++
+ INSTANTIATE_TEST_SUITE_P(All,
+                          AndroidFrameSinkManagerTest,
+                          ::testing::Bool(),

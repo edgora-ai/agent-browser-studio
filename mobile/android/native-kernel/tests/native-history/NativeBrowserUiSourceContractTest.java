@@ -57,6 +57,7 @@ public final class NativeBrowserUiSourceContractTest {
         nativeFontContinuity();
         nonDestructiveQuiescence();
         drainAndRejectedActivityRecords();
+        asyncHistoryIntegration();
         privateLifecycleStages();
         eventDrivenForegroundVisibility();
         realPreviewOwnership();
@@ -349,8 +350,9 @@ public final class NativeBrowserUiSourceContractTest {
         }
         has(method("NewTabPage", "applyPalette"), "BrowserDialogs.applyPalette", "NTP retains/repaints its live dialog");
         has(method("HistoryPanel", "applyPalette"), "BrowserDialogs.applyPalette", "history retains/repaints live dialogs");
-        has(method("TabSwitcherView", "rebuild"), "cardPalette.clear()", "replaced tab cards release old view bindings");
-        has(method("TabSwitcherView", "dismiss"), "cardPalette.clear()", "dismissed tab cards release view bindings");
+        has(method("TabSwitcherView", "rebuild"), "releaseCards()", "real reflows retire the replaced card bindings");
+        has(method("TabSwitcherView", "releaseCards"), "cardPalette.clear()", "retired cards release palette view bindings");
+        lacks(method("TabSwitcherView", "dismiss"), "cardPalette.clear()", "warm dismiss retains repaint bindings for hidden theme changes");
         has(method("BrowserDialogs", "danger"), "ON_DANGER()", "danger foreground has its own contrast role");
         has(method("BrowserDialogs", "confirm"), "applySystemBarAppearance", "dialog has its own window appearance binding");
         has(method("NativeBrowserActivity", "applySystemBarPalette"), "setBackgroundDrawable", "transparent bars have a palette-aware window underlay");
@@ -420,8 +422,8 @@ public final class NativeBrowserUiSourceContractTest {
         }
         before(method("NewTabPage", "refresh"), "tileFonts.clear()", "tiles.removeAllViews()", "replaced tile fonts retire");
         before(method("HistoryPanel", "rebuild"), "rowFonts.clear()", "list.removeAllViews()", "replaced history fonts retire");
-        before(method("TabSwitcherView", "rebuild"), "cardFonts.clear()", "grid.removeAllViews()", "replaced card fonts retire");
-        has(method("TabSwitcherView", "dismiss"), "cardFonts.clear()", "dismissed card fonts retire");
+        before(method("TabSwitcherView", "releaseCards"), "cardFonts.clear()", "grid.removeAllViews()", "retired card fonts release removed views");
+        lacks(method("TabSwitcherView", "dismiss"), "cardFonts.clear()", "warm dismiss retains font bindings for hidden font changes");
         before(method("NativeBrowserActivity", "refreshUrlSuggestions"), "suggestionFonts.clear()", "urlSuggest.removeAllViews()",
                 "replaced suggestion fonts retire");
         String menu = method("NativeBrowserActivity", "showMenu");
@@ -520,6 +522,52 @@ public final class NativeBrowserUiSourceContractTest {
         has(method("NativeBrowserActivity", "current"), "!quiescing", "all observer callbacks honor shutdown");
         before(method("NativeBrowserActivity", "closeNativeView"), "quiesceForShutdown()", "shell.close()",
                 "destruction can occur only after the local barrier");
+        before(method("NativeBrowserActivity", "closeNativeView"), "dismissTabSwitcher()", "tabSwitcher.release()",
+                "permanent close dismisses before releasing retained overview cards");
+        before(method("NativeBrowserActivity", "closeNativeView"), "tabSwitcher.release()", "shell.close()",
+                "permanent close releases retained overview Shell metadata before native Shell closure");
+        has(cancel, "setLoadFeedbackVisible(false)", "cancelled UI work hides load feedback through its shared helper");
+        String loadFeedback = method("NativeBrowserActivity", "setLoadFeedbackVisible");
+        has(loadFeedback, "progressBar == null", "load feedback handles absent startup chrome");
+        has(loadFeedback, "View.VISIBLE : View.INVISIBLE", "load feedback keeps its layout slot in either state");
+        has(loadFeedback, "progressBar.getVisibility() != visibility", "repeated load feedback state does not reapply visibility");
+        lacks(loadFeedback, "View.GONE", "load feedback never toggles the page-facing slot out of layout");
+        String loadChrome = method("NativeBrowserActivity", "buildChrome");
+        has(loadChrome, "loadBar.setVisibility(View.INVISIBLE)", "loading slot starts hidden without being removed from layout");
+        has(loadChrome, "progressBar, new LinearLayout.LayoutParams(-1, dp(3))", "existing source declares the stable 3dp loading slot");
+        String chrome = method("NativeBrowserActivity", "refreshChrome");
+        has(chrome, "barOwner != null && !barOwner.isDestroyed() && barOwner == active",
+                "load feedback still belongs only to the current live active Shell");
+        has(chrome, "setLoadFeedbackVisible(", "chrome uses shared feedback state instead of direct visibility churn");
+    }
+
+    private static void asyncHistoryIntegration() {
+        String attach = method("NativeBrowserActivity", "attachHistorySurfaces");
+        has(attach, "runtime.historyStore()", "history worker/model belongs to runtime, not recreated Activity");
+        lacks(attach, "new BrowserHistoryStore", "recreated Activity cannot race another profile writer");
+        before(attach, "createHistorySurfaces()", "addLoadListener(historyLoaded)", "views exist before posted data publication");
+        has(method("NativeBrowserRuntime", "historyStore"), "if (historyStore == null)", "lazy single launch store");
+        has(method("NativeBrowserActivity", "closeNativeView"), "removeLoadListener(historyLoaded)", "retired UI cancels queued data delivery");
+        String loaded = method("NativeBrowserActivity", "onHistoryLoaded");
+        before(loaded, "!current()", "newTab.refresh()", "old history publication cannot mutate stale UI");
+        has(loaded, "historyPanel.refreshIfVisible()", "history publication refresh preserves open query");
+        has(loaded, "address.hasFocus()", "late history can populate suggestions without stealing focus");
+        String visible = method("HistoryPanel", "refreshIfVisible");
+        lacks(visible, "requestFocus", "history data completion does not steal editor focus");
+        lacks(visible, "searchQuery =", "history data completion retains search query");
+        for (String owner : List.of("NewTabPage", "HistoryPanel")) {
+            String refresh = method(owner, owner.equals("NewTabPage") ? "refresh" : "rebuild");
+            has(refresh, "store.isLoaded()", "pending history is not normal empty in " + owner);
+            has(refresh, "store.hasLoadError()", "IO read failure is not normal empty in " + owner);
+        }
+        has(method("NewTabPage", "refresh"), "empty || pending || failed", "pending-only NTP tiles cannot conceal incomplete load");
+        before(source("NewTabPage.java"), "column.addView(emptyState)", "column.addView(tiles,", "partial history status remains before known tiles");
+        has(method("HistoryPanel", "show"), "store.flush()", "explicit history reopen retries failed read");
+        has(method("NewTabPage", "onShown"), "store.flush()", "NTP reopen retries failed read without polling");
+        String begin = method("NativeBrowserRuntime", "beginDrain");
+        before(begin, "current.quiesceForShutdown()", "historyStore.flush(", "stop UI mutations before history fence");
+        has(begin, "historyConfirmed == null || nativeOutcome == null", "exit waits on both independently asynchronous attempts");
+        has(begin, "Boolean.TRUE.equals(historyConfirmed) ? nativeOutcome : \"FAILED\"", "history failure cannot inherit native success");
     }
 
     private static void drainAndRejectedActivityRecords() {
@@ -786,9 +834,58 @@ public final class NativeBrowserUiSourceContractTest {
         has(method("TabSwitcherView", "refresh"), "canUpdateCards(items, columns)", "unchanged shell order updates retained cards");
         has(method("TabSwitcherView", "onMeasure"), "View.MeasureSpec.getSize(widthMeasureSpec)", "reflow observes the new measured width, not a stale previous width");
         lacks(method("TabSwitcherView", "refresh"), ".post(", "refresh never restores against an old or empty layout range");
-        has(method("TabSwitcherView", "onDetachedFromWindow"), "cancelScrollWork()", "detached overview cancels pending layout work");
+        has(method("TabSwitcherView", "onDetachedFromWindow"), "release()", "detach uses permanent retained-card cleanup");
         has(method("TabSwitcherView", "dismiss"), "cancelScrollWork()", "shutdown/dismiss cancels deferred scrolling");
-        has(method("TabSwitcherView", "dismiss"), "grid.removeAllViews()", "dismiss drops stale ImageView references");
+        check(compact(switcher).split(java.util.regex.Pattern.quote("stopScrollAnimation("), -1).length == 5,
+                "native settlement has exactly three lifecycle call sites plus its declaration");
+        check(compact(switcher).split(java.util.regex.Pattern.quote("scrollToActiveCard("), -1).length == 3,
+                "active reveal is invoked only once, from its deferred layout branch");
+        has(method("TabSwitcherView", "onLayout"), "if (revealOnLayout)", "native final reveal stays guarded by one-shot layout ownership");
+        String stopScroll = method("TabSwitcherView", "stopScrollAnimation");
+        has(stopScroll, "boolean previous = internalScroll", "native settlement preserves the enclosing internal-scroll ownership");
+        before(stopScroll, "internalScroll = true", "scroll.scrollTo(0, scroll.getScrollY())", "the complete settlement is guarded as internal work");
+        has(stopScroll, "finally", "native settlement restores ownership even on failure");
+        has(stopScroll, "internalScroll = previous", "native settlement restores the previous internal-scroll guard");
+        before(stopScroll, "scroll.scrollTo(0, scroll.getScrollY())", "scroll.fling(0)",
+                "native zero-velocity replacement starts in the public clamped range, not springback");
+        before(stopScroll, "scroll.fling(0)", "scroll.computeScroll()",
+                "consume zero-velocity absolute offset synchronously before active reveal");
+        String dismiss = method("TabSwitcherView", "dismiss");
+        before(dismiss, "cancelScrollWork()", "setVisibility(View.GONE)", "dismiss first cancels logical anchor ownership");
+        before(dismiss, "setVisibility(View.GONE)", "stopScrollAnimation()", "dismiss settles native work only while hidden");
+        before(dismiss, "stopScrollAnimation()", "releasePreview()", "dismiss settles before releasing hidden previews");
+        before(method("TabSwitcherView", "show"), "stopScrollAnimation()", "setVisibility(View.VISIBLE)",
+                "reopen settles hidden native work before showing or revealing active");
+        before(method("TabSwitcherView", "scrollToActiveCard"), "stopScrollAnimation()", "scrollInternallyTo(",
+                "first active reveal settles work created during super layout before setting its final offset");
+        before(method("TabSwitcherView", "onLayout"), "super.onLayout(", "scrollToActiveCard()",
+                "first reveal native settlement follows the complete super layout");
+        lacks(method("TabSwitcherView", "refresh"), "stopScrollAnimation", "live data refresh cannot stop native motion");
+        lacks(method("TabSwitcherView", "restoreScrollPosition"), "stopScrollAnimation", "logical anchor restoration is not a lifecycle stop");
+        lacks(method("TabSwitcherView", "cancelScrollWork"), "stopScrollAnimation", "ordinary navigation cancellation never settles native motion");
+        lacks(method("TabSwitcherView", "cancelScrollWork"), ".fling(", "input cancellation cannot replace a real fling");
+        lacks(stopScroll, "post", "lifecycle settlement never races active reveal with a posted callback");
+        lacks(stopScroll, "MotionEvent", "lifecycle settlement never injects input");
+        lacks(stopScroll, "reflect", "lifecycle settlement uses public native APIs, never reflection");
+        has(method("TabSwitcherView", "dismiss"), "releasePreview()", "warm dismiss releases ImageView and TabItem preview references");
+        lacks(method("TabSwitcherView", "dismiss"), "removeAllViews", "ordinary dismiss preserves bounded card/row structure");
+        has(method("TabSwitcherView", "release"), "releaseCards()", "permanent cleanup drops all retained card/Shell bindings");
+        has(method("TabSwitcherView", "releaseCards"), "grid.removeAllViews()", "permanent cleanup removes retired card rows");
+        has(method("CardBinding", "release"), "item = null", "retired callbacks cannot keep a closed Shell identity");
+        has(method("CardBinding", "releasePreview"), "item = new TabItem(null", "hidden metadata releases both preview and strong Shell ownership");
+        has(method("TabSwitcherView", "canUpdateCards"), "shellIdentity.get()", "retained warm card identity is compared through weak references");
+        before(method("TabSwitcherView", "refresh"), "if (!isShowing()) return", "shownItems =",
+                "hidden refresh cannot reacquire strong Shell or preview ownership");
+        has(method("CardBinding", "release"), "shellIdentity.clear()", "retired cards clear their last weak identity");
+        has(method("TabSwitcherView", "show"), "refresh(items)", "new opens reuse existing differential/structural refresh checks");
+        String open = method("TabSwitcherView", "show");
+        check(open.lastIndexOf("revealOnLayout = true") < open.lastIndexOf("refresh(items)"),
+                "new opens reveal active instead of restoring the hidden viewport");
+        String bind = method("CardBinding", "bind");
+        has(bind, "previous.active != item.active", "data binding repaints selection only when it changes");
+        has(bind, "previous.title, item.title", "preview-only binding does not rebuild title/a11y metadata");
+        has(bind, "previous.displayUrl, item.displayUrl", "preview-only binding does not recompute URL metadata");
+        has(bind, "if (previous != null) applyPalette()", "initial palette binding registration is not duplicated by bind");
         lacks(switcher, ".recycle()", "overview never recycles displayed bitmaps");
         for (String overlay : List.of("NewTabPage", "HistoryPanel")) {
             has(method(overlay, "quiesce"), "quiescing = true", "permanent action barrier: " + overlay);

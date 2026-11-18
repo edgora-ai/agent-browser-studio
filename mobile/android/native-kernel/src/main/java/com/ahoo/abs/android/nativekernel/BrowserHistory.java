@@ -10,9 +10,10 @@ import java.util.List;
 import java.util.Locale;
 
 /**
- * Pure per-profile, site-level browsing history. Instances are not thread-safe; the owner
- * touches them on the main thread. Only HTTP(S) origins are retained, never URL userinfo,
- * paths, queries or fragments. Titles do not independently increment visit counts.
+ * Pure per-profile, site-level browsing history. Instances are not thread-safe and are
+ * thread-confined: the UI owns the live model, while a persistence worker exclusively owns
+ * a detached copy or a not-yet-published loaded model. Only HTTP(S) origins are retained,
+ * never URL userinfo, paths, queries or fragments. Titles do not increment visit counts.
  */
 public final class BrowserHistory {
     public static final int MAX_SITES = 200;
@@ -42,6 +43,19 @@ public final class BrowserHistory {
     }
 
     private final LinkedHashMap<String, SiteVisit> sites = new LinkedHashMap<>();
+
+    /**
+     * Copies the bounded model without serialization. A persistence worker owns the returned
+     * instance exclusively; its mutable rows never alias rows still owned by the UI thread.
+     */
+    BrowserHistory copy() {
+        BrowserHistory copy = new BrowserHistory();
+        for (SiteVisit visit : sites.values()) {
+            copy.sites.put(visit.origin, new SiteVisit(visit.origin, visit.title,
+                    visit.lastVisitMillis, visit.visitCount));
+        }
+        return copy;
+    }
 
     /**
      * Returns a canonical scheme://host[:port], or null for malformed/non-HTTP(S) URLs.
@@ -400,7 +414,8 @@ public final class BrowserHistory {
         }
     }
 
-    private static String cleanTitle(String title) {
+    /** Also bounds text retained by the owner's deferred mutation journal. */
+    static String cleanTitle(String title) {
         if (title == null) return "";
         StringBuilder out = new StringBuilder(Math.min(title.length(), MAX_TITLE_CHARS));
         for (int i = 0; i < title.length() && out.length() < MAX_TITLE_CHARS;) {

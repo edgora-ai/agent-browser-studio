@@ -21,6 +21,7 @@ import android.widget.TextView;
 
 import org.chromium.content_shell.Shell;
 
+import java.lang.ref.WeakReference;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -209,13 +210,20 @@ final class TabSwitcherView extends FrameLayout {
 
     /** Makes the switcher visible and reveals the active card after its first layout. */
     void show(List<TabItem> items) {
+        if (isShowing()) {
+            refresh(items);
+            return;
+        }
         cancelScrollWork();
+        stopScrollAnimation();
         setVisibility(View.VISIBLE);
         setAlpha(0f);
         setTranslationY(dp(18));
         animate().alpha(1f).translationY(0f).setDuration(200).start();
-        rebuild(items, columnCount());
+        // New opens reveal the current active card; live refreshes keep their viewport.
+        // Set this before refresh so a real reflow cannot capture the hidden viewport.
         revealOnLayout = true;
+        refresh(items);
     }
 
     /** Preview/title/selection changes must not detach rows or reset a live scroll viewport. */
@@ -227,7 +235,15 @@ final class TabSwitcherView extends FrameLayout {
             activeCard = null;
             for (int i = 0; i < cards.size(); i++) {
                 CardBinding binding = cards.get(i);
-                binding.bind(shownItems.get(i));
+                TabItem next = shownItems.get(i);
+                TabItem previous = binding.item;
+                Bitmap preview = next.preview != null && !next.preview.isRecycled() ? next.preview : null;
+                if (previous.shell != next.shell || previous.active != next.active || previous.preview != next.preview
+                        || !java.util.Objects.equals(previous.title, next.title)
+                        || !java.util.Objects.equals(previous.displayUrl, next.displayUrl)
+                        || binding.boundPreview != preview) {
+                    binding.bind(next);
+                }
                 if (binding.item.active) activeCard = binding.card;
             }
             return;
@@ -240,7 +256,7 @@ final class TabSwitcherView extends FrameLayout {
         int count = items == null ? 0 : items.size();
         if (columns != gridColumns || count != cards.size() || layoutMetricsChanged()) return false;
         for (int i = 0; i < count; i++) {
-            if (cards.get(i).item.shell != items.get(i).shell) return false;
+            if (cards.get(i).shellIdentity.get() != items.get(i).shell) return false;
         }
         return true;
     }
@@ -287,15 +303,46 @@ final class TabSwitcherView extends FrameLayout {
     }
 
     void dismiss() {
-        setVisibility(View.GONE);
         cancelScrollWork();
-        // Release ImageView references without recycling bitmaps still owned by display lists.
+        setVisibility(View.GONE);
+        stopScrollAnimation();
+        // Keep only the last bounded card structure/identity metadata across GONE.
+        // Neither ImageViews nor retained TabItems may keep old previews alive; published
+        // bitmaps can still belong to display lists and must never be recycled here.
+        shownItems.clear();
+        for (CardBinding binding : cards) binding.releasePreview();
+        activeCard = null;
+    }
+
+    /** Permanent teardown, separate from a warm ordinary dismiss. Safe to repeat. */
+    void release() {
+        dismiss();
+        releaseCards();
+        gridColumns = 0;
+    }
+
+    private void releaseCards() {
         cardPalette.clear();
         cardFonts.clear();
+        for (CardBinding binding : cards) binding.release();
         cards.clear();
-        shownItems.clear();
-        grid.removeAllViews();
         activeCard = null;
+        if (grid.getChildCount() > 0) grid.removeAllViews();
+    }
+
+    /** Settle native work at lifecycle boundaries, before it can overwrite an active-card reveal. */
+    private void stopScrollAnimation() {
+        boolean previous = internalScroll;
+        internalScroll = true;
+        try {
+            // Outside the current range, even a zero-velocity fling can animate back from an edge.
+            scroll.scrollTo(0, scroll.getScrollY());
+            scroll.fling(0);
+            // Consume its final absolute offset now, not on a frame after the next reveal.
+            scroll.computeScroll();
+        } finally {
+            internalScroll = previous;
+        }
     }
 
     private void cancelScrollWork() {
@@ -326,7 +373,7 @@ final class TabSwitcherView extends FrameLayout {
 
     @Override
     protected void onDetachedFromWindow() {
-        cancelScrollWork();
+        release();
         super.onDetachedFromWindow();
     }
 
@@ -350,6 +397,8 @@ final class TabSwitcherView extends FrameLayout {
 
     private void scrollToActiveCard() {
         if (!isShowing() || activeCard == null) return;
+        // super.onLayout may have created fresh native focus/size scrolling since show().
+        stopScrollAnimation();
         View row = (View) activeCard.getParent();
         int top = row == null ? activeCard.getTop() : row.getTop();
         scrollInternallyTo(Math.max(0, top - dp(8)));
@@ -468,6 +517,7 @@ final class TabSwitcherView extends FrameLayout {
         back.setMinimumHeight(dp(48));
         back.setContentDescription("返回浏览器");
         back.setOnClickListener(view -> {
+            if (!isShowing()) return;
             view.performHapticFeedback(android.view.HapticFeedbackConstants.KEYBOARD_TAP);
             if (listener != null) listener.onDismiss();
         });
@@ -499,6 +549,7 @@ final class TabSwitcherView extends FrameLayout {
         create.setMinimumHeight(dp(48));
         create.setContentDescription("新建标签页");
         create.setOnClickListener(view -> {
+            if (!isShowing()) return;
             view.performHapticFeedback(android.view.HapticFeedbackConstants.KEYBOARD_TAP);
             if (listener != null) listener.onNewTab();
         });
@@ -552,11 +603,7 @@ final class TabSwitcherView extends FrameLayout {
         gridColumns = columns;
         gridDensity = getResources().getDisplayMetrics().density;
         gridFontScale = getResources().getConfiguration().fontScale;
-        cards.clear();
-        activeCard = null;
-        cardPalette.clear();
-        cardFonts.clear();
-        grid.removeAllViews();
+        releaseCards();
         int count = shownItems.size();
         countLabel.setText("· " + count);
         if (count == 0) {
@@ -598,6 +645,8 @@ final class TabSwitcherView extends FrameLayout {
     /** Stable card identity; preview height has a 122dp floor, not a large-font cap. */
     private final class CardBinding {
         private TabItem item;
+        // Hidden cards keep identity for reuse, never ownership of a possibly closed Shell.
+        private final WeakReference<Shell> shellIdentity;
         private Bitmap boundPreview;
         private final LinearLayout card;
         private final FrameLayout preview;
@@ -614,7 +663,7 @@ final class TabSwitcherView extends FrameLayout {
         private final GradientDrawable closeBackground;
 
         CardBinding(TabItem item) {
-            this.item = item;
+            shellIdentity = new WeakReference<>(item.shell);
             Context context = getContext();
             card = new LinearLayout(context) {
                 @Override
@@ -634,6 +683,7 @@ final class TabSwitcherView extends FrameLayout {
                     android.content.res.ColorStateList.valueOf(NativeBrowserActivity.C_RIPPLE), null, rounded(CARD, 18)));
             card.setPadding(dp(6), dp(6), dp(6), dp(12));
             card.setOnClickListener(view -> {
+                if (!isShowing() || this.item == null) return;
                 view.performHapticFeedback(android.view.HapticFeedbackConstants.KEYBOARD_TAP);
                 if (listener != null) listener.onSelect(this.item.shell);
             });
@@ -683,6 +733,7 @@ final class TabSwitcherView extends FrameLayout {
             close.setBackground(closeBackground);
             close.setElevation(dp(1));
             close.setOnClickListener(view -> {
+                if (!isShowing() || this.item == null) return;
                 view.performHapticFeedback(android.view.HapticFeedbackConstants.KEYBOARD_TAP);
                 if (listener != null) listener.onClose(this.item.shell);
             });
@@ -719,27 +770,62 @@ final class TabSwitcherView extends FrameLayout {
         }
 
         void bind(TabItem next) {
+            TabItem previous = item;
             item = next;
-            String label = cardTitle(item);
-            String subtitle = cardSubtitle(item);
-            setTextIfChanged(title, label);
-            setTextIfChanged(url, subtitle);
-            setTextIfChanged(hostLabel, subtitle);
-            setTextIfChanged(avatar, label.isEmpty() ? "•" : new String(Character.toChars(label.codePointAt(0))));
-            card.setContentDescription("切换到标签页：" + label);
-            close.setContentDescription("关闭标签页：" + label);
-            badge.setVisibility(item.active ? View.VISIBLE : View.GONE);
-            card.setElevation(item.active ? dp(3) : dp(1.5f));
-            Bitmap nextPreview = item.preview != null && !item.preview.isRecycled() ? item.preview : null;
-            if (boundPreview != nextPreview) {
-                image.setImageBitmap(nextPreview);
-                boundPreview = nextPreview;
+            if (previous == null || !java.util.Objects.equals(previous.title, item.title)) {
+                String label = cardTitle(item);
+                setTextIfChanged(title, label);
+                setTextIfChanged(avatar, label.isEmpty() ? "•" : new String(Character.toChars(label.codePointAt(0))));
+                String selectLabel = "切换到标签页：" + label;
+                String closeLabel = "关闭标签页：" + label;
+                if (card.getContentDescription() == null
+                        || !selectLabel.contentEquals(card.getContentDescription())) card.setContentDescription(selectLabel);
+                if (close.getContentDescription() == null
+                        || !closeLabel.contentEquals(close.getContentDescription())) close.setContentDescription(closeLabel);
             }
-            image.setVisibility(nextPreview == null ? View.GONE : View.VISIBLE);
-            placeholder.setVisibility(nextPreview == null ? View.VISIBLE : View.GONE);
-            boolean blank = item.displayUrl != null && item.displayUrl.startsWith("about:blank");
-            note.setVisibility(blank ? View.GONE : View.VISIBLE);
-            applyPalette();
+            if (previous == null || !java.util.Objects.equals(previous.displayUrl, item.displayUrl)) {
+                String subtitle = cardSubtitle(item);
+                setTextIfChanged(url, subtitle);
+                setTextIfChanged(hostLabel, subtitle);
+                boolean blank = item.displayUrl != null && item.displayUrl.startsWith("about:blank");
+                note.setVisibility(blank ? View.GONE : View.VISIBLE);
+            }
+            if (previous == null || previous.active != item.active) {
+                badge.setVisibility(item.active ? View.VISIBLE : View.GONE);
+                card.setElevation(item.active ? dp(3) : dp(1.5f));
+                // Initial palette application belongs to the binding registration below;
+                // only a later selection change needs to repaint as part of a data bind.
+                if (previous != null) applyPalette();
+            }
+            Bitmap nextPreview = item.preview != null && !item.preview.isRecycled() ? item.preview : null;
+            if (boundPreview != nextPreview || previous == null) {
+                if (boundPreview != nextPreview) image.setImageBitmap(nextPreview);
+                boundPreview = nextPreview;
+                image.setVisibility(nextPreview == null ? View.GONE : View.VISIBLE);
+                placeholder.setVisibility(nextPreview == null ? View.VISIBLE : View.GONE);
+            }
+        }
+
+        void releasePreview() {
+            clearPreview();
+            if (item.shell != null || item.preview != null) {
+                item = new TabItem(null, item.title, item.displayUrl, item.active, null);
+            }
+        }
+
+        private void clearPreview() {
+            if (boundPreview != null) image.setImageBitmap(null);
+            boundPreview = null;
+            image.setVisibility(View.GONE);
+            placeholder.setVisibility(View.VISIBLE);
+        }
+
+        void release() {
+            clearPreview();
+            shellIdentity.clear();
+            item = null;
+            card.setOnClickListener(null);
+            close.setOnClickListener(null);
         }
 
         void applyPalette() {

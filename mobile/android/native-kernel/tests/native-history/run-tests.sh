@@ -27,3 +27,6 @@ printf 'JDK17 regression output: %s\n' "$CLASSES"
 "$JDK17/bin/java" -ea -cp "$CLASSES" NativeBrowserFontHostTest "$ROOT" "$CLASSES"
 "$JDK17/bin/java" -ea -cp "$CLASSES" NativeBrowserRecoveryHostTest "$ROOT" "$CLASSES"
 "$JDK17/bin/java" -ea -cp "$CLASSES" NativeNetworkLaunchHostTest "$ROOT" "$CLASSES"
+# Compile the actual async Store/model against controlled Android I/O/Looper substitutes.
+JAVA17_HOME="$JDK17" NATIVE_HISTORY_STORE_TEST_OUTPUT_ROOT="$TEST_OUTPUT_ROOT" \
+    bash "$SCRIPT_DIR/../native-history-store/run-tests.sh" "$ROOT"

@@ -27,6 +27,7 @@ public final class NativeBrowserRuntime implements BrowserProcessRuntime {
     private final Proof networkConfinement = Proof.UNVERIFIED;
     private final Proof storageLifecycle = Proof.UNVERIFIED;
     private NativeBrowserActivity view;
+    private BrowserHistoryStore historyStore;
     private long generation;
     private boolean draining;
     private boolean drainReturned;
@@ -104,6 +105,14 @@ public final class NativeBrowserRuntime implements BrowserProcessRuntime {
                 storageLifecycle == Proof.VERIFIED));
     }
 
+    /** One UI-owned model/worker pipeline survives Activity recreation within this launch. */
+    BrowserHistoryStore historyStore() {
+        requireMain();
+        if (draining) throw new IllegalStateException("HISTORY_RUNTIME_DRAINING");
+        if (historyStore == null) historyStore = new BrowserHistoryStore(application, launch.profile.id);
+        return historyStore;
+    }
+
     void detach(NativeBrowserActivity activity) {
         requireMain();
         if (view == activity) {
@@ -122,23 +131,56 @@ public final class NativeBrowserRuntime implements BrowserProcessRuntime {
         view = null;
         drainTimeout = () -> finishDrain(drainGeneration, current, callback, "TIMED_OUT");
         main.postDelayed(drainTimeout, DRAIN_TIMEOUT_MS);
+        // Neither an enqueued history save nor a native-only acknowledgment permits exit.
+        // Keep independent completions local to this drain; the existing timeout bounds both.
+        final class StorageBarrier {
+            Boolean historyConfirmed;
+            String nativeOutcome;
+            boolean quiesced = true;
+
+            void completeIfReady() {
+                if (historyConfirmed == null || nativeOutcome == null) return;
+                finishDrain(drainGeneration, current, callback,
+                        quiesced && Boolean.TRUE.equals(historyConfirmed) ? nativeOutcome : "FAILED");
+            }
+        }
+        StorageBarrier barrier = new StorageBarrier();
         try {
-            // Revoke interaction and hide/stop live pages, but keep Shells and their
-            // BrowserContext alive until the native commit attempt replies.
+            // Revoke interaction and hide/stop live pages, keeping Shells/BrowserContext
+            // alive until both storage attempts reply (or the bounded timeout expires).
             if (current != null) current.quiesceForShutdown();
+        } catch (RuntimeException | LinkageError failure) {
+            barrier.quiesced = false;
+        }
+        try {
+            if (historyStore == null) {
+                barrier.historyConfirmed = true; // This runtime never opened or edited history.
+            } else {
+                historyStore.flush(confirmed -> {
+                    barrier.historyConfirmed = confirmed;
+                    barrier.completeIfReady();
+                });
+            }
+        } catch (RuntimeException | LinkageError failure) {
+            barrier.historyConfirmed = false;
+        }
+        try {
             // A loaded library does not imply that BrowserThread/UI and the native
             // task runner exist. Startup can fail after load but before ContentMain.
             if (!LibraryLoader.getInstance().isInitialized()
                     || !BrowserStartupController.getInstance().isFullBrowserStarted()) {
-                finishDrain(drainGeneration, current, callback, "NOT_ATTEMPTED");
-                return;
+                barrier.nativeOutcome = "NOT_ATTEMPTED";
+            } else {
+                ShellManager.flushPersistentStorageForShutdown(confirmed -> {
+                    barrier.nativeOutcome = Boolean.TRUE.equals(confirmed)
+                            ? "LOCAL_STORAGE_CONFIRMED_COOKIE_ACK" : "FAILED";
+                    barrier.completeIfReady();
+                });
             }
-            ShellManager.flushPersistentStorageForShutdown(confirmed -> finishDrain(
-                    drainGeneration, current, callback,
-                    Boolean.TRUE.equals(confirmed) ? "LOCAL_STORAGE_CONFIRMED_COOKIE_ACK" : "FAILED"));
         } catch (RuntimeException | LinkageError failure) {
-            finishDrain(drainGeneration, current, callback, "FAILED");
+            barrier.nativeOutcome = "FAILED";
         }
+        barrier.completeIfReady();
     }
 
     private void finishDrain(long expectedGeneration, NativeBrowserActivity current,

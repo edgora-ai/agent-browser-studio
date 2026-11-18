@@ -24,7 +24,9 @@ import javax.tools.ToolProvider;
 
 /**
  * Pure-JDK deterministic callback/order tests of source-extracted production lifecycle methods.
- * Android, native flushing, Shell teardown, navigation and the main-loop scheduler are fake hosts.
+ * Android, history/native flush completions, Shell teardown, navigation and the main-loop scheduler
+ * are fake hosts. The runtime getter and two-completion drain barrier are extracted, not reimplemented.
+ * History initialization/write waits below are controlled callback scenarios, not real history I/O.
  * This is not a full Android compile, an ActivityManager/device test or any persistence proof.
  */
 public final class NativeBrowserLifecycleHostTest {
@@ -40,9 +42,9 @@ public final class NativeBrowserLifecycleHostTest {
         JavaCompiler compiler = ToolProvider.getSystemJavaCompiler();
         Path source = root.resolve("mobile/android/native-kernel/src/main/java/com/ahoo/abs/android/nativekernel");
         parse(compiler, List.of(source.resolve("NativeBrowserRuntime.java"), source.resolve("NativeBrowserActivity.java")));
-        String runtime = fieldMembers("NativeBrowserRuntime", List.of("TAG", "application", "view", "generation",
+        String runtime = fieldMembers("NativeBrowserRuntime", List.of("TAG", "application", "launch", "view", "historyStore", "generation",
                 "draining", "drainReturned", "drainTimeout", "main", "DRAIN_TIMEOUT_MS", "status"))
-                + methodMembers("NativeBrowserRuntime", List.of("attach", "isCurrent", "detach", "beginDrain", "finishDrain", "requireMain"));
+                + methodMembers("NativeBrowserRuntime", List.of("attach", "isCurrent", "historyStore", "detach", "beginDrain", "finishDrain", "requireMain"));
         String activity = fieldMembers("NativeBrowserActivity", List.of("TAG", "application", "runtime", "generation",
                 "closed", "quiescing", "cleanupComplete", "uiBuilt", "manager", "pageContainer"))
                 + methodMembers("NativeBrowserActivity", List.of("validateIntent", "current", "startupFailed", "returnToList", "onNewIntent", "onDestroy", "onStatus"));
@@ -134,6 +136,7 @@ public final class NativeBrowserLifecycleHostTest {
                     events.clear(); logs.clear(); Handler.posted.clear(); Handler.delayed.clear(); Handler.lastDelay = 0;
                     ShellManager.pending = null; ShellManager.failure = null;
                     ShellManager.synchronous = false; ShellManager.confirmed = true;
+                    BrowserHistoryStore.creations = 0; Looper.current = Looper.main;
                     LibraryLoader.instance.initialized = true; BrowserStartupController.instance.started = true;
                 }
                 static final class Log {
@@ -142,7 +145,8 @@ public final class NativeBrowserLifecycleHostTest {
                 }
                 static final class Looper {
                     static final Looper main = new Looper();
-                    static Looper myLooper() { return main; }
+                    static Looper current = main;
+                    static Looper myLooper() { return current; }
                     static Looper getMainLooper() { return main; }
                 }
                 static final class Handler {
@@ -182,6 +186,31 @@ public final class NativeBrowserLifecycleHostTest {
                         if (synchronous) callback.accept(confirmed);
                     }
                 }
+                /** Controls only when a flush callback is delivered; no disk/store algorithm here. */
+                static final class BrowserHistoryStore {
+                    interface FlushCallback { void onFlushed(boolean success); }
+                    static int creations;
+                    final NativeBrowserApplication context;
+                    final String profileId;
+                    FlushCallback pending;
+                    Throwable failure;
+                    boolean synchronous, confirmed = true, initializing, writeInFlight;
+                    int flushCalls;
+                    BrowserHistoryStore(NativeBrowserApplication context, String profileId) {
+                        this.context = context; this.profileId = profileId; creations++;
+                    }
+                    void flush(FlushCallback callback) {
+                        events.add("HISTORY_FLUSH"); flushCalls++; fail(failure); pending = callback;
+                        if (synchronous) reply(confirmed);
+                    }
+                    void reply(boolean success) {
+                        check(pending != null, "history callback was actually requested");
+                        pending.onFlushed(success);
+                    }
+                    void completeInitialization() { initializing = false; replyIfIdle(); }
+                    void completeWrite() { writeInFlight = false; replyIfIdle(); }
+                    private void replyIfIdle() { if (!initializing && !writeInFlight) reply(confirmed); }
+                }
                 static final class FrameLayout {
                     static final class LayoutParams {
                         final int width, height;
@@ -195,9 +224,11 @@ public final class NativeBrowserLifecycleHostTest {
                         attachments++;
                     }
                 }
+                static final class ProfileSpec { final String id = "profile-private-canary"; }
                 static final class LaunchSpec {
                     final String sessionId = "session-private-canary";
                     final String nonce = "nonce-private-canary";
+                    final ProfileSpec profile = new ProfileSpec();
                 }
                 static final class NativeBrowserApplication {
                     final LaunchSpec launch = new LaunchSpec();
@@ -277,7 +308,7 @@ public final class NativeBrowserLifecycleHostTest {
                 }
                 static final class NativeBrowserRuntime implements BrowserProcessRuntime {
                     @RUNTIME@
-                    NativeBrowserRuntime(NativeBrowserApplication app) { application = app; }
+                    NativeBrowserRuntime(NativeBrowserApplication app) { application = app; launch = app.requireLaunch(); }
                 }
                 static final class Fixture {
                     final NativeBrowserApplication app = new NativeBrowserApplication();
@@ -296,6 +327,7 @@ public final class NativeBrowserLifecycleHostTest {
                 static void callbackOutcomes() {
                     for (Boolean confirmed : Arrays.asList(true, false, null)) {
                         reset(); Fixture f = new Fixture(); f.drain();
+                        equal(BrowserHistoryStore.creations, 0, "native-only drain does not open an unused history store");
                         equal(events, List.of("QUIESCE", "FLUSH"), "no close/finish before native reply");
                         check(!f.activity.current(), "runtime revoked while quiescing");
                         equal(Handler.lastDelay, 5000L, "real five-second configured timeout extracted");
@@ -336,7 +368,7 @@ public final class NativeBrowserLifecycleHostTest {
                         if (mode == 6) f.activity.closeFailure = new UnsatisfiedLinkError("exception-private-canary");
                         if (mode == 7) f.activity.failFinish = true;
                         f.drain();
-                        if (mode >= 5) ShellManager.pending.accept(true);
+                        if (mode >= 4) ShellManager.pending.accept(true);
                         check(f.receipts.isEmpty(), "exception/not-attempted receipt still posted");
                         Handler.runPosted();
                         equal(f.receipts, List.of(mode < 2 ? "NOT_ATTEMPTED" : "FAILED"), "all failure outcomes remain fail-closed");
@@ -361,6 +393,197 @@ public final class NativeBrowserLifecycleHostTest {
                     ShellManager.pending.accept(true); Handler.runPosted();
                     equal(receipts, List.of("LOCAL_STORAGE_CONFIRMED_COOKIE_ACK"), "viewless runtime still reports native outcome");
                     equal(events, List.of("FLUSH"), "viewless drain invents no Activity teardown");
+                }
+                static void waitingForStorage(Fixture f, String label) {
+                    equal(f.activity.closeCalls, 0, label + " keeps Shells alive");
+                    equal(f.activity.finishes, 0, label + " cannot finish Activity");
+                    check(f.receipts.isEmpty(), label + " cannot report a drain result");
+                    check(f.runtime.drainTimeout != null && Handler.delayed.contains(f.runtime.drainTimeout),
+                            label + " retains the bounded timeout");
+                    boolean[] responsive = {false};
+                    f.runtime.main.post(() -> responsive[0] = true);
+                    Handler.runPosted();
+                    check(responsive[0], label + " returns to the main-loop host without waiting synchronously");
+                    check(f.receipts.isEmpty(), label + " stays pending across another main-loop turn");
+                }
+                static void completedStorage(Fixture f, String outcome, String label) {
+                    equal(f.activity.closeCalls, 1, label + " closes exactly once");
+                    equal(f.activity.finishes, 1, label + " finishes exactly once");
+                    check(f.receipts.isEmpty(), label + " posts rather than delivering the result inline");
+                    check(Handler.delayed.isEmpty(), label + " cancels the timeout");
+                    Handler.runPosted();
+                    equal(f.receipts, List.of(outcome), label + " reports the expected outcome once");
+                }
+                static void dualStorageOutcomes() {
+                    for (boolean nativeFirst : new boolean[] {false, true}) {
+                        for (Boolean nativeConfirmed : Arrays.asList(true, false, null)) {
+                            for (boolean historyConfirmed : new boolean[] {false, true}) {
+                                reset(); Fixture f = new Fixture(); BrowserHistoryStore history = f.runtime.historyStore();
+                                f.drain();
+                                equal(events, List.of("QUIESCE", "HISTORY_FLUSH", "FLUSH"), "both storage attempts start before close");
+                                equal(history.flushCalls, 1, "history durability callback requested once");
+                                check(!f.activity.current(), "two-storage drain immediately revokes Activity generation");
+                                equal(Handler.lastDelay, 5000L, "two-storage fence retains the real five-second timeout");
+                                Runnable timeout = Handler.delayed.get(0);
+                                waitingForStorage(f, "neither storage callback");
+                                if (nativeFirst) {
+                                    ShellManager.pending.accept(nativeConfirmed); ShellManager.pending.accept(nativeConfirmed);
+                                } else {
+                                    history.reply(historyConfirmed); history.reply(historyConfirmed);
+                                }
+                                waitingForStorage(f, nativeFirst ? "native-only completion" : "history-only completion");
+                                if (nativeFirst) history.reply(historyConfirmed);
+                                else ShellManager.pending.accept(nativeConfirmed);
+                                equal(events, List.of("QUIESCE", "HISTORY_FLUSH", "FLUSH", "CLOSE", "FINISH"),
+                                        "only the second storage completion permits ordered teardown");
+                                // Conflicting duplicates after completion must not change the first delivered result.
+                                ShellManager.pending.accept(!Boolean.TRUE.equals(nativeConfirmed));
+                                history.reply(!historyConfirmed); timeout.run();
+                                String expected = historyConfirmed && Boolean.TRUE.equals(nativeConfirmed)
+                                        ? "LOCAL_STORAGE_CONFIRMED_COOKIE_ACK" : "FAILED";
+                                completedStorage(f, expected, "two-completion barrier");
+                                ShellManager.pending.accept(true); history.reply(true); timeout.run(); Handler.runPosted();
+                                equal(f.receipts.size(), 1, "late duplicate callbacks cannot redeliver");
+                                f.activity.onDestroy();
+                                equal(f.activity.closeCalls, 1, "Android destruction after dual completion remains idempotent");
+                            }
+                        }
+                    }
+                }
+                static void synchronousStorageCombinations() {
+                    for (boolean historySync : new boolean[] {false, true}) {
+                        for (boolean nativeSync : new boolean[] {false, true}) {
+                            reset(); Fixture f = new Fixture(); BrowserHistoryStore history = f.runtime.historyStore();
+                            history.synchronous = historySync; ShellManager.synchronous = nativeSync;
+                            f.drain();
+                            if (!historySync || !nativeSync) waitingForStorage(f, "one or both synchronous callbacks absent");
+                            if (!nativeSync) {
+                                ShellManager.pending.accept(true);
+                                if (!historySync) waitingForStorage(f, "synchronous matrix still waiting for history");
+                            }
+                            if (!historySync) history.reply(true);
+                            completedStorage(f, "LOCAL_STORAGE_CONFIRMED_COOKIE_ACK", "synchronous callback ordering");
+                            equal(history.flushCalls, 1, "synchronous history fence is requested once");
+                        }
+                    }
+                }
+                static void historyInitializationAndInflightWaits() {
+                    for (int phase = 0; phase < 3; phase++) {
+                        reset(); Fixture f = new Fixture(); BrowserHistoryStore history = f.runtime.historyStore();
+                        history.initializing = phase != 1; history.writeInFlight = phase != 0;
+                        f.drain(); ShellManager.pending.accept(true);
+                        waitingForStorage(f, "host-controlled history initialization/write pending");
+                        if (history.initializing) {
+                            history.completeInitialization();
+                            if (history.writeInFlight) waitingForStorage(f, "initialization done but earlier history write still pending");
+                        }
+                        if (history.writeInFlight) history.completeWrite();
+                        completedStorage(f, "LOCAL_STORAGE_CONFIRMED_COOKIE_ACK", "history callback after pending work");
+                    }
+                }
+                static void storageFailuresAndMissingNative() {
+                    for (int mode = 0; mode < 6; mode++) {
+                        for (boolean historyConfirmed : new boolean[] {false, true}) {
+                            reset(); Fixture f = new Fixture(); BrowserHistoryStore history = f.runtime.historyStore();
+                            if (mode == 0) LibraryLoader.instance.initialized = false;
+                            if (mode == 1) BrowserStartupController.instance.started = false;
+                            if (mode == 2) ShellManager.failure = new IllegalStateException("exception-private-canary");
+                            if (mode == 3) ShellManager.failure = new UnsatisfiedLinkError("exception-private-canary");
+                            if (mode == 4) f.activity.quietFailure = new IllegalStateException("exception-private-canary");
+                            if (mode == 5) f.activity.quietFailure = new UnsatisfiedLinkError("exception-private-canary");
+                            f.drain();
+                            equal(history.flushCalls, 1, "history fence attempted despite missing/failed native or quiescence");
+                            if (mode < 2) {
+                                check(ShellManager.pending == null && !events.contains("FLUSH"), "uninitialized native runner is not entered");
+                            } else {
+                                check(events.contains("FLUSH"), "native flush attempted even after quiesce failure");
+                            }
+                            if (mode >= 4) ShellManager.pending.accept(true);
+                            waitingForStorage(f, "native terminal state cannot bypass pending history");
+                            history.reply(historyConfirmed);
+                            completedStorage(f, mode < 2 && historyConfirmed ? "NOT_ATTEMPTED" : "FAILED",
+                                    "history plus native/quiescence failure");
+                        }
+                    }
+                    for (Throwable failure : new Throwable[] {new IllegalStateException("exception-private-canary"),
+                            new UnsatisfiedLinkError("exception-private-canary")}) {
+                        reset(); Fixture f = new Fixture(); BrowserHistoryStore history = f.runtime.historyStore();
+                        history.failure = failure; f.drain();
+                        equal(history.flushCalls, 1, "throwing history flush was attempted");
+                        check(ShellManager.pending != null, "history throw cannot skip best-effort native flush");
+                        waitingForStorage(f, "history failure still awaits native");
+                        ShellManager.pending.accept(true);
+                        completedStorage(f, "FAILED", "throwing history fence cannot report success");
+                    }
+                }
+                static void dualStorageTimeouts() {
+                    for (int replied = 0; replied < 3; replied++) {
+                        reset(); Fixture f = new Fixture(); BrowserHistoryStore history = f.runtime.historyStore();
+                        f.drain(); Runnable timeout = Handler.delayed.get(0);
+                        if (replied == 1) ShellManager.pending.accept(true);
+                        if (replied == 2) history.reply(true);
+                        waitingForStorage(f, "timeout with zero or one storage replies");
+                        timeout.run();
+                        ShellManager.pending.accept(false); history.reply(false); timeout.run();
+                        completedStorage(f, "TIMED_OUT", "common two-storage deadline");
+                        ShellManager.pending.accept(true); history.reply(true); timeout.run(); Handler.runPosted();
+                        equal(f.activity.closeCalls, 1, "late storage callback cannot reclose timed-out Shells");
+                        equal(f.activity.finishes, 1, "late storage callback cannot refinish timed-out Activity");
+                        equal(f.receipts, List.of("TIMED_OUT"), "late success never upgrades the two-storage timeout");
+                    }
+                    reset(); Fixture stale = new Fixture(); BrowserHistoryStore history = stale.runtime.historyStore();
+                    stale.drain(); Runnable timeout = Handler.delayed.get(0);
+                    ShellManager.pending.accept(true); stale.runtime.generation++; history.reply(true); timeout.run(); Handler.runPosted();
+                    equal(stale.activity.closeCalls, 0, "stale two-storage generation cannot close a view");
+                    equal(stale.activity.finishes, 0, "stale history completion cannot finish a view");
+                    check(stale.receipts.isEmpty(), "stale history completion/timeout cannot deliver a receipt");
+                }
+                static void runtimeHistoryOwnership() {
+                    reset(); Fixture f = new Fixture();
+                    check(f.runtime.historyStore == null, "runtime does not eagerly initialize history");
+                    equal(BrowserHistoryStore.creations, 0, "construct/attach alone opens no history");
+                    BrowserHistoryStore history = f.runtime.historyStore();
+                    check(history == f.runtime.historyStore(), "repeated accessor returns the same runtime store");
+                    check(history.context == f.app, "history lifetime uses the Application rather than Activity");
+                    equal(history.profileId, f.app.launch.profile.id, "runtime store uses the immutable launch profile ID");
+                    f.activity.onDestroy();
+                    NativeBrowserActivity replacement = new NativeBrowserActivity();
+                    replacement.application = f.app; replacement.runtime = f.runtime;
+                    replacement.manager = new ShellManager(); replacement.pageContainer = new FrameLayout();
+                    replacement.generation = f.runtime.attach(replacement);
+                    check(f.runtime.historyStore() == history, "Activity recreation reuses the same history pipeline");
+                    equal(BrowserHistoryStore.creations, 1, "recreation cannot open a second history writer");
+                    f.drain();
+                    try { f.runtime.historyStore(); throw new AssertionError("draining runtime allowed history access"); }
+                    catch (IllegalStateException expected) {
+                        equal(expected.getMessage(), "HISTORY_RUNTIME_DRAINING", "drain rejects late history accessor");
+                    }
+                    equal(BrowserHistoryStore.creations, 1, "rejected drain accessor cannot create another store");
+                    ShellManager.pending.accept(true);
+                    equal(replacement.closeCalls, 0, "replacement Activity also waits for history fence");
+                    history.reply(true); Handler.runPosted();
+                    equal(replacement.closeCalls, 1, "drain closes only the replacement owner");
+                    equal(replacement.finishes, 1, "drain finishes only the replacement owner");
+                    equal(f.activity.closeCalls, 1, "drain never recloses the destroyed Activity");
+                    equal(f.activity.finishes, 0, "drain never finishes the old Activity record");
+                    equal(f.receipts, List.of("LOCAL_STORAGE_CONFIRMED_COOKIE_ACK"), "recreated runtime reports both storage completions");
+                    reset(); NativeBrowserRuntime viewless = new NativeBrowserRuntime(new NativeBrowserApplication());
+                    history = viewless.historyStore(); List<String> receipts = new ArrayList<>();
+                    viewless.beginDrain(receipts::add); ShellManager.pending.accept(true); Handler.runPosted();
+                    check(receipts.isEmpty(), "viewless runtime still waits for its opened history store");
+                    history.reply(true); Handler.runPosted();
+                    equal(receipts, List.of("LOCAL_STORAGE_CONFIRMED_COOKIE_ACK"), "viewless runtime waits for both stores");
+                    equal(events, List.of("HISTORY_FLUSH", "FLUSH"), "viewless history drain invents no Activity teardown");
+                    reset(); Fixture wrongThread = new Fixture(); Looper.current = new Looper();
+                    try {
+                        try { wrongThread.runtime.historyStore(); throw new AssertionError("off-main history access accepted"); }
+                        catch (IllegalStateException expected) { equal(expected.getMessage(), "NATIVE_RUNTIME_WRONG_THREAD", "history getter retains main-thread guard"); }
+                        try { wrongThread.drain(); throw new AssertionError("off-main drain accepted"); }
+                        catch (IllegalStateException expected) { equal(expected.getMessage(), "NATIVE_RUNTIME_WRONG_THREAD", "drain retains main-thread guard"); }
+                    } finally { Looper.current = Looper.main; }
+                    check(!wrongThread.runtime.draining && wrongThread.runtime.historyStore == null,
+                            "off-main rejection precedes history creation or drain state mutation");
+                    equal(BrowserHistoryStore.creations, 0, "off-main access cannot create a history store");
                 }
                 static void createAndReuse() {
                     reset(); NativeBrowserActivity rejected = new NativeBrowserActivity();
@@ -478,7 +701,10 @@ public final class NativeBrowserLifecycleHostTest {
                     }
                 }
                 public static int run() {
-                    callbackOutcomes(); timeoutAndSynchronous(); exceptionalOutcomes(); createAndReuse(); lateStartupCallbacks();
+                    callbackOutcomes(); timeoutAndSynchronous(); exceptionalOutcomes();
+                    dualStorageOutcomes(); synchronousStorageCombinations(); historyInitializationAndInflightWaits();
+                    storageFailuresAndMissingNative(); dualStorageTimeouts(); runtimeHistoryOwnership();
+                    createAndReuse(); lateStartupCallbacks();
                     for (String message : allLogs) {
                         check(message.matches("[A-Z_]+"), "lifecycle log is fixed phase only");
                         check(!message.contains("private") && !message.contains("http") && !message.contains("canary"), "no session/nonce/URL/exception leakage");
