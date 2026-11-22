@@ -1,0 +1,246 @@
+// CONTROL_FLOW_ONLY. The runner inserts production source blocks verbatim.
+#include <iostream>
+#include <memory>
+#include <stdexcept>
+#include <utility>
+#define BUILDFLAG(flag) (flag)
+#define IS_ANDROID @ANDROID@
+#include "product_standalone_scope.h"
+using blink::IsUrlInProductStandaloneScope;
+
+// This stand-in deliberately does not normalize URLs or claim GURL conformance.
+// Scope matching below comes from the unchanged production scope header.
+class KURL {
+ public:
+  KURL() = default;
+  explicit KURL(std::string text) : text_(std::move(text)) {}
+  bool IsEmpty() const { return text_.empty(); }
+  explicit operator GURL() const { return GURL(text_); }
+  const std::string& GetString() const { return text_; }
+  bool operator==(const KURL&) const = default;
+ private:
+  std::string text_;
+};
+class SecurityOrigin {
+ public:
+  explicit SecurityOrigin(std::string origin, bool opaque = false)
+      : origin_(std::move(origin)), opaque_(opaque) {}
+  static std::shared_ptr<SecurityOrigin> Create(const KURL& url) {
+    GURL parsed = static_cast<GURL>(url);
+    return std::make_shared<SecurityOrigin>(parsed.Origin(), !parsed.is_valid());
+  }
+  bool IsSameOriginWith(const SecurityOrigin* other) const {
+    return !opaque_ && !other->opaque_ && origin_ == other->origin_;
+  }
+ private:
+  std::string origin_;
+  bool opaque_;
+};
+class LocalDOMWindow {
+ public:
+  KURL url{std::string("https://app.test/app/page")};
+  bool secure = true;
+  std::shared_ptr<SecurityOrigin> origin = SecurityOrigin::Create(url);
+  const KURL& Url() const { return url; }
+  bool IsSecureContext() const { return secure; }
+  const SecurityOrigin* GetSecurityOrigin() const { return origin.get(); }
+};
+// Inside Blink, WebURL converts to KURL, not directly to GURL. Keep the
+// parameter field distinct so the extracted block also checks this API boundary.
+class WebURL {
+ public:
+  WebURL& operator=(const KURL& url) {
+    url_ = url;
+    return *this;
+  }
+  operator KURL() const { return url_; }
+ private:
+  KURL url_;
+};
+struct WebNavigationParams { int document_token = 0; WebURL url, product_standalone_scope; };
+struct DocumentLoader;
+enum class MediaValueChange { kOther };
+struct Document {
+  int token = 31, notifications = 0;
+  int Token() const { return token; }
+  void MediaQueryAffectingValueChanged(MediaValueChange) { ++notifications; }
+};
+struct FrameLoader {
+  DocumentLoader* current = nullptr;
+  DocumentLoader* GetDocumentLoader() const { return current; }
+};
+struct LocalFrame {
+  bool outermost = true, revoked = false;
+  LocalDOMWindow window;
+  Document document;
+  FrameLoader loader;
+  LocalDOMWindow* DomWindow() { return &window; }
+  Document* GetDocument() { return &document; }
+  bool IsOutermostMainFrame() const { return outermost; }
+  bool IsProductStandaloneRoleRevoked() const { return revoked; }
+  void RevokeProductStandaloneRole() { revoked = true; }
+};
+struct DocumentLoader {
+  enum State { kNotStarted, kProvisional, kCommitted, kSentDidFinishLoad };
+  LocalFrame* frame_;
+  State state_ = kCommitted;
+  int token_ = 31;
+  KURL url_{std::string("https://app.test/app/page")};
+  KURL product_standalone_scope_;
+  bool loading_main_document_from_mhtml_archive_ = false;
+  explicit DocumentLoader(LocalFrame* frame) : frame_(frame) {}
+  FrameLoader& GetFrameLoader() { return frame_->loader; }
+  @HAS_ROLE@
+  void RevokeProductStandaloneRole();
+  std::unique_ptr<WebNavigationParams> CloneRoleParams() {
+    @CLONE_PRELUDE@
+    @CLONE_GUARD@
+    return params;
+  }
+  void CommitRole() {
+    // The real call to InitializeWindow is outside this extracted block. The
+    // fixture has installed its controlled post-InitializeWindow context here.
+    @TAKE_SCOPE@
+    @COMMIT_GUARD@
+  }
+  void EscapeTo(const KURL& new_url) {
+    url_ = new_url;
+    frame_->window.url = new_url;
+    @SAME_DOCUMENT_GUARD@
+  }
+};
+@REVOKE@
+namespace content {
+struct WebContents {};
+enum class PreloadingTriggerType { kSpeculationRule };
+enum class PreloadingEligibility { kEligible = 1, kPreloadingUnsupportedByWebContents = 15 };
+struct Shell {
+  bool installed = false;
+  bool HasInstalledProductStandaloneRole() const { return installed; }
+  PreloadingEligibility IsPrerender2Supported(WebContents&, PreloadingTriggerType);
+};
+@PRERENDER@
+}  // namespace content
+
+int checks = 0;
+void Check(bool ok, const std::string& label) {
+  if (!ok) throw std::runtime_error(label);
+  ++checks;
+}
+struct Fixture {
+  LocalFrame frame;
+  DocumentLoader loader{&frame};
+  Fixture() { frame.loader.current = &loader; }
+  void Accredit() { loader.product_standalone_scope_ = KURL("https://app.test/app/"); }
+};
+void AssertNoInheritance(Fixture& f, const std::string& label) {
+  auto params = f.loader.CloneRoleParams();
+  Check(KURL(params->product_standalone_scope).IsEmpty(), label);
+  DocumentLoader next(&f.frame);
+  next.product_standalone_scope_ = params->product_standalone_scope;
+  next.url_ = params->url;
+  next.CommitRole();
+  Check(!next.HasProductStandaloneRole(), label + " cannot mint during commit");
+}
+int main(int argc, char** argv) {
+  try {
+    content::WebContents contents;
+    content::Shell ordinary, installed;
+    installed.installed = true;
+    using E = content::PreloadingEligibility;
+    using T = content::PreloadingTriggerType;
+    Check(ordinary.IsPrerender2Supported(contents, T::kSpeculationRule) == E::kEligible,
+          "ordinary Shell preserves eligible default");
+    if (argc > 1 && std::string(argv[1]) == "shell") {
+      const E expected = IS_ANDROID ? E::kPreloadingUnsupportedByWebContents : E::kEligible;
+      Check(installed.IsPrerender2Supported(contents, T::kSpeculationRule) == expected,
+            "dedicated installed Shell blocks prerender only on Android");
+      std::cout << checks << " Shell CONTROL_FLOW_ONLY checks, 0 failures\n";
+      return 0;
+    }
+#if BUILDFLAG(IS_ANDROID)
+    // No installed/revoked role bit in a document is used to re-enable prerender:
+    // the production Shell tests persisted role installation, not document state.
+    for (int state = DocumentLoader::kNotStarted; state <= DocumentLoader::kSentDidFinishLoad; ++state) {
+      Fixture f; f.loader.state_ = static_cast<DocumentLoader::State>(state);
+      AssertNoInheritance(f, "ordinary secure in-scope document, loader state " + std::to_string(state));
+    }
+    for (int mode = 0; mode != 10; ++mode) {
+      Fixture f; f.Accredit();
+      if (mode == 0) f.loader.state_ = DocumentLoader::kProvisional;
+      if (mode == 1) f.frame.loader.current = nullptr;
+      if (mode == 2) ++f.frame.document.token;
+      if (mode == 3) f.frame.outermost = false;
+      if (mode == 4) f.frame.revoked = true;
+      if (mode == 5) f.frame.window.secure = false;
+      if (mode == 6) f.frame.window.origin = SecurityOrigin::Create(KURL("https://other.test/app/"));
+      if (mode == 7) f.frame.window.origin = std::make_shared<SecurityOrigin>("https://app.test:443", true);
+      if (mode == 8) f.frame.window.url = KURL("https://app.test/application");
+      if (mode == 9) f.frame.window.url = KURL("https://other.test/app/page");
+      AssertNoInheritance(f, "clone rejection guard " + std::to_string(mode));
+    }
+    for (const auto& url : {"https://app.test/app/page", "https://app.test/app/next?q=1#fragment"}) {
+      Fixture f; f.Accredit(); f.frame.window.url = KURL(url);
+      DocumentLoader* current = &f.loader;
+      std::unique_ptr<DocumentLoader> replacement;
+      for (int round = 0; round != 3; ++round) {
+        auto params = current->CloneRoleParams();
+        Check(params->product_standalone_scope == current->product_standalone_scope_, "replacement preserves existing exact scope");
+        Check(params->document_token == current->token_, "replacement preserves browser document token");
+        auto next = std::make_unique<DocumentLoader>(&f.frame);
+        next->state_ = DocumentLoader::kProvisional;
+        next->token_ = params->document_token;
+        next->product_standalone_scope_ = params->product_standalone_scope;
+        next->url_ = params->url;
+        next->CommitRole();
+        // Model real document installation/state advancement, not its runtime.
+        next->state_ = DocumentLoader::kCommitted;
+        f.frame.loader.current = next.get();
+        Check(next->HasProductStandaloneRole(), "secure same-origin in-scope local replacement retains role");
+        Check(!f.frame.revoked, "valid replacement never changes sticky revocation");
+        replacement = std::move(next);
+        current = replacement.get();
+      }
+    }
+    for (int mode = 0; mode != 7; ++mode) {
+      Fixture f; f.Accredit();
+      auto params = f.loader.CloneRoleParams();
+      Check(!KURL(params->product_standalone_scope).IsEmpty(), "source was accredited before replacement");
+      DocumentLoader next(&f.frame); next.product_standalone_scope_ = params->product_standalone_scope;
+      if (mode == 0) f.frame.outermost = false;
+      if (mode == 1) f.frame.revoked = true;
+      if (mode == 2) next.loading_main_document_from_mhtml_archive_ = true;
+      if (mode == 3) f.frame.window.secure = false;
+      if (mode == 4) f.frame.window.origin = SecurityOrigin::Create(KURL("https://other.test/app/"));
+      if (mode == 5) f.frame.window.origin = std::make_shared<SecurityOrigin>("https://app.test:443", true);
+      if (mode == 6) next.url_ = KURL("https://app.test/outside");
+      next.CommitRole();
+      Check(!next.HasProductStandaloneRole(), "post-InitializeWindow context rejection " + std::to_string(mode));
+      f.frame.outermost = true; f.frame.revoked = false; f.frame.window.secure = true;
+      f.frame.window.origin = SecurityOrigin::Create(KURL("https://app.test/app/"));
+      next.loading_main_document_from_mhtml_archive_ = false;
+      next.url_ = KURL("https://app.test/app/back"); next.CommitRole();
+      Check(!next.HasProductStandaloneRole(), "failed accreditation cannot rearm even after later valid context");
+    }
+    for (const auto& escape : {"https://app.test/outside", "https://app.test/application",
+                              "https://other.test/app/page", "http://app.test/app/page",
+                              "https://app.test:8443/app/page", "https://app.test/app/%2fescape"}) {
+      Fixture f; f.Accredit(); f.loader.EscapeTo(KURL(escape));
+      Check(f.frame.revoked && !f.loader.HasProductStandaloneRole(), "escape synchronously revokes existing role");
+      f.loader.EscapeTo(KURL("https://app.test/app/back"));
+      AssertNoInheritance(f, "returning in-scope cannot rearm an escaped document");
+    }
+    Fixture ordinary_escape;
+    ordinary_escape.loader.EscapeTo(KURL("https://app.test/outside"));
+    Check(!ordinary_escape.frame.revoked, "ordinary document gains no installed revocation state");
+    AssertNoInheritance(ordinary_escape, "ordinary escape never mints role");
+#else
+    Fixture f; f.Accredit(); AssertNoInheritance(f, "non-Android clone does not copy product-only scope");
+#endif
+    std::cout << checks << " source-extracted role/prerender CONTROL_FLOW_ONLY checks, 0 failures\n";
+    return 0;
+  } catch (const std::exception& error) {
+    std::cerr << "FAILED: " << error.what() << '\n';
+    return 1;
+  }
+}

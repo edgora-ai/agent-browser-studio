@@ -1,0 +1,620 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		AA0F00000000000000000050 /* ABSBrowserApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0F00000000000000000010 /* ABSBrowserApp.swift */; };
+		AA0F00000000000000000051 /* AppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0F00000000000000000011 /* AppModel.swift */; };
+		AA0F00000000000000000052 /* ProxySpec.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0F00000000000000000012 /* ProxySpec.swift */; };
+		AA0F00000000000000000053 /* ProfileSpec.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0F00000000000000000013 /* ProfileSpec.swift */; };
+		AA0F00000000000000000054 /* ProfileStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0F00000000000000000014 /* ProfileStore.swift */; };
+		AA0F00000000000000000055 /* CredentialStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0F00000000000000000015 /* CredentialStore.swift */; };
+		AA0F00000000000000000056 /* FingerprintSeedStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0F00000000000000000016 /* FingerprintSeedStore.swift */; };
+		AA0F00000000000000000057 /* BrowserHistory.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0F00000000000000000017 /* BrowserHistory.swift */; };
+		AA0F00000000000000000058 /* HistoryStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0F00000000000000000018 /* HistoryStore.swift */; };
+		AA0F00000000000000000059 /* PersonaScripts.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0F00000000000000000019 /* PersonaScripts.swift */; };
+		AA0F0000000000000000005A /* ProfileRuntime.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0F0000000000000000001A /* ProfileRuntime.swift */; };
+		AA0F0000000000000000005B /* TabManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0F0000000000000000001B /* TabManager.swift */; };
+		AA0F0000000000000000005C /* ProfileListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0F0000000000000000001C /* ProfileListView.swift */; };
+		AA0F0000000000000000005D /* ProfileEditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0F0000000000000000001D /* ProfileEditorView.swift */; };
+		AA0F0000000000000000005E /* BrowserView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0F0000000000000000001E /* BrowserView.swift */; };
+		AA0F0000000000000000005F /* TabSwitcherView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0F0000000000000000001F /* TabSwitcherView.swift */; };
+		AA0F00000000000000000060 /* NewTabPageView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0F00000000000000000020 /* NewTabPageView.swift */; };
+		AA0F00000000000000000061 /* HistoryPanelView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0F00000000000000000021 /* HistoryPanelView.swift */; };
+		AA0F00000000000000000062 /* DiagnosticsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0F00000000000000000022 /* DiagnosticsView.swift */; };
+		AA0F00000000000000000070 /* ProfileSpecTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0F00000000000000000030 /* ProfileSpecTests.swift */; };
+		AA0F00000000000000000071 /* ProxySpecTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0F00000000000000000031 /* ProxySpecTests.swift */; };
+		AA0F00000000000000000072 /* BrowserHistoryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0F00000000000000000032 /* BrowserHistoryTests.swift */; };
+		AA0F00000000000000000073 /* FingerprintSeedStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0F00000000000000000033 /* FingerprintSeedStoreTests.swift */; };
+		AA0F00000000000000000074 /* HistoryStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0F00000000000000000034 /* HistoryStoreTests.swift */; };
+		AA0F00000000000000000075 /* PersonaScriptTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0F00000000000000000035 /* PersonaScriptTests.swift */; };
+		AA0F00000000000000000076 /* ABSBrowserUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0F00000000000000000036 /* ABSBrowserUITests.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		AA0F00000000000000000001 /* ABSBrowser.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = ABSBrowser.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		AA0F00000000000000000002 /* ABSBrowserTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ABSBrowserTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		AA0F00000000000000000003 /* ABSBrowserUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ABSBrowserUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		AA0F00000000000000000036 /* ABSBrowserUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ABSBrowserUITests.swift; sourceTree = "<group>"; };
+		AA0F00000000000000000010 /* ABSBrowserApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ABSBrowserApp.swift; sourceTree = "<group>"; };
+		AA0F00000000000000000011 /* AppModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppModel.swift; sourceTree = "<group>"; };
+		AA0F00000000000000000012 /* ProxySpec.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProxySpec.swift; sourceTree = "<group>"; };
+		AA0F00000000000000000013 /* ProfileSpec.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileSpec.swift; sourceTree = "<group>"; };
+		AA0F00000000000000000014 /* ProfileStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileStore.swift; sourceTree = "<group>"; };
+		AA0F00000000000000000015 /* CredentialStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CredentialStore.swift; sourceTree = "<group>"; };
+		AA0F00000000000000000016 /* FingerprintSeedStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FingerprintSeedStore.swift; sourceTree = "<group>"; };
+		AA0F00000000000000000017 /* BrowserHistory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrowserHistory.swift; sourceTree = "<group>"; };
+		AA0F00000000000000000018 /* HistoryStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HistoryStore.swift; sourceTree = "<group>"; };
+		AA0F00000000000000000019 /* PersonaScripts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersonaScripts.swift; sourceTree = "<group>"; };
+		AA0F0000000000000000001A /* ProfileRuntime.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileRuntime.swift; sourceTree = "<group>"; };
+		AA0F0000000000000000001B /* TabManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TabManager.swift; sourceTree = "<group>"; };
+		AA0F0000000000000000001C /* ProfileListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileListView.swift; sourceTree = "<group>"; };
+		AA0F0000000000000000001D /* ProfileEditorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileEditorView.swift; sourceTree = "<group>"; };
+		AA0F0000000000000000001E /* BrowserView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrowserView.swift; sourceTree = "<group>"; };
+		AA0F0000000000000000001F /* TabSwitcherView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TabSwitcherView.swift; sourceTree = "<group>"; };
+		AA0F00000000000000000020 /* NewTabPageView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NewTabPageView.swift; sourceTree = "<group>"; };
+		AA0F00000000000000000021 /* HistoryPanelView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HistoryPanelView.swift; sourceTree = "<group>"; };
+		AA0F00000000000000000022 /* DiagnosticsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiagnosticsView.swift; sourceTree = "<group>"; };
+		AA0F00000000000000000030 /* ProfileSpecTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileSpecTests.swift; sourceTree = "<group>"; };
+		AA0F00000000000000000031 /* ProxySpecTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProxySpecTests.swift; sourceTree = "<group>"; };
+		AA0F00000000000000000032 /* BrowserHistoryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrowserHistoryTests.swift; sourceTree = "<group>"; };
+		AA0F00000000000000000033 /* FingerprintSeedStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FingerprintSeedStoreTests.swift; sourceTree = "<group>"; };
+		AA0F00000000000000000034 /* HistoryStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HistoryStoreTests.swift; sourceTree = "<group>"; };
+		AA0F00000000000000000035 /* PersonaScriptTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersonaScriptTests.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		AA0F000000000000000000B3 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		AA0F000000000000000000B6 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		AA0F000000000000000000A0 /* ABSBrowser */ = {
+			isa = PBXGroup;
+			children = (
+				AA0F000000000000000000A1 /* App */,
+				AA0F000000000000000000A2 /* Model */,
+				AA0F000000000000000000A3 /* Runtime */,
+				AA0F000000000000000000A4 /* UI */,
+				AA0F000000000000000000A7 /* Frameworks */,
+				AA0F000000000000000000A6 /* Tests */,
+				AA0F000000000000000000A8 /* UITests */,
+				AA0F000000000000000000A5 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		AA0F000000000000000000A1 /* App */ = {
+			isa = PBXGroup;
+			children = (
+				AA0F00000000000000000010 /* ABSBrowserApp.swift */,
+				AA0F00000000000000000011 /* AppModel.swift */,
+			);
+			path = ABSBrowser/App;
+			sourceTree = "<group>";
+		};
+		AA0F000000000000000000A2 /* Model */ = {
+			isa = PBXGroup;
+			children = (
+				AA0F00000000000000000012 /* ProxySpec.swift */,
+				AA0F00000000000000000013 /* ProfileSpec.swift */,
+				AA0F00000000000000000014 /* ProfileStore.swift */,
+				AA0F00000000000000000015 /* CredentialStore.swift */,
+				AA0F00000000000000000016 /* FingerprintSeedStore.swift */,
+				AA0F00000000000000000017 /* BrowserHistory.swift */,
+				AA0F00000000000000000018 /* HistoryStore.swift */,
+			);
+			path = ABSBrowser/Model;
+			sourceTree = "<group>";
+		};
+		AA0F000000000000000000A3 /* Runtime */ = {
+			isa = PBXGroup;
+			children = (
+				AA0F00000000000000000019 /* PersonaScripts.swift */,
+				AA0F0000000000000000001A /* ProfileRuntime.swift */,
+				AA0F0000000000000000001B /* TabManager.swift */,
+			);
+			path = ABSBrowser/Runtime;
+			sourceTree = "<group>";
+		};
+		AA0F000000000000000000A4 /* UI */ = {
+			isa = PBXGroup;
+			children = (
+				AA0F0000000000000000001C /* ProfileListView.swift */,
+				AA0F0000000000000000001D /* ProfileEditorView.swift */,
+				AA0F0000000000000000001E /* BrowserView.swift */,
+				AA0F0000000000000000001F /* TabSwitcherView.swift */,
+				AA0F00000000000000000020 /* NewTabPageView.swift */,
+				AA0F00000000000000000021 /* HistoryPanelView.swift */,
+				AA0F00000000000000000022 /* DiagnosticsView.swift */,
+			);
+			path = ABSBrowser/UI;
+			sourceTree = "<group>";
+		};
+		AA0F000000000000000000A8 /* UITests */ = {
+			isa = PBXGroup;
+			children = (
+				AA0F00000000000000000036 /* ABSBrowserUITests.swift */,
+			);
+			path = ABSBrowserUITests;
+			sourceTree = "<group>";
+		};
+		AA0F000000000000000000A5 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				AA0F00000000000000000001 /* ABSBrowser.app */,
+				AA0F00000000000000000002 /* ABSBrowserTests.xctest */,
+				AA0F00000000000000000003 /* ABSBrowserUITests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		AA0F000000000000000000A6 /* Tests */ = {
+			isa = PBXGroup;
+			children = (
+				AA0F00000000000000000030 /* ProfileSpecTests.swift */,
+				AA0F00000000000000000031 /* ProxySpecTests.swift */,
+				AA0F00000000000000000032 /* BrowserHistoryTests.swift */,
+				AA0F00000000000000000033 /* FingerprintSeedStoreTests.swift */,
+				AA0F00000000000000000034 /* HistoryStoreTests.swift */,
+				AA0F00000000000000000035 /* PersonaScriptTests.swift */,
+			);
+			path = ABSBrowserTests;
+			sourceTree = "<group>";
+		};
+		AA0F000000000000000000A7 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		AA0F000000000000000000B0 /* ABSBrowser */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = AA0F000000000000000000C3 /* Build configuration list for PBXNativeTarget "ABSBrowser" */;
+			buildPhases = (
+				AA0F000000000000000000B2 /* Sources */,
+				AA0F000000000000000000B3 /* Frameworks */,
+				AA0F000000000000000000B4 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = ABSBrowser;
+			productName = ABSBrowser;
+			productReference = AA0F00000000000000000001 /* ABSBrowser.app */;
+			productType = "com.apple.product-type.application";
+		};
+		AA0F000000000000000000B1 /* ABSBrowserTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = AA0F000000000000000000C6 /* Build configuration list for PBXNativeTarget "ABSBrowserTests" */;
+			buildPhases = (
+				AA0F000000000000000000B5 /* Sources */,
+				AA0F000000000000000000B6 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				AA0F000000000000000000E1 /* PBXTargetDependency */,
+			);
+			name = ABSBrowserTests;
+			productName = ABSBrowserTests;
+			productReference = AA0F00000000000000000002 /* ABSBrowserTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+		AA0F000000000000000000B7 /* ABSBrowserUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = AA0F000000000000000000C9 /* Build configuration list for PBXNativeTarget "ABSBrowserUITests" */;
+			buildPhases = (
+				AA0F000000000000000000B8 /* Sources */,
+				AA0F000000000000000000B9 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				AA0F000000000000000000E3 /* PBXTargetDependency */,
+			);
+			name = ABSBrowserUITests;
+			productName = ABSBrowserUITests;
+			productReference = AA0F00000000000000000003 /* ABSBrowserUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		AA0F000000000000000000D0 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 1500;
+				LastUpgradeCheck = 1500;
+				TargetAttributes = {
+					AA0F000000000000000000B0 = {
+						CreatedOnToolsVersion = 15.0;
+					};
+					AA0F000000000000000000B1 = {
+						CreatedOnToolsVersion = 15.0;
+						TestTargetID = AA0F000000000000000000B0;
+					};
+					AA0F000000000000000000B7 = {
+						CreatedOnToolsVersion = 15.0;
+						TestTargetID = AA0F000000000000000000B0;
+					};
+				};
+			};
+			buildConfigurationList = AA0F000000000000000000C0 /* Build configuration list for PBXProject "ABSBrowser" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+				"zh-Hans",
+			);
+			mainGroup = AA0F000000000000000000A0 /* ABSBrowser */;
+			productRefGroup = AA0F000000000000000000A5 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				AA0F000000000000000000B0 /* ABSBrowser */,
+				AA0F000000000000000000B1 /* ABSBrowserTests */,
+				AA0F000000000000000000B7 /* ABSBrowserUITests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXContainerItemProxy section */
+		AA0F000000000000000000E0 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = AA0F000000000000000000D0 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = AA0F000000000000000000B0;
+			remoteInfo = ABSBrowser;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXTargetDependency section */
+		AA0F000000000000000000E1 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = AA0F000000000000000000B0 /* ABSBrowser */;
+			targetProxy = AA0F000000000000000000E0 /* PBXContainerItemProxy */;
+		};
+		AA0F000000000000000000E2 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = AA0F000000000000000000D0 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = AA0F000000000000000000B0;
+			remoteInfo = ABSBrowser;
+		};
+		AA0F000000000000000000E3 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = AA0F000000000000000000B0 /* ABSBrowser */;
+			targetProxy = AA0F000000000000000000E2 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+		AA0F000000000000000000B8 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				AA0F00000000000000000076 /* ABSBrowserUITests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		AA0F000000000000000000B9 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* Begin PBXResourcesBuildPhase section */
+		AA0F000000000000000000B4 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		AA0F000000000000000000B2 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				AA0F00000000000000000050 /* ABSBrowserApp.swift in Sources */,
+				AA0F00000000000000000051 /* AppModel.swift in Sources */,
+				AA0F00000000000000000052 /* ProxySpec.swift in Sources */,
+				AA0F00000000000000000053 /* ProfileSpec.swift in Sources */,
+				AA0F00000000000000000054 /* ProfileStore.swift in Sources */,
+				AA0F00000000000000000055 /* CredentialStore.swift in Sources */,
+				AA0F00000000000000000056 /* FingerprintSeedStore.swift in Sources */,
+				AA0F00000000000000000057 /* BrowserHistory.swift in Sources */,
+				AA0F00000000000000000058 /* HistoryStore.swift in Sources */,
+				AA0F00000000000000000059 /* PersonaScripts.swift in Sources */,
+				AA0F0000000000000000005A /* ProfileRuntime.swift in Sources */,
+				AA0F0000000000000000005B /* TabManager.swift in Sources */,
+				AA0F0000000000000000005C /* ProfileListView.swift in Sources */,
+				AA0F0000000000000000005D /* ProfileEditorView.swift in Sources */,
+				AA0F0000000000000000005E /* BrowserView.swift in Sources */,
+				AA0F0000000000000000005F /* TabSwitcherView.swift in Sources */,
+				AA0F00000000000000000060 /* NewTabPageView.swift in Sources */,
+				AA0F00000000000000000061 /* HistoryPanelView.swift in Sources */,
+				AA0F00000000000000000062 /* DiagnosticsView.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		AA0F000000000000000000B5 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				AA0F00000000000000000070 /* ProfileSpecTests.swift in Sources */,
+				AA0F00000000000000000071 /* ProxySpecTests.swift in Sources */,
+				AA0F00000000000000000072 /* BrowserHistoryTests.swift in Sources */,
+				AA0F00000000000000000073 /* FingerprintSeedStoreTests.swift in Sources */,
+				AA0F00000000000000000074 /* HistoryStoreTests.swift in Sources */,
+				AA0F00000000000000000075 /* PersonaScriptTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		AA0F000000000000000000C1 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 2;
+			};
+			name = Debug;
+		};
+		AA0F000000000000000000C2 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_NO_COMMON_BLOCKS = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 2;
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+		AA0F000000000000000000C4 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = "ABS Browser";
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.ahoo.abs.browser.ipad;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+			};
+			name = Debug;
+		};
+		AA0F000000000000000000C5 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = "ABS Browser";
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.ahoo.abs.browser.ipad;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+			};
+			name = Release;
+		};
+		AA0F000000000000000000C7 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.ahoo.abs.browser.ipad.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/ABSBrowser.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/ABSBrowser";
+				TARGETED_DEVICE_FAMILY = 2;
+			};
+			name = Debug;
+		};
+		AA0F000000000000000000C8 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.ahoo.abs.browser.ipad.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/ABSBrowser.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/ABSBrowser";
+				TARGETED_DEVICE_FAMILY = 2;
+			};
+			name = Release;
+		};
+		AA0F000000000000000000CA /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.ahoo.abs.browser.ipad.uitests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				TEST_TARGET_NAME = ABSBrowser;
+				TARGETED_DEVICE_FAMILY = 2;
+			};
+			name = Debug;
+		};
+		AA0F000000000000000000CB /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.ahoo.abs.browser.ipad.uitests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				TEST_TARGET_NAME = ABSBrowser;
+				TARGETED_DEVICE_FAMILY = 2;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		AA0F000000000000000000C0 /* Build configuration list for PBXProject "ABSBrowser" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				AA0F000000000000000000C1 /* Debug */,
+				AA0F000000000000000000C2 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		AA0F000000000000000000C3 /* Build configuration list for PBXNativeTarget "ABSBrowser" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				AA0F000000000000000000C4 /* Debug */,
+				AA0F000000000000000000C5 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		AA0F000000000000000000C6 /* Build configuration list for PBXNativeTarget "ABSBrowserTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				AA0F000000000000000000C7 /* Debug */,
+				AA0F000000000000000000C8 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		AA0F000000000000000000C9 /* Build configuration list for PBXNativeTarget "ABSBrowserUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				AA0F000000000000000000CA /* Debug */,
+				AA0F000000000000000000CB /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = AA0F000000000000000000D0 /* Project object */;
+}

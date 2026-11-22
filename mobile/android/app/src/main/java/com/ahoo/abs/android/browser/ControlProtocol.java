@@ -10,6 +10,8 @@ public final class ControlProtocol {
     public static final int ERROR = 199;
     public static final String SESSION = "session";
     public static final String NONCE = "nonce";
+    // Capability from the verified coordinator to the nonexported Chromium host, never a URL.
+    public static final String WEB_APP_TICKET = "webAppTicket";
     public static final String INCARNATION = "incarnation";
     public static final String PID = "pid";
     public static final String CODE = "code";

@@ -1,6 +1,7 @@
 package com.ahoo.abs.android;
 
 import android.app.Activity;
+import android.content.Intent;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -20,6 +21,10 @@ import com.ahoo.abs.android.data.BootstrapStore;
 import com.ahoo.abs.android.data.ManagedProxy;
 import com.ahoo.abs.android.data.ProfileRepository;
 import com.ahoo.abs.android.process.LaunchCoordinator;
+import com.ahoo.abs.android.process.BrowserProcessOwner;
+import com.ahoo.abs.android.webapp.WebApp;
+import com.ahoo.abs.android.webapp.WebAppRegistry;
+import com.ahoo.abs.android.webapp.WebAppShortcuts;
 import com.ahoo.abs.core.ProfileSpec;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -47,7 +52,8 @@ public final class MainActivity extends Activity {
     private boolean runtimeKnown;
     private int selected;
     private Runnable runtimeObserver;
-    private ProfileSpec queuedOpen;
+    private OpenTarget queuedOpen;
+    private String pendingShortcutId;
     private long launchGeneration;
     private boolean foreground;
     private final Handler main = new Handler(Looper.getMainLooper());
@@ -158,6 +164,7 @@ public final class MainActivity extends Activity {
             runtimeObserver = () -> { if (!isFinishing() && !isDestroyed()) reload(); };
             coordinator.observe(runtimeObserver); reload();
             consumeExitRequest(getIntent());
+            if (state == null) receiveWebAppShortcut(getIntent());
         } catch (RuntimeException failure) {
             runtime.setText("配置存储不可用（" + Ui.errorCode(failure) + "）");
             Ui.applyEnabledLook(create, false);
@@ -173,6 +180,42 @@ public final class MainActivity extends Activity {
         super.onNewIntent(intent);
         setIntent(intent);
         consumeExitRequest(intent);
+        receiveWebAppShortcut(intent);
+        dispatchWebAppShortcut();
+    }
+
+    private boolean supportsWebApps() {
+        return getApplication() instanceof BrowserProcessOwner
+                && ((BrowserProcessOwner) getApplication()).supportsWebApps();
+    }
+
+    private void receiveWebAppShortcut(Intent intent) {
+        pendingShortcutId = supportsWebApps() ? WebAppShortcuts.shortcutId(this, intent) : null;
+        if (WebAppShortcuts.isShortcutIntent(this, intent)) setIntent(new Intent(this, MainActivity.class));
+    }
+
+    private void dispatchWebAppShortcut() {
+        if (!foreground || pendingShortcutId == null || repository == null || coordinator == null
+                || isFinishing() || isDestroyed()) return;
+        String id = pendingShortcutId;
+        pendingShortcutId = null;
+        try (WebAppRegistry registry = new WebAppRegistry(this)) {
+            WebApp app = registry.get(id);
+            if (app == null || WebAppShortcuts.pinState(this, id) != WebAppShortcuts.PinState.CONFIRMED) {
+                Ui.snackbar(this, "此网页应用的桌面入口已失效。");
+                return;
+            }
+            openInstalledWebApp(app);
+        } catch (RuntimeException failure) { showError(failure); }
+    }
+
+    private void openInstalledWebApp(WebApp app) {
+        ProfileSpec profile = repository.findProfile(app.profileId);
+        if (profile == null) {
+            Ui.snackbar(this, "网页应用所属环境已删除，未打开网页。");
+            return;
+        }
+        openProfile(profile, app);
     }
 
     /** Exported launcher never executes stop directly from an Intent. Require a matching
@@ -235,10 +278,13 @@ public final class MainActivity extends Activity {
     @Override protected void onResume() {
         super.onResume(); foreground = true;
         if (repository != null && coordinator != null) { coordinator.reconcile(); reload(); }
+        dispatchWebAppShortcut();
     }
     @Override protected void onPause() {
         foreground = false; launchGeneration++;
         queuedOpen = null; // Do not launch a deferred environment after the manager loses foreground.
+        pendingShortcutId = null;
+        if (coordinator != null) coordinator.cancelWebAppOpen();
         super.onPause();
     }
     @Override protected void onSaveInstanceState(Bundle state) {
@@ -274,10 +320,12 @@ public final class MainActivity extends Activity {
                         || active.state == BootstrapStore.State.REVOKED ? Ui.WARNING : Ui.ACCENT);
             }
             if (active == null && queuedOpen != null) {
-                ProfileSpec pending = queuedOpen; queuedOpen = null;
+                OpenTarget pending = queuedOpen; queuedOpen = null;
                 long token = launchGeneration;
                 main.post(() -> {
-                    if (foreground && token == launchGeneration && !isFinishing() && !isDestroyed()) coordinator.open(pending);
+                    if (foreground && token == launchGeneration && !isFinishing() && !isDestroyed()) {
+                        dispatchOpen(pending);
+                    }
                 });
             }
             render();
@@ -529,8 +577,11 @@ public final class MainActivity extends Activity {
         else ProfileEditor.show(this, repository, null, this::reload);
     }
 
-    private void openProfile(ProfileSpec profile) {
-        if (!runtimeKnown) return;
+    private void openProfile(ProfileSpec profile) { openProfile(profile, null); }
+
+    private void openProfile(ProfileSpec profile, WebApp app) {
+        if (!runtimeKnown || !foreground) return;
+        OpenTarget target = new OpenTarget(profile, app);
         // A PUBLISHED ticket is already in flight for this profile; the coordinator contract
         // forbids rebinding to it, so a second tap stops here with a plain status line.
         if (active != null && active.state == BootstrapStore.State.PUBLISHED
@@ -539,23 +590,52 @@ public final class MainActivity extends Activity {
             return;
         }
         if (active == null || active.launch.profile.id.equals(profile.id)) {
-            queuedOpen = null; launchGeneration++; coordinator.open(profile); return;
+            queuedOpen = null; launchGeneration++; dispatchOpen(target); return;
         }
         String expectedSession = active.launch.sessionId;
+        long expectedGeneration = launchGeneration;
         Ui.Sheet sheet = Ui.Sheet.create(this, "切换到 “" + profile.name + "”",
-                "将先退出 “" + active.launch.profile.name + "”。确认原进程退出后，再打开所选环境。");
+                "将先退出 “" + active.launch.profile.name + "”。确认原进程退出后，再打开"
+                        + (app == null ? "所选环境。" : "「" + app.name + "」。"));
         sheet.actions("取消", null, "切换环境", () -> {
             sheet.dialog().dismiss();
             try {
                 BootstrapStore.ActiveLaunch observed = bootstrap.readActive();
-                if (observed == null || !expectedSession.equals(observed.launch.sessionId)) {
+                if (!foreground || expectedGeneration != launchGeneration || observed == null
+                        || !expectedSession.equals(observed.launch.sessionId) || !webAppStillAvailable(target)) {
                     reload();
                     return;
                 }
-                launchGeneration++; queuedOpen = profile; coordinator.stop();
+                launchGeneration++; queuedOpen = target; coordinator.stop();
             } catch (RuntimeException failure) { showError(failure); }
         }).show();
     }
+    private boolean webAppStillAvailable(OpenTarget target) {
+        if (target.app == null) return true;
+        try (WebAppRegistry registry = new WebAppRegistry(this)) {
+            ProfileSpec profile = repository.findProfile(target.profile.id);
+            boolean ready = profile != null && target.profile.revision.equals(profile.revision)
+                    && target.app.sameInstall(registry.get(target.app.shortcutId))
+                    && WebAppShortcuts.pinState(this, target.app.shortcutId) == WebAppShortcuts.PinState.CONFIRMED;
+            if (!ready) Ui.snackbar(this, "网页应用或所属环境已变化，请重新打开。");
+            return ready;
+        }
+    }
+
+    private void dispatchOpen(OpenTarget target) {
+        try {
+            if (!webAppStillAvailable(target)) return;
+            if (target.app == null) coordinator.open(target.profile);
+            else coordinator.openWebApp(target.profile, target.app);
+        } catch (RuntimeException failure) { showError(failure); }
+    }
+
+    private static final class OpenTarget {
+        final ProfileSpec profile;
+        final WebApp app;
+        OpenTarget(ProfileSpec profile, WebApp app) { this.profile = profile; this.app = app; }
+    }
+
     private void profileMenu(View anchor, ProfileSpec profile) {
         boolean busy = active != null && active.launch.profile.id.equals(profile.id)
                 && active.state != BootstrapStore.State.EXIT_CONFIRMED;
@@ -648,6 +728,9 @@ public final class MainActivity extends Activity {
     private void showMore(View anchor) {
         PopupMenu menu = new PopupMenu(this, anchor);
         menu.getMenu().add("运行状态").setOnMenuItemClickListener(item -> { showRuntime(); return true; });
+        if (supportsWebApps()) {
+            menu.getMenu().add("网页应用").setOnMenuItemClickListener(item -> { showWebApps(); return true; });
+        }
         menu.getMenu().add("关于 ABS Browser").setOnMenuItemClickListener(item -> {
             Ui.Sheet sheet = Ui.Sheet.create(this, "ABS Browser · 预览版", null);
             sheet.text("Chromium 原生内核 · 单活动环境 · 多标签浏览\n\n环境隔离配置与代理资源分别管理。历史仅保存在对应环境中。\n\n当前仍是开发验证版，不代表完整指纹、网络泄漏或登录持久性验收已通过。");
@@ -655,6 +738,76 @@ public final class MainActivity extends Activity {
             return true;
         }); menu.show();
     }
+    private void showWebApps() {
+        if (repository == null || !foreground) return;
+        try (WebAppRegistry registry = new WebAppRegistry(this)) {
+            Ui.Sheet sheet = Ui.Sheet.create(this, "网页应用", null);
+            List<WebApp> apps = registry.list();
+            if (apps.isEmpty()) sheet.text("暂无网页应用。请在符合条件的网站菜单中选择「安装网页应用」。");
+            for (WebApp app : apps) {
+                Button row = wrapButton(Ui.tonal(this, app.name + "\n" + app.origin, v -> {
+                    sheet.dialog().dismiss();
+                    showWebApp(app.shortcutId);
+                }));
+                row.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
+                sheet.content(row);
+            }
+            sheet.actions("关闭", null, null, null).show();
+        } catch (RuntimeException failure) { showError(failure); }
+    }
+
+    private void showWebApp(String id) {
+        if (!foreground) return;
+        try (WebAppRegistry registry = new WebAppRegistry(this)) {
+            WebApp app = registry.get(id);
+            if (app == null) return;
+            ProfileSpec owner = repository.findProfile(app.profileId);
+            WebAppShortcuts.PinState state = WebAppShortcuts.pinState(this, id);
+            String status = owner == null ? "所属环境已删除，不能启动。"
+                    : state == WebAppShortcuts.PinState.CONFIRMED ? "系统已确认桌面入口。"
+                    : state == WebAppShortcuts.PinState.UNAVAILABLE ? "暂时无法核对桌面状态。"
+                    : "系统未确认桌面入口。若之前没有确认，可重新申请。";
+            Ui.Sheet sheet = Ui.Sheet.create(this, app.name, null);
+            sheet.text(app.origin).text("环境：" + (owner == null ? "已删除" : owner.name)).text(status);
+            sheet.content(wrapButton(Ui.ghost(this, "移除网页应用", v -> {
+                sheet.dialog().dismiss();
+                confirmRemoveWebApp(app);
+            })));
+            if (owner == null) sheet.actions("关闭", null, null, null);
+            else if (state == WebAppShortcuts.PinState.CONFIRMED) {
+                sheet.actions("关闭", null, "打开", () -> {
+                    sheet.dialog().dismiss();
+                    try { openInstalledWebApp(app); } catch (RuntimeException failure) { showError(failure); }
+                });
+            } else {
+                sheet.actions("关闭", null, "添加到桌面", () -> {
+                    sheet.dialog().dismiss();
+                    if (!foreground) return;
+                    try (WebAppRegistry current = new WebAppRegistry(this)) {
+                        if (!app.sameInstall(current.get(id)) || repository.findProfile(app.profileId) == null) return;
+                        Ui.snackbar(this, WebAppShortcuts.requestPin(this, app).message);
+                    } catch (RuntimeException failure) { showError(failure); }
+                });
+            }
+            sheet.show();
+        } catch (RuntimeException failure) { showError(failure); }
+    }
+
+    private void confirmRemoveWebApp(WebApp app) {
+        Ui.Sheet sheet = Ui.Sheet.create(this, "移除网页应用？", app.name + " · " + app.origin);
+        sheet.text("桌面入口将失效，不会清除该网站在环境中的数据。");
+        sheet.dangerActions("取消", null, "移除", () -> {
+            sheet.dialog().dismiss();
+            if (!foreground) return;
+            try (WebAppRegistry registry = new WebAppRegistry(this)) {
+                registry.remove(app.shortcutId);
+                try { WebAppShortcuts.disable(this, app.shortcutId); }
+                catch (RuntimeException ignored) { /* Registry removal still revokes activation. */ }
+                Ui.snackbar(this, "已移除网页应用，网站数据保留。");
+            } catch (RuntimeException failure) { showError(failure); }
+        }).show();
+    }
+
     private void showRuntime() {
         if (coordinator == null) return;
         if (runtimeSheet != null) return;

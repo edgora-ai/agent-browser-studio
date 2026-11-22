@@ -578,6 +578,9 @@ public final class NativeTabSwitcherHostTest {
                 static int CANVAS = 11;
                 android.widget.FrameLayout browserFrame;
                 TabSwitcherView tabSwitcher;
+                // Only the normal inset path is exercised by this overview host.
+                Object fullscreenOwner;
+                static WindowInsets applyPageFullscreenInsets(FrameLayout frame, WindowInsets insets) { return insets; }
                 final Window window = new Window();
                 private Window getWindow() { return window; }
                 static void applySystemBarAppearance(Window window) {

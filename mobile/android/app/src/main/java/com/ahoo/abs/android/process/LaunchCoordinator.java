@@ -19,6 +19,9 @@ import android.system.OsConstants;
 import com.ahoo.abs.android.browser.BrowserControlService;
 import com.ahoo.abs.android.browser.ControlProtocol;
 import com.ahoo.abs.android.data.BootstrapStore;
+import com.ahoo.abs.android.webapp.WebApp;
+import com.ahoo.abs.android.webapp.WebAppRegistry;
+import com.ahoo.abs.android.webapp.WebAppShortcuts;
 import com.ahoo.abs.core.LaunchReplayGuard;
 import com.ahoo.abs.core.LaunchSpec;
 import com.ahoo.abs.core.LifecycleControlPolicy;
@@ -38,6 +41,7 @@ public final class LaunchCoordinator {
     // Process-local, one-shot authority from publish, never inferred from a CLAIMED launch.
     // Losing this marker on manager recreation must fall back to non-destructive reuse.
     private String pendingFreshActivitySession;
+    private WebAppOpen webAppOpen;
     private RuntimeStateMachine machine;
     private Messenger remote;
     private IBinder remoteBinder;
@@ -70,8 +74,25 @@ public final class LaunchCoordinator {
     public void clearObserver(Runnable expected) { if (observer == expected) observer = null; }
     public String status() { return status; }
 
-    public void open(ProfileSpec profile) {
+    public void open(ProfileSpec profile) { open(profile, null); }
+
+    public void openWebApp(ProfileSpec profile, WebApp app) {
+        cancelWebAppOpen();
+        if (!((BrowserProcessOwner) context).supportsWebApps() || !profile.id.equals(app.profileId)
+                || WebAppShortcuts.pinState(context, app.shortcutId) != WebAppShortcuts.PinState.CONFIRMED) {
+            update("无法验证网页应用所属环境或桌面入口。");
+            return;
+        }
+        open(profile, new WebAppOpen(app));
+    }
+
+    public void cancelWebAppOpen() {
         requireMain();
+        if (webAppOpen != null) webAppOpen.cancelled = true;
+    }
+
+    private void open(ProfileSpec profile, WebAppOpen request) {
+        cancelWebAppOpen();
         boolean publishedHere = false;
         try (ProcessLifecycle.Hold ignored = ProcessLifecycle.holdPublication(context)) {
             reconcile();
@@ -84,6 +105,7 @@ public final class LaunchCoordinator {
                     current = active.launch;
                     incarnation = active.incarnationId;
                     pid = active.pid;
+                    webAppOpen = request;
                     if (bindControl()) update("正在核对已有浏览进程，不修改运行中配置。");
                     return;
                 }
@@ -101,6 +123,7 @@ public final class LaunchCoordinator {
             validatedControl = false;
             deathObserved = false;
             stopping = false;
+            webAppOpen = request;
             if (bindControl()) update("启动票据已发布；等待同一 UID 浏览进程的一次性 claim。");
         } catch (IOException | RuntimeException failure) {
             // A ticket published in this call that can never be claimed (e.g. bind failure)
@@ -108,6 +131,7 @@ public final class LaunchCoordinator {
             // the row forever and nothing else can confirm a pid-less exit. The store itself
             // proves no process ever held it (no incarnation, no PID), so revoke + record the
             // confirmed exit — both operations re-validate every precondition and fail closed.
+            if (request != null) request.cancelled = true;
             discardUnclaimedTicket(publishedHere);
             update("未启动或退出未确认：" + safeCode(failure));
         }
@@ -134,6 +158,7 @@ public final class LaunchCoordinator {
 
     public void stop() {
         requireMain();
+        cancelWebAppOpen();
         stopping = true;
         try {
             BootstrapStore.ActiveLaunch active = store.readActive();
@@ -205,6 +230,7 @@ public final class LaunchCoordinator {
         unbindControl();
         remote = null;
         current = null;
+        webAppOpen = null;
         rejectedPid = 0;
         rejectedSession = null;
         stopping = false;
@@ -336,6 +362,11 @@ public final class LaunchCoordinator {
                     beginDrain();
                 } else if (owner.activateOnHello) {
                     owner.activateOnHello = false;
+                    WebAppOpen request = webAppOpen;
+                    if (request != null && (request.cancelled || SystemClock.elapsedRealtime() >= request.deadline)) {
+                        update("网页应用打开请求已过期，请从桌面重试。");
+                        return true;
+                    }
                     Intent browser = ((BrowserProcessOwner) context.getApplicationContext()).createBrowserActivityIntent();
                     if (browser == null || browser.getComponent() == null
                             || !context.getPackageName().equals(browser.getComponent().getPackageName())
@@ -354,7 +385,26 @@ public final class LaunchCoordinator {
                     browser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
                     browser.putExtra(ControlProtocol.SESSION, activitySession);
                     browser.putExtra(ControlProtocol.NONCE, current.nonce);
-                    context.startActivity(browser);
+                    if (request == null) {
+                        context.startActivity(browser);
+                    } else {
+                        request.cancelled = true; // One activation even if the control service reconnects.
+                        if (active.state != BootstrapStore.State.CLAIMED
+                                || WebAppShortcuts.pinState(context, request.app.shortcutId)
+                                        != WebAppShortcuts.PinState.CONFIRMED) {
+                            throw new IllegalStateException("WEB_APP_PIN_UNAVAILABLE");
+                        }
+                        try (WebAppRegistry registry = new WebAppRegistry(context)) {
+                            String ticket = registry.issue(request.app, active.launch, incarnation, pid);
+                            browser.putExtra(ControlProtocol.WEB_APP_TICKET, ticket);
+                            try { context.startActivity(browser); }
+                            catch (RuntimeException failure) {
+                                try { registry.revokeTicket(ticket); }
+                                catch (RuntimeException revokeFailure) { failure.addSuppressed(revokeFailure); }
+                                throw failure;
+                            }
+                        }
+                    }
                     // A failed start keeps its authority; never consume another session's marker.
                     if (freshActivity && activitySession.equals(pendingFreshActivitySession)) {
                         pendingFreshActivitySession = null;
@@ -464,6 +514,14 @@ public final class LaunchCoordinator {
 
     private static void requireMain() {
         if (Looper.myLooper() != Looper.getMainLooper()) throw new IllegalStateException("COORDINATOR_WRONG_THREAD");
+    }
+
+    private static final class WebAppOpen {
+        final WebApp app;
+        final long deadline = SystemClock.elapsedRealtime() + 30_000;
+        boolean cancelled;
+
+        WebAppOpen(WebApp app) { this.app = app; }
     }
 
     private final class Connection implements ServiceConnection {

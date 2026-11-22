@@ -37,6 +37,8 @@ template("agent_browser_product_apk") {
     testonly = true
     resources_package = "com.ahoo.abs.android"
     sources = agent_browser_product_java_sources
+    # Compile the per-class *Jni bindings, not only their native headers.
+    srcjar_deps = [ "//content/shell:agent_browser_product_jni_headers" ]
     deps = [
       ":${_prefix}__resources",
       "//base:base_java",

@@ -1,0 +1,185 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<script>
+"use strict";
+(() => {
+  const cfg = __CONFIG__;
+  const media = Object.fromEntries(["browser", "standalone", "minimal-ui", "fullscreen"].map(mode =>
+    [mode, matchMedia(`(display-mode: ${mode})`)]));
+  const modes = () => Object.fromEntries(Object.entries(media).map(([mode, query]) => [mode, query.matches]));
+  const entry = Object.freeze({phase: document.readyState, href: location.href,
+    clientDocumentNonce: crypto.randomUUID(), capturedAt: new Date().toISOString(),
+    modes: Object.freeze(modes()), navigatorStandalone: navigator.standalone === true,
+    serverNonce: cfg.serverNonce, serverRequestId: cfg.serverRequestId});
+  const uaControlsProbe = cfg.kind === "inner" && new URL(location.href).searchParams.get("fullscreen") === "ua-controls";
+  const fullscreenElement = () => document.fullscreenElement?.id || document.fullscreenElement?.tagName || null;
+  const traceTypes = new Set(["video-playing", "fullscreen-api-attempt", "fullscreenchange", "fullscreenerror",
+    "pageshow", "pagehide", "popstate"]);
+  let render = () => {};
+  const state = window.fixture = {cfg, entry, uaControlsProbe, pageshows: [], events: [], fullscreenTrace: [],
+    live: () => ({href: location.href, modes: modes(), fullscreenElement: fullscreenElement(),
+      width: innerWidth, height: innerHeight, visualHeight: window.visualViewport?.height ?? null,
+      focusedElement: document.activeElement?.id || null}),
+    record: (type, detail = {}) => {
+      const event = {type, detail, at: new Date().toISOString()};
+      state.events.push(event);
+      if (traceTypes.has(type)) state.fullscreenTrace.push({...event, href: location.href, fullscreenElement: fullscreenElement()});
+      render();
+    },
+    setRender: fn => {render = fn; render();}};
+  addEventListener("pageshow", e => {
+    state.pageshows.push({persisted: e.persisted, at: new Date().toISOString(), href: location.href});
+    state.record("pageshow", {persisted: e.persisted});
+  });
+  addEventListener("pagehide", e => state.record("pagehide", {persisted: e.persisted}));
+  addEventListener("popstate", () => state.record("popstate"));
+  addEventListener("resize", () => state.record("resize"));
+  for (const query of Object.values(media)) query.addEventListener("change", () => state.record("display-mode-change"));
+  for (const type of ["fullscreenchange", "fullscreenerror"]) document.addEventListener(type, e => {
+    state.record(type, {target: e.target?.id || e.target?.nodeName || null, isTrusted: e.isTrusted === true});
+  });
+})();
+</script>
+__MANIFEST__
+<title>First-party scoped PWA / fullscreen fixture</title>
+<style>
+:root {color-scheme: dark; font: 15px system-ui; background: #102030; color: #f5f7ff}
+body {margin: 0; padding: 12px; overflow-wrap: anywhere} h1 {font-size: 20px; margin: 0 0 8px}
+nav, .controls {display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0}
+a, button {color: #fff; background: #214f82; padding: 9px; border: 1px solid #94bce8; border-radius: 3px}
+button, input {font: inherit} pre {white-space: pre-wrap; background: #08121d; padding: 10px; font-size: 12px}
+#stage {position: relative; box-sizing: border-box; border: 4px solid #f7d84a; padding: 30px; min-height: 50vh}
+#stage:fullscreen {height: 100dvh; width: 100vw; overflow: auto; background: #102030; margin: 0}
+.edge {position: absolute; padding: 3px; color: #000; font-weight: 800; background: #61ffd8}
+.tl {top: 0; left: 0} .tr {top: 0; right: 0} .bl {bottom: 0; left: 0} .br {bottom: 0; right: 0}
+video, canvas {display: block; width: min(100%, 480px); aspect-ratio: 16/9; background: #000}
+video:fullscreen {width: 100vw; height: 100dvh; object-fit: contain}
+canvas {width: 160px} input {max-width: 90%; padding: 8px} .warning {color: #ffe08a}
+</style></head><body>
+<h1 id="heading">Synthetic first-party fixture</h1>
+<p class="warning">Host/fixture observations are not native acceptance. No automatic install, SW registration, media or fullscreen.</p>
+<nav aria-label="Top-level navigation">
+<a id="link-install">Install page</a><a id="link-start">Start</a><a id="link-inner">Scoped inner</a>
+<a id="link-outside">Same-origin app-x escape</a><a id="link-absolute">Absolute /app-x/out</a>
+<a id="link-cross">Cross-origin B (same path)</a><a id="link-returnA">Return inside A scope</a>
+<a id="link-redirectIn">302 inside</a><a id="link-redirectOut">302 outside</a><a id="link-redirectB">302 to B</a>
+<a id="link-ua-controls">Chromium video controls + Android Back</a>
+</nav>
+<div class="controls">
+<button id="push-in">pushState inside</button><button id="push-out">pushState outside</button>
+<button id="push-return">pushState return inside (must not reset native escape latch)</button>
+<button id="dom-back">DOM history.back (not Android Back)</button>
+</div>
+<section id="stage" aria-label="Fullscreen edge and IME probe">
+<span class="edge tl">TL 01</span><span class="edge tr">TR 02</span><span class="edge bl">BL 03</span><span class="edge br">BR 04</span>
+<label>IME text field <input id="ime-field" autocomplete="off" maxlength="64" value="fixture text only"></label>
+<div class="controls"><button id="start-video">Start moving muted inline video</button>
+<button id="dom-fullscreen">DOM fullscreen</button><button id="video-fullscreen">VIDEO fullscreen</button>
+<button id="exit-fullscreen">Exit DOM fullscreen</button></div>
+<p id="ua-controls-help" hidden>Start the video, then tap the fullscreen icon in Chromium’s controls inside the video.
+If the controls are hidden, tap the playing video first. Once visibly fullscreen, use Android’s system Back once, not the player’s exit icon.</p>
+<video id="video" muted playsinline controls aria-label="Synthetic moving frame counter"></video>
+<canvas id="source" width="320" height="180" aria-label="Local video source"></canvas>
+</section>
+<details id="fullscreen-trace"><summary>Fullscreen / Back trace (this document)</summary>
+<pre id="fullscreen-status"></pre></details>
+<form id="post-form" method="post" target="_self" enctype="application/x-www-form-urlencoded">
+<p>Real top-level POST: re-send identical bytes to compare server request IDs/nonces and occurrence counts.</p>
+<input type="hidden" id="post-run" name="run"><input type="hidden" id="post-token" name="submission">
+<label>Synthetic text <input id="post-text" name="text" value="fixture-only" maxlength="128"></label>
+<button type="submit">Top-level POST (no fetch)</button>
+</form>
+<div class="controls"><button id="register-sw">1. Explicitly register scoped SW</button>
+<button id="prime-sw">2. Explicitly prime ONLY offline page</button>
+<button id="cached-offline">3. Navigate to deliberately cached page</button>
+<button id="never-offline">4. Navigate to NEVER-cached failure</button></div>
+<p class="warning">SW simulates failure ONLY for these two marked navigation URLs. No whole-phone offline switch.
+Cached page retains the prime's server nonce, but a new document executes the first script; compare client nonce and pageshow.persisted.</p>
+<pre id="status" aria-live="polite"></pre>
+<script>
+"use strict";
+(() => {
+  const f = window.fixture, c = f.cfg, get = id => document.getElementById(id);
+  get("heading").textContent = `${c.run} / ${c.kind} / ${c.requestMethod}`;
+  for (const [key, value] of Object.entries(c.urls)) {const a = get("link-" + key); if (a) a.href = value;}
+  get("link-ua-controls").href = c.urls.inner + "?fullscreen=ua-controls";
+  get("ua-controls-help").hidden = !f.uaControlsProbe;
+  get("fullscreen-trace").open = f.uaControlsProbe;
+  get("post-form").action = c.urls.post;
+  get("post-run").value = c.run;
+  get("post-token").value = c.postReceipt?.fields.submission?.[0] ?? c.serverRequestId;
+  get("post-text").value = c.postReceipt?.fields.text?.[0] ?? "fixture-only";
+  f.setRender(() => {
+    const live = f.live();
+    get("status").textContent = JSON.stringify({server: c, entry: f.entry,
+      live, pageshows: f.pageshows, events: f.events.slice(-16)}, null, 2);
+    get("fullscreen-status").textContent = JSON.stringify({mode: f.uaControlsProbe ? "ua-controls" : "standard",
+      clientDocumentNonce: f.entry.clientDocumentNonce, entryHref: f.entry.href, href: live.href,
+      fullscreenElement: live.fullscreenElement, events: f.fullscreenTrace}, null, 2);
+  });
+  const action = (id, fn) => get(id).addEventListener("click", async () => {
+    try {await bounded(fn());} catch (e) {f.record("ERROR", {action: id, name: e.name, message: e.message});}
+  });
+  if (f.uaControlsProbe) {
+    // Nothing in this mode requests/exits fullscreen or invokes scripted Back.
+    for (const id of ["dom-fullscreen", "video-fullscreen", "exit-fullscreen", "dom-back", "push-in", "push-out", "push-return"]) get(id).hidden = true;
+  } else {
+    const push = (kind, path) => {history.pushState({fixture: c.run, kind}, "", path + "?via=" + kind); f.record(kind);};
+    action("push-in", () => push("push-in", c.paths.inner));
+    action("push-out", () => push("push-out", c.paths.outside));
+    action("push-return", () => push("push-return", c.paths.inner));
+    action("dom-back", () => history.back());
+    const fullscreenAction = (id, fn) => action(id, () => {f.record("fullscreen-api-attempt", {action: id}); return fn();});
+    fullscreenAction("dom-fullscreen", () => get("stage").requestFullscreen());
+    fullscreenAction("video-fullscreen", () => get("video").requestFullscreen());
+    fullscreenAction("exit-fullscreen", () => document.exitFullscreen());
+  }
+  let stream = null;
+  action("start-video", async () => {
+    const canvas = get("source"), video = get("video"), ctx = canvas.getContext("2d");
+    if (!canvas.captureStream) throw new Error("canvas.captureStream is UNSUPPORTED; no CSS/video fake fallback");
+    if (!stream) {
+      let frame = 0;
+      const draw = () => {
+        ctx.fillStyle = "#154a80"; ctx.fillRect(0, 0, 320, 180);
+        ctx.fillStyle = "#f8d84a"; ctx.fillRect((frame * 3) % 288, 65, 32, 32);
+        ctx.fillStyle = "white"; ctx.font = "16px monospace";
+        ctx.fillText(`FRAME ${frame++}`, 65, 130);
+        for (const [label, x, y] of [["TL", 1, 17], ["TR", 295, 17], ["BL", 1, 178], ["BR", 295, 178]]) ctx.fillText(label, x, y);
+        requestAnimationFrame(draw);
+      };
+      draw(); stream = canvas.captureStream(12); video.srcObject = stream;
+    }
+    video.muted = true; video.playsInline = true; await video.play();
+    f.record("video-playing", {muted: video.muted, inline: video.playsInline, source: "canvas.captureStream"});
+  });
+  const bounded = async promise => {
+    let timer;
+    try {return await Promise.race([promise, new Promise((_, reject) => {timer = setTimeout(() => reject(new Error("Fixture operation exceeded 8s")), 8000);})]);}
+    finally {clearTimeout(timer);}
+  };
+  action("register-sw", async () => {
+    if (location.origin !== c.originA || !isSecureContext || !("serviceWorker" in navigator)) throw new Error("Requires configured trusted A secure context and SW support");
+    const reg = await bounded(navigator.serviceWorker.register(c.urls.sw, {scope: c.paths.scope}));
+    await bounded(navigator.serviceWorker.ready);
+    f.record("sw-registered", {scope: reg.scope, controller: navigator.serviceWorker.controller?.scriptURL || null});
+  });
+  action("prime-sw", async () => {
+    const worker = navigator.serviceWorker?.controller;
+    if (!worker || worker.scriptURL !== c.urls.sw) throw new Error("Explicitly register first; wait for controller or reload once. No automatic fallback.");
+    const channel = new MessageChannel();
+    try {
+      const reply = new Promise((resolve, reject) => {channel.port1.onmessage = e => e.data.ok ? resolve(e.data) : reject(new Error(e.data.error));});
+      worker.postMessage({type: "FIXTURE_PRIME", run: c.run}, [channel.port2]);
+      f.record("sw-prime-ack", await bounded(reply));
+    } finally {channel.port1.close(); channel.port2.close();}
+  });
+  for (const [id, path] of [["cached-offline", c.paths.offline], ["never-offline", c.paths.never]]) {
+    action(id, () => {
+      if (navigator.serviceWorker?.controller?.scriptURL !== c.urls.sw) throw new Error("Requires this run's active SW controller; network is not disabled");
+      location.assign(path + "?fixture_offline=1&attempt=" + crypto.randomUUID());
+    });
+  }
+})();
+</script></body></html>

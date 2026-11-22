@@ -1,0 +1,926 @@
+diff --git a/content/browser/renderer_host/navigation_controller_impl.cc b/content/browser/renderer_host/navigation_controller_impl.cc
+--- a/content/browser/renderer_host/navigation_controller_impl.cc
++++ b/content/browser/renderer_host/navigation_controller_impl.cc
+@@ -4796,6 +4796,9 @@
+           /*permissions_policy_override=*/std::nullopt,
+           /*internal_scroll_to_text_fragment=*/
+           params.internal_scroll_to_text_fragment,
++#if BUILDFLAG(IS_ANDROID)
++          /*product_standalone_scope=*/GURL(),
++#endif
+           /*is_secure_context_root=*/false);
+ 
+   // internal_scroll_to_text_fragment should only be set for browser-initiated
+diff --git a/content/browser/renderer_host/navigation_entry_impl.cc b/content/browser/renderer_host/navigation_entry_impl.cc
+--- a/content/browser/renderer_host/navigation_entry_impl.cc
++++ b/content/browser/renderer_host/navigation_entry_impl.cc
+@@ -1109,6 +1109,9 @@
+ #endif
+           /*permissions_policy_override=*/std::nullopt,
+           /*internal_scroll_to_text_fragment=*/std::nullopt,
++#if BUILDFLAG(IS_ANDROID)
++          /*product_standalone_scope=*/GURL(),
++#endif
+           /*is_secure_context_root=*/false);
+ #if BUILDFLAG(IS_ANDROID)
+   // `data_url_as_string` is saved in NavigationEntry but should only be used by
+diff --git a/content/browser/renderer_host/navigation_request.cc b/content/browser/renderer_host/navigation_request.cc
+--- a/content/browser/renderer_host/navigation_request.cc
++++ b/content/browser/renderer_host/navigation_request.cc
+@@ -1419,6 +1419,9 @@
+           /*is_initial_webui=*/false,
+           /*isolated_app_policy=*/std::nullopt,
+           /*internal_scroll_to_text_fragment=*/std::nullopt,
++#if BUILDFLAG(IS_ANDROID)
++          /*product_standalone_scope=*/GURL(),
++#endif
+           /*is_secure_context_root=*/false);
+ #if !BUILDFLAG(IS_ANDROID)
+   CHECK(!GetContentClient()->browser()->IsInitialWebUIURL(common_params->url));
+@@ -1592,6 +1595,9 @@
+           /*is_initial_webui=*/false,
+           /*isolated_app_policy=*/std::nullopt,
+           /*internal_scroll_to_text_fragment=*/std::nullopt,
++#if BUILDFLAG(IS_ANDROID)
++          /*product_standalone_scope=*/GURL(),
++#endif
+           /*is_secure_context_root=*/false);
+   blink::mojom::BeginNavigationParamsPtr begin_params =
+       blink::mojom::BeginNavigationParams::New();
+@@ -10270,6 +10276,18 @@
+   return navigation_ui_data_.get();
+ }
+ 
++#if BUILDFLAG(IS_ANDROID)
++bool NavigationRequest::SetProductStandaloneScopeForCommit(const GURL& scope) {
++  if (state_ != READY_TO_COMMIT || !IsInPrimaryMainFrame() || IsSameDocument() ||
++      IsPageActivation() || net_error_ != net::OK ||
++      IsMhtmlOrSubframe() || commit_params_->is_view_source) {
++    return false;
++  }
++  commit_params_->product_standalone_scope = scope;
++  return true;
++}
++#endif
++
+ net::Error NavigationRequest::GetNetErrorCode() {
+   return net_error_;
+ }
+diff --git a/content/browser/renderer_host/navigation_request.h b/content/browser/renderer_host/navigation_request.h
+--- a/content/browser/renderer_host/navigation_request.h
++++ b/content/browser/renderer_host/navigation_request.h
+@@ -422,6 +422,9 @@
+   NavigationUIData* GetNavigationUIData() override;
+   bool IsExternalProtocol() override;
+   net::Error GetNetErrorCode() override;
++#if BUILDFLAG(IS_ANDROID)
++  bool SetProductStandaloneScopeForCommit(const GURL& scope) override;
++#endif
+   int GetNetExtendedErrorCode() override;
+   std::optional<ErrorNavigationTrigger> GetErrorNavigationTrigger() override;
+   RenderFrameHostImpl* GetRenderFrameHost() const override;
+diff --git a/content/browser/renderer_host/render_frame_host_delegate.h b/content/browser/renderer_host/render_frame_host_delegate.h
+--- a/content/browser/renderer_host/render_frame_host_delegate.h
++++ b/content/browser/renderer_host/render_frame_host_delegate.h
+@@ -169,6 +169,11 @@
+   virtual void OnDidFinishLoad(RenderFrameHostImpl* render_frame_host,
+                                const GURL& url) {}
+ 
++#if BUILDFLAG(IS_ANDROID)
++  virtual void OnDidOpenDocumentInputStream(RenderFrameHostImpl*,
++                                            const GURL&) {}
++#endif
++
+   // Notifies that the manifest URL is updated.
+   virtual void OnManifestUrlChanged(PageImpl& page) {}
+ 
+diff --git a/content/browser/renderer_host/render_frame_host_impl.cc b/content/browser/renderer_host/render_frame_host_impl.cc
+--- a/content/browser/renderer_host/render_frame_host_impl.cc
++++ b/content/browser/renderer_host/render_frame_host_impl.cc
+@@ -3648,6 +3648,14 @@
+   return DocumentRef(document_associated_data_->GetSafeRef());
+ }
+ 
++#if BUILDFLAG(IS_ANDROID)
++void RenderFrameHostImpl::RevokeProductStandaloneRole() {
++  if (IsRenderFrameLive()) {
++    GetMojomFrameInRenderer()->RevokeProductStandaloneRole();
++  }
++}
++#endif
++
+ WeakDocumentPtr RenderFrameHostImpl::GetWeakDocumentPtr() {
+   return WeakDocumentPtr(document_associated_data_->GetWeakPtr());
+ }
+@@ -6687,6 +6695,9 @@
+   if (owner_) {
+     owner_->DidOpenDocumentInputStream();
+   }
++#if BUILDFLAG(IS_ANDROID)
++  delegate_->OnDidOpenDocumentInputStream(this, filtered_url);
++#endif
+ }
+ 
+ RenderWidgetHostImpl* RenderFrameHostImpl::GetRenderWidgetHost() {
+diff --git a/content/browser/renderer_host/render_frame_host_impl.h b/content/browser/renderer_host/render_frame_host_impl.h
+--- a/content/browser/renderer_host/render_frame_host_impl.h
++++ b/content/browser/renderer_host/render_frame_host_impl.h
+@@ -623,6 +623,9 @@
+   bool IsErrorDocument() const override;
+   DocumentRef GetDocumentRef() override;
+   WeakDocumentPtr GetWeakDocumentPtr() override;
++#if BUILDFLAG(IS_ANDROID)
++  void RevokeProductStandaloneRole() override;
++#endif
+   void EnableMojoJsBindings(
+       content::mojom::ExtraMojoJsFeaturesPtr features) override;
+   bool ShouldChangeRenderFrameHostOnSameSiteNavigation() const override;
+diff --git a/content/browser/web_contents/web_contents_impl.cc b/content/browser/web_contents/web_contents_impl.cc
+--- a/content/browser/web_contents/web_contents_impl.cc
++++ b/content/browser/web_contents/web_contents_impl.cc
+@@ -8727,6 +8727,17 @@
+   }
+ }
+ 
++#if BUILDFLAG(IS_ANDROID)
++void WebContentsImpl::OnDidOpenDocumentInputStream(
++    RenderFrameHostImpl* render_frame_host,
++    const GURL& url) {
++  if (render_frame_host == GetPrimaryMainFrame()) {
++    observers_.NotifyObservers(
++        &WebContentsObserver::PrimaryDocumentInputStreamOpened, url);
++  }
++}
++#endif
++
+ bool WebContentsImpl::IsAllowedToGoToEntryAtOffset(int32_t offset) {
+   // TODO(crbug.com/40165695): This should probably be renamed to
+   // WebContentsDelegate::IsAllowedToGoToEntryAtOffset or
+diff --git a/content/browser/web_contents/web_contents_impl.h b/content/browser/web_contents/web_contents_impl.h
+--- a/content/browser/web_contents/web_contents_impl.h
++++ b/content/browser/web_contents/web_contents_impl.h
+@@ -709,6 +709,10 @@
+       blink::mojom::NavigationBlockedReason reason) override;
+   void OnDidFinishLoad(RenderFrameHostImpl* render_frame_host,
+                        const GURL& url) override;
++#if BUILDFLAG(IS_ANDROID)
++  void OnDidOpenDocumentInputStream(RenderFrameHostImpl* render_frame_host,
++                                    const GURL& url) override;
++#endif
+   void OnManifestUrlChanged(PageImpl& page) override;
+   void RenderFrameCreated(RenderFrameHostImpl* render_frame_host) override;
+   void RenderFrameDeleted(RenderFrameHostImpl* render_frame_host) override;
+diff --git a/content/common/frame.mojom b/content/common/frame.mojom
+--- a/content/common/frame.mojom
++++ b/content/common/frame.mojom
+@@ -498,6 +498,10 @@
+       map<blink.mojom.FrameToken, mojo_base.mojom.FilePath>
+           frame_token_map, bool save_with_empty_url,
+           pending_remote<FrameHTMLSerializerHandler> handler_remote);
++
++  // Permanently drops the product standalone display role for this frame.
++  [EnableIf=is_android]
++  RevokeProductStandaloneRole();
+ };
+ 
+ // Implemented by the frame (e.g. renderer processes).
+diff --git a/content/public/browser/navigation_handle.cc b/content/public/browser/navigation_handle.cc
+--- a/content/public/browser/navigation_handle.cc
++++ b/content/public/browser/navigation_handle.cc
+@@ -6,6 +6,7 @@
+ 
+ #include <utility>
+ 
++#include "build/build_config.h"
+ #include "content/browser/renderer_host/navigation_request.h"
+ #include "content/browser/renderer_host/navigator.h"
+ #include "content/browser/web_contents/web_contents_impl.h"
+@@ -20,4 +21,10 @@
+       NavigationRequest::From(this)->GetDelegate());
+ }
+ 
++#if BUILDFLAG(IS_ANDROID)
++bool NavigationHandle::SetProductStandaloneScopeForCommit(const GURL&) {
++  return false;
++}
++#endif
++
+ }  // namespace content
+diff --git a/content/public/browser/navigation_handle.h b/content/public/browser/navigation_handle.h
+--- a/content/public/browser/navigation_handle.h
++++ b/content/public/browser/navigation_handle.h
+@@ -168,6 +168,11 @@
+   // e.g. URLs might be rewritten by the renderer before being committed.
+   virtual const GURL& GetURL() = 0;
+ 
++#if BUILDFLAG(IS_ANDROID)
++  // Sets a per-document display role from ReadyToCommitNavigation only.
++  virtual bool SetProductStandaloneScopeForCommit(const GURL& scope);
++#endif
++
+   // Returns the SiteInstance where the frame being navigated was at the start
+   // of the navigation.  If a frame in SiteInstance A navigates a frame in
+   // SiteInstance B to a URL in SiteInstance C, then this returns B.
+diff --git a/content/public/browser/render_frame_host.h b/content/public/browser/render_frame_host.h
+--- a/content/public/browser/render_frame_host.h
++++ b/content/public/browser/render_frame_host.h
+@@ -1130,6 +1130,11 @@
+   virtual DocumentRef GetDocumentRef() = 0;
+   virtual WeakDocumentPtr GetWeakDocumentPtr() = 0;
+ 
++#if BUILDFLAG(IS_ANDROID)
++  // Removes an already committed or in-flight product display role.
++  virtual void RevokeProductStandaloneRole() {}
++#endif
++
+   // Enable Mojo JavaScript bindings in the renderer process. It will be
+   // effective on the first creation of script context after the call is made.
+   // If called at frame creation time (RenderFrameCreated) or just before a
+diff --git a/content/public/browser/web_contents_observer.h b/content/public/browser/web_contents_observer.h
+--- a/content/public/browser/web_contents_observer.h
++++ b/content/public/browser/web_contents_observer.h
+@@ -14,6 +14,7 @@
+ #include "base/process/kill.h"
+ #include "base/process/process_handle.h"
+ #include "base/threading/thread_restrictions.h"
++#include "build/build_config.h"
+ #include "components/viz/common/vertical_scroll_direction.h"
+ #include "content/common/content_export.h"
+ #include "content/public/browser/allow_service_worker_result.h"
+@@ -397,6 +398,11 @@
+   // `activation_time` is the time the activation happened.
+   virtual void DidActivatePreviewedPage(base::TimeTicks activation_time) {}
+ 
++#if BUILDFLAG(IS_ANDROID)
++  // document.open() can change the document URL without committing a navigation.
++  virtual void PrimaryDocumentInputStreamOpened(const GURL& url) {}
++#endif
++
+   // Document load events ------------------------------------------------------
+ 
+   // These three methods correspond to the points in time when any document in
+diff --git a/content/renderer/render_frame_impl.cc b/content/renderer/render_frame_impl.cc
+--- a/content/renderer/render_frame_impl.cc
++++ b/content/renderer/render_frame_impl.cc
+@@ -2939,6 +2939,17 @@
+   }
+ }
+ 
++#if BUILDFLAG(IS_ANDROID)
++void RenderFrameImpl::RevokeProductStandaloneRole() {
++  product_standalone_role_revoked_ = true;
++  if (frame_) {
++    if (auto* loader = frame_->GetDocumentLoader()) {
++      loader->RevokeProductStandaloneRole();
++    }
++  }
++}
++#endif
++
+ void RenderFrameImpl::CommitNavigationWithParams(
+     blink::mojom::CommonNavigationParamsPtr common_params,
+     blink::mojom::CommitNavigationParamsPtr commit_params,
+@@ -3080,6 +3091,14 @@
+   pending_cookie_manager_info_ = std::move(cookie_manager_info);
+   pending_storage_info_ = std::move(storage_info);
+   original_storage_key_ = navigation_params->storage_key;
++
++#if BUILDFLAG(IS_ANDROID)
++  if (!product_standalone_role_revoked_ && frame_->IsOutermostMainFrame() &&
++      !commit_params->is_view_source && !navigation_params->is_static_data) {
++    navigation_params->product_standalone_scope =
++        commit_params->product_standalone_scope;
++  }
++#endif
+ 
+   base::WeakPtr<RenderFrameImpl> weak_self = weak_factory_.GetWeakPtr();
+   frame_->CommitNavigation(std::move(navigation_params),
+diff --git a/content/renderer/render_frame_impl.h b/content/renderer/render_frame_impl.h
+--- a/content/renderer/render_frame_impl.h
++++ b/content/renderer/render_frame_impl.h
+@@ -423,6 +423,10 @@
+   void BindWebUI(
+       mojo::PendingAssociatedReceiver<mojom::WebUI> Receiver,
+       mojo::PendingAssociatedRemote<mojom::WebUIHost> remote) override;
++
++#if BUILDFLAG(IS_ANDROID)
++  void RevokeProductStandaloneRole() override;
++#endif
+ 
+   // These mirror mojom::NavigationClient, called by NavigationClient.
+   void CommitNavigation(
+@@ -1409,6 +1413,9 @@
+   // cancellation can take place after READY_TO_COMMIT. For more details, see
+   // RendererCancellationThrottle.
+   std::unique_ptr<NavigationClient> navigation_client_impl_;
++#if BUILDFLAG(IS_ANDROID)
++  bool product_standalone_role_revoked_ = false;
++#endif
+ 
+   // Creates various media clients.
+   MediaFactory media_factory_;
+diff --git a/content/shell/BUILD.gn b/content/shell/BUILD.gn
+--- a/content/shell/BUILD.gn
++++ b/content/shell/BUILD.gn
+@@ -181,6 +181,7 @@
+     testonly = true
+     sources = [
+       "android/agent_browser_product/java/com/ahoo/abs/android/nativekernel/MediaPermissionBridge.java",
++      "android/agent_browser_product/java/com/ahoo/abs/android/nativekernel/NativePwaBridge.java",
+     ]
+   }
+ }
+@@ -256,6 +257,7 @@
+     sources += [
+       "android/agent_browser_product/chromium/agent_browser_android_product_policy.cc",
+       "android/agent_browser_product/chromium/agent_browser_android_product_policy.h",
++      "android/agent_browser_product/chromium/agent_browser_android_pwa_bridge.cc",
+       "android/shell_manager.cc",
+       "android/shell_manager.h",
+       "browser/shell_platform_delegate_android.cc",
+diff --git a/content/shell/android/shell_manager.cc b/content/shell/android/shell_manager.cc
+--- a/content/shell/android/shell_manager.cc
++++ b/content/shell/android/shell_manager.cc
+@@ -5,6 +5,7 @@
+ #include "content/shell/android/shell_manager.h"
+ 
+ #include <algorithm>
++#include <string>
+ #include <utility>
+ #include <vector>
+ 
+@@ -73,8 +74,9 @@
+                                          const JavaRef<jstring>& jurl) {
+   ShellBrowserContext* browserContext =
+       ShellContentBrowserClient::Get()->browser_context();
+-  GURL url(base::android::ConvertJavaStringToUTF8(env, jurl));
+-  Shell::CreateNewWindow(browserContext, url, nullptr, gfx::Size());
++  const std::string url = base::android::ConvertJavaStringToUTF8(env, jurl);
++  Shell::CreateNewWindow(browserContext, GURL(url), nullptr, gfx::Size(),
++                         /*product_standalone_scope_installable=*/url.empty());
+ }
+ 
+ // Global/static bridge: draining must still work after an Activity and its
+diff --git a/content/shell/browser/shell.cc b/content/shell/browser/shell.cc
+--- a/content/shell/browser/shell.cc
++++ b/content/shell/browser/shell.cc
+@@ -32,6 +32,7 @@
+ #include "content/public/browser/media_capture_devices.h"
+ #include "content/public/browser/navigation_controller.h"
+ #include "content/public/browser/navigation_entry.h"
++#include "content/public/browser/navigation_handle.h"
+ #include "content/public/browser/page.h"
+ #include "content/public/browser/picture_in_picture_window_controller.h"
+ #include "content/public/browser/presentation_receiver_flags.h"
+@@ -82,9 +83,13 @@
+ base::OnceCallback<void(Shell*)> Shell::shell_created_callback_;
+ 
+ Shell::Shell(std::unique_ptr<WebContents> web_contents,
+-             bool should_set_delegate)
++             bool should_set_delegate,
++             bool product_standalone_scope_installable)
+     : WebContentsObserver(web_contents.get()),
+       web_contents_(std::move(web_contents)) {
++#if BUILDFLAG(IS_ANDROID)
++  product_standalone_scope_installable_ = product_standalone_scope_installable;
++#endif
+   if (should_set_delegate)
+     web_contents_->SetDelegate(this);
+ 
+@@ -129,9 +134,11 @@
+ 
+ Shell* Shell::CreateShell(std::unique_ptr<WebContents> web_contents,
+                           const gfx::Size& initial_size,
+-                          bool should_set_delegate) {
++                          bool should_set_delegate,
++                          bool product_standalone_scope_installable) {
+   WebContents* raw_web_contents = web_contents.get();
+-  Shell* shell = new Shell(std::move(web_contents), should_set_delegate);
++  Shell* shell = new Shell(std::move(web_contents), should_set_delegate,
++                           product_standalone_scope_installable);
+   g_platform->CreatePlatformWindow(shell, initial_size);
+ 
+   // Note: Do not make RenderFrameHost or RenderViewHost specific state changes
+@@ -253,7 +260,8 @@
+ Shell* Shell::CreateNewWindow(BrowserContext* browser_context,
+                               const GURL& url,
+                               const scoped_refptr<SiteInstance>& site_instance,
+-                              const gfx::Size& initial_size) {
++                              const gfx::Size& initial_size,
++                              bool product_standalone_scope_installable) {
+   WebContents::CreateParams create_params(browser_context, site_instance);
+   if (base::CommandLine::ForCurrentProcess()->HasSwitch(
+           switches::kForcePresentationReceiverForTesting)) {
+@@ -263,7 +271,8 @@
+       WebContents::Create(create_params);
+   Shell* shell =
+       CreateShell(std::move(web_contents), AdjustWindowSize(initial_size),
+-                  true /* should_set_delegate */);
++                   /*should_set_delegate=*/true,
++                   product_standalone_scope_installable && url.is_empty());
+ 
+   if (!url.is_empty())
+     shell->LoadURL(url);
+@@ -825,12 +834,24 @@
+ }
+ 
+ bool Shell::IsBackForwardCacheSupported(WebContents& web_contents) {
++#if BUILDFLAG(IS_ANDROID)
++  // A cached document must not restore a role granted before revocation.
++  return !HasInstalledProductStandaloneRole();
++#else
+   return true;
++#endif
+ }
+ 
+ PreloadingEligibility Shell::IsPrerender2Supported(
+     WebContents& web_contents,
+     PreloadingTriggerType trigger_type) {
++#if BUILDFLAG(IS_ANDROID)
++  // Activation bypasses the per-document scope grant in ReadyToCommitNavigation.
++  // Keep dedicated installed Shells on the ordinary commit/revocation path.
++  if (HasInstalledProductStandaloneRole()) {
++    return PreloadingEligibility::kPreloadingUnsupportedByWebContents;
++  }
++#endif
+   return PreloadingEligibility::kEligible;
+ }
+ 
+@@ -909,6 +930,12 @@
+ }
+ 
+ #if BUILDFLAG(IS_ANDROID)
++void Shell::DidStartNavigation(NavigationHandle* navigation) {
++  if (navigation->IsInPrimaryMainFrame()) {
++    product_standalone_scope_installable_ = false;
++  }
++}
++
+ void Shell::LoadProgressChanged(double progress) {
+   g_platform->LoadProgressChanged(this, progress);
+ }
+diff --git a/content/shell/browser/shell.h b/content/shell/browser/shell.h
+--- a/content/shell/browser/shell.h
++++ b/content/shell/browser/shell.h
+@@ -75,10 +75,16 @@
+       BrowserContext* browser_context,
+       const GURL& url,
+       const scoped_refptr<SiteInstance>& site_instance,
+-      const gfx::Size& initial_size);
++      const gfx::Size& initial_size,
++      bool product_standalone_scope_installable = false);
+ 
+   // Returns the Shell object corresponding to the given WebContents.
+   static Shell* FromWebContents(WebContents* web_contents);
++
++#if BUILDFLAG(IS_ANDROID)
++  // Installs a scope on a fresh Java-launched Shell. Null revokes permanently.
++  bool SetProductStandaloneScope(const GURL* scope);
++#endif
+ 
+   // Returns the currently open windows.
+   static std::vector<Shell*>& windows() { return windows_; }
+@@ -212,12 +218,15 @@
+  private:
+   class DevToolsWebContentsObserver;
+ 
+-  Shell(std::unique_ptr<WebContents> web_contents, bool should_set_delegate);
++  Shell(std::unique_ptr<WebContents> web_contents,
++        bool should_set_delegate,
++        bool product_standalone_scope_installable);
+ 
+   // Helper to create a new Shell given a newly created WebContents.
+   static Shell* CreateShell(std::unique_ptr<WebContents> web_contents,
+                             const gfx::Size& initial_size,
+-                            bool should_set_delegate);
++                            bool should_set_delegate,
++                            bool product_standalone_scope_installable = false);
+ 
+   // Adjust the size when Blink sends 0 for width and/or height.
+   // This happens when Blink requests a default-sized window.
+@@ -236,6 +245,7 @@
+   // WebContentsObserver
+ #if BUILDFLAG(IS_ANDROID)
+   void LoadProgressChanged(double progress) override;
++  void DidStartNavigation(NavigationHandle* navigation) override;
+ #endif
+   void TitleWasSet(NavigationEntry* entry) override;
+   void RenderFrameCreated(RenderFrameHost* frame_host) override;
+@@ -251,6 +261,12 @@
+ 
+   bool is_fullscreen_ = false;
+ 
++#if BUILDFLAG(IS_ANDROID)
++  bool HasInstalledProductStandaloneRole() const;
++  // Cleared by the first primary navigation, successful install, or revocation.
++  bool product_standalone_scope_installable_ = false;
++#endif
++
+   gfx::Size content_size_;
+ 
+   bool delay_popup_contents_delegate_for_testing_ = false;
+diff --git a/third_party/blink/public/common/BUILD.gn b/third_party/blink/public/common/BUILD.gn
+--- a/third_party/blink/public/common/BUILD.gn
++++ b/third_party/blink/public/common/BUILD.gn
+@@ -230,6 +230,7 @@
+     "navigation/navigation_params.h",
+     "navigation/navigation_params_mojom_traits.h",
+     "navigation/navigation_policy.h",
++    "navigation/product_standalone_scope.h",
+     "navigation/resource_intercept_policy.h",
+     "notifications/notification_constants.h",
+     "notifications/notification_mojom_traits.h",
+diff --git a/third_party/blink/public/common/navigation/product_standalone_scope.h b/third_party/blink/public/common/navigation/product_standalone_scope.h
+new file mode 100644
+--- /dev/null
++++ b/third_party/blink/public/common/navigation/product_standalone_scope.h
+@@ -0,0 +1,93 @@
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef THIRD_PARTY_BLINK_PUBLIC_COMMON_NAVIGATION_PRODUCT_STANDALONE_SCOPE_H_
++#define THIRD_PARTY_BLINK_PUBLIC_COMMON_NAVIGATION_PRODUCT_STANDALONE_SCOPE_H_
++
++#include <cstddef>
++#include <string_view>
++
++#include "url/gurl.h"
++
++namespace blink {
++
++inline constexpr size_t kMaxProductStandaloneUrlLength = 4096;
++
++inline bool IsSafeProductStandaloneUrl(const GURL& url) {
++  if (!url.is_valid() || !url.SchemeIs("https") || !url.has_host() ||
++      url.has_username() || url.has_password() || url.IntPort() == 0 ||
++      url.spec().size() > kMaxProductStandaloneUrlLength) {
++    return false;
++  }
++  for (const unsigned char c : url.spec()) {
++    if (c <= ' ' || c >= 0x7f) {
++      return false;
++    }
++  }
++
++  // Match on the canonical escaped path, never a decoded path. Reject
++  // separators, NUL, and nested escapes before applying the slash boundary.
++  // Chromium may already have removed dot segments while parsing the URL.
++  const auto path = url.path();
++  if (!path.starts_with('/')) {
++    return false;
++  }
++  auto hex = [](char c) -> int {
++    if (c >= '0' && c <= '9') {
++      return c - '0';
++    }
++    c |= 0x20;
++    return c >= 'a' && c <= 'f' ? c - 'a' + 10 : -1;
++  };
++  size_t dots = 0;
++  bool segment_is_all_dots = true;
++  for (size_t i = 1; i <= path.size(); ++i) {
++    if (i == path.size() || path[i] == '/') {
++      if (segment_is_all_dots && (dots == 1 || dots == 2)) {
++        return false;
++      }
++      dots = 0;
++      segment_is_all_dots = true;
++      continue;
++    }
++    int c = path[i];
++    if (c == '%') {
++      if (i + 2 >= path.size()) {
++        return false;
++      }
++      const int high = hex(path[i + 1]);
++      const int low = hex(path[i + 2]);
++      if (high < 0 || low < 0) {
++        return false;
++      }
++      c = high * 16 + low;
++      i += 2;
++      if (c == '/' || c == '\\' || c == '\0' || c == '%') {
++        return false;
++      }
++    }
++    segment_is_all_dots &= c == '.';
++    dots += c == '.';
++  }
++  return true;
++}
++
++inline bool IsProductStandaloneScope(const GURL& scope) {
++  return IsSafeProductStandaloneUrl(scope) && !scope.has_query() &&
++         !scope.has_ref();
++}
++
++inline bool IsUrlInProductStandaloneScope(const GURL& url, const GURL& scope) {
++  if (!IsProductStandaloneScope(scope) || !IsSafeProductStandaloneUrl(url) ||
++      url.host() != scope.host() || url.IntPort() != scope.IntPort()) {
++    return false;
++  }
++  const std::string_view limit = scope.path();
++  const std::string_view path = url.path();
++  return path == limit || (path.starts_with(limit) &&
++                          (limit.ends_with('/') || path[limit.size()] == '/'));
++}
++
++}  // namespace blink
++
++#endif  // THIRD_PARTY_BLINK_PUBLIC_COMMON_NAVIGATION_PRODUCT_STANDALONE_SCOPE_H_
+diff --git a/third_party/blink/public/mojom/navigation/navigation_params.mojom b/third_party/blink/public/mojom/navigation/navigation_params.mojom
+--- a/third_party/blink/public/mojom/navigation/navigation_params.mojom
++++ b/third_party/blink/public/mojom/navigation/navigation_params.mojom
+@@ -759,6 +759,11 @@
+   // "text=" in a URL directive), not the "text=" prefix itself.
+   string? internal_scroll_to_text_fragment;
+ 
++  // Scope of the product standalone display role for this document commit.
++  // Empty for commits not explicitly authorized by the browser.
++  [EnableIf=is_android]
++  url.mojom.Url product_standalone_scope;
++
+   // Browser-authoritative per-frame secure-context-root bit (see
+   // `ContentBrowserClient::IsSecureContextRoot()`). Stored on the
+   // LocalDOMWindow's SecurityContext at document install so descendants'
+diff --git a/third_party/blink/public/web/web_document_loader.h b/third_party/blink/public/web/web_document_loader.h
+--- a/third_party/blink/public/web/web_document_loader.h
++++ b/third_party/blink/public/web/web_document_loader.h
+@@ -33,6 +33,7 @@
+ 
+ #include <memory>
+ 
++#include "build/build_config.h"
+ #include "services/network/public/mojom/ip_address_space.mojom-shared.h"
+ #include "third_party/blink/public/mojom/loader/code_cache.mojom-shared.h"
+ #include "third_party/blink/public/platform/cross_variant_mojo_util.h"
+@@ -70,6 +71,10 @@
+   // Returns the url corresponding to this load. It may also be a url
+   // specified by a redirect that was followed.
+   virtual WebURL GetUrl() const = 0;
++
++#if BUILDFLAG(IS_ANDROID)
++  virtual void RevokeProductStandaloneRole() = 0;
++#endif
+ 
+   // Returns the http method of the request corresponding to this load.
+   virtual WebString HttpMethod() const = 0;
+diff --git a/third_party/blink/public/web/web_navigation_params.h b/third_party/blink/public/web/web_navigation_params.h
+--- a/third_party/blink/public/web/web_navigation_params.h
++++ b/third_party/blink/public/web/web_navigation_params.h
+@@ -14,6 +14,7 @@
+ #include "base/time/time.h"
+ #include "base/unguessable_token.h"
+ #include "base/uuid.h"
++#include "build/build_config.h"
+ #include "mojo/public/cpp/bindings/receiver.h"
+ #include "net/storage_access_api/status.h"
+ #include "services/metrics/public/cpp/ukm_source_id.h"
+@@ -302,6 +303,9 @@
+   // This URL indicates the security origin and will be used as a base URL
+   // to resolve links in the committed document.
+   WebURL url;
++#if BUILDFLAG(IS_ANDROID)
++  WebURL product_standalone_scope;
++#endif
+   // The http method (if any) used to load the main resource.
+   WebString http_method;
+   // The referrer string and policy used to load the main resource.
+diff --git a/third_party/blink/renderer/core/css/media_values.cc b/third_party/blink/renderer/core/css/media_values.cc
+--- a/third_party/blink/renderer/core/css/media_values.cc
++++ b/third_party/blink/renderer/core/css/media_values.cc
+@@ -4,6 +4,7 @@
+ 
+ #include "third_party/blink/renderer/core/css/media_values.h"
+ 
++#include "build/build_config.h"
+ #include "third_party/blink/public/common/css/scripting.h"
+ #include "third_party/blink/renderer/core/css/css_resolution_units.h"
+ #include "third_party/blink/renderer/core/css/css_to_length_conversion_data.h"
+@@ -31,6 +32,11 @@
+ #include "ui/base/mojom/window_show_state.mojom-blink.h"
+ #include "ui/display/screen_info.h"
+ 
++#if BUILDFLAG(IS_ANDROID)
++#include "third_party/blink/renderer/core/loader/document_loader.h"
++#include "third_party/blink/renderer/core/loader/frame_loader.h"
++#endif
++
+ namespace blink {
+ 
+ ForcedColors CSSValueIDToForcedColors(CSSValueID id) {
+@@ -302,7 +308,17 @@
+     return mojom::blink::DisplayMode::kBrowser;
+   }
+ 
+-  return widget->DisplayMode();
++  mode = widget->DisplayMode();
++#if BUILDFLAG(IS_ANDROID)
++  if (mode == mojom::blink::DisplayMode::kBrowser &&
++      frame->IsOutermostMainFrame()) {
++    const auto* loader = frame->Loader().GetDocumentLoader();
++    if (loader && loader->HasProductStandaloneRole()) {
++      return mojom::blink::DisplayMode::kStandalone;
++    }
++  }
++#endif
++  return mode;
+ }
+ 
+ ui::mojom::blink::WindowShowState MediaValues::CalculateWindowShowState(
+diff --git a/third_party/blink/renderer/core/frame/local_frame.h b/third_party/blink/renderer/core/frame/local_frame.h
+--- a/third_party/blink/renderer/core/frame/local_frame.h
++++ b/third_party/blink/renderer/core/frame/local_frame.h
+@@ -311,6 +311,12 @@
+   EventHandler& GetEventHandler() const;
+   EventHandlerRegistry& GetEventHandlerRegistry() const;
+   FrameLoader& Loader() const;
++#if BUILDFLAG(IS_ANDROID)
++  bool IsProductStandaloneRoleRevoked() const {
++    return product_standalone_role_revoked_;
++  }
++  void RevokeProductStandaloneRole() { product_standalone_role_revoked_ = true; }
++#endif
+   FrameSelection& Selection() const;
+   InputMethodController& GetInputMethodController() const;
+   TextSuggestionController& GetTextSuggestionController() const;
+@@ -1082,6 +1088,9 @@
+   HeapHashSet<WeakMember<WidgetCreationObserver>> widget_creation_observers_;
+ 
+   mutable FrameLoader loader_;
++#if BUILDFLAG(IS_ANDROID)
++  bool product_standalone_role_revoked_ = false;
++#endif
+ 
+   // Cleared by LocalFrame::detach(), so as to keep the observable lifespan
+   // of LocalFrame::view().
+diff --git a/third_party/blink/renderer/core/loader/document_loader.cc b/third_party/blink/renderer/core/loader/document_loader.cc
+--- a/third_party/blink/renderer/core/loader/document_loader.cc
++++ b/third_party/blink/renderer/core/loader/document_loader.cc
+@@ -128,6 +128,11 @@
+ #include "third_party/blink/renderer/core/loader/frame_client_hints_preferences_context.h"
+ #include "third_party/blink/renderer/core/loader/frame_fetch_context.h"
+ #include "third_party/blink/renderer/core/loader/frame_loader.h"
++
++#if BUILDFLAG(IS_ANDROID)
++#include "third_party/blink/public/common/navigation/product_standalone_scope.h"
++#include "third_party/blink/renderer/core/css/media_value_change.h"
++#endif
+ #include "third_party/blink/renderer/core/loader/idleness_detector.h"
+ #include "third_party/blink/renderer/core/loader/interactive_detector.h"
+ #include "third_party/blink/renderer/core/loader/old_document_info_for_commit.h"
+@@ -358,6 +363,9 @@
+   DocumentToken token;
+   KURL url;
+   KURL original_url;
++#if BUILDFLAG(IS_ANDROID)
++  KURL product_standalone_scope;
++#endif
+   AtomicString http_method;
+   AtomicString referrer;
+   scoped_refptr<EncodedFormData> http_body;
+@@ -636,6 +644,10 @@
+   DCHECK(params_);
+   is_secure_context_root_ = params_->is_secure_context_root;
+ 
++#if BUILDFLAG(IS_ANDROID)
++  product_standalone_scope_ = params_->product_standalone_scope;
++#endif
++
+   // See `archive_` attribute documentation.
+   if (!frame_->IsMainFrame()) {
+     if (auto* parent = DynamicTo<LocalFrame>(frame_->Tree().Parent()))
+@@ -747,6 +759,22 @@
+   LocalDOMWindow* window = frame_->DomWindow();
+   params->document_token = frame_->GetDocument()->Token();
+   params->url = window->Url();
++#if BUILDFLAG(IS_ANDROID)
++  // A local replacement preserves the browser's document token. Inherit only
++  // an already accredited role from that exact current document, never a role
++  // inferred from its URL. CommitNavigation revalidates the replacement window.
++  if (HasProductStandaloneRole() &&
++      GetFrameLoader().GetDocumentLoader() == this &&
++      params->document_token == token_ && frame_->IsOutermostMainFrame() &&
++      !frame_->IsProductStandaloneRoleRevoked() && window->IsSecureContext() &&
++      window->GetSecurityOrigin()->IsSameOriginWith(
++          SecurityOrigin::Create(product_standalone_scope_).get()) &&
++      IsUrlInProductStandaloneScope(
++          GURL(KURL(params->url)),
++          static_cast<GURL>(product_standalone_scope_))) {
++    params->product_standalone_scope = product_standalone_scope_;
++  }
++#endif
+   params->fallback_base_url = fallback_base_url_;
+   params->unreachable_url = unreachable_url_;
+   params->referrer = referrer_;
+@@ -1049,6 +1077,21 @@
+       interaction_id);
+ }
+ 
++#if BUILDFLAG(IS_ANDROID)
++void DocumentLoader::RevokeProductStandaloneRole() {
++  if (frame_) {
++    frame_->RevokeProductStandaloneRole();
++  }
++  if (!product_standalone_scope_.IsEmpty()) {
++    product_standalone_scope_ = KURL();
++    if (frame_ && frame_->GetDocument()) {
++      frame_->GetDocument()->MediaQueryAffectingValueChanged(
++          MediaValueChange::kOther);
++    }
++  }
++}
++#endif
++
+ void DocumentLoader::UpdateForSameDocumentNavigation(
+     const KURL& new_url,
+     HistoryItem* history_item,
+@@ -1098,6 +1141,15 @@
+ 
+   KURL old_url = url_;
+   url_ = new_url;
++#if BUILDFLAG(IS_ANDROID)
++  // Drop the role synchronously, before any script can observe the new URL.
++  if (!product_standalone_scope_.IsEmpty() &&
++      !IsUrlInProductStandaloneScope(
++          static_cast<GURL>(new_url),
++          static_cast<GURL>(product_standalone_scope_))) {
++    RevokeProductStandaloneRole();
++  }
++#endif
+   replaces_current_history_item_ = type != WebFrameLoadType::kStandard;
+   bool is_history_api_or_app_history_navigation =
+       (same_document_navigation_type !=
+@@ -1256,6 +1308,14 @@
+ }
+ 
+ void DocumentLoader::DidOpenDocumentInputStream(const KURL& url) {
++#if BUILDFLAG(IS_ANDROID)
++  if (!product_standalone_scope_.IsEmpty() &&
++      !IsUrlInProductStandaloneScope(
++          static_cast<GURL>(url),
++          static_cast<GURL>(product_standalone_scope_))) {
++    RevokeProductStandaloneRole();
++  }
++#endif
+   url_ = url;
+   // Let the browser know that we have done a document.open().
+   GetLocalFrameClient().DispatchDidOpenDocumentInputStream(url_);
+@@ -2998,6 +3058,9 @@
+   DCHECK(frame_->GetPage());
+   DCHECK(!frame_->GetDocument() || !frame_->GetDocument()->IsActive());
+   DCHECK_EQ(frame_->Tree().ChildCount(), 0u);
++#if BUILDFLAG(IS_ANDROID)
++  KURL standalone_scope = std::exchange(product_standalone_scope_, KURL());
++#endif
+   DCHECK(!frame_->GetDocument() ||
+          frame_->GetDocument()->ConnectedSubframeCount() == 0);
+   state_ = kCommitted;
+@@ -3016,6 +3079,21 @@
+ 
+   LocalDOMWindow* previous_window = frame_->DomWindow();
+   InitializeWindow(owner_document);
++
++#if BUILDFLAG(IS_ANDROID)
++  // StartLoading() has applied redirects and response blocking. Accredit the
++  // actual document URL and security context before installing its DOM.
++  if (!standalone_scope.IsEmpty() && frame_->IsOutermostMainFrame() &&
++      !frame_->IsProductStandaloneRoleRevoked() &&
++      !loading_main_document_from_mhtml_archive_ &&
++      frame_->DomWindow()->IsSecureContext() &&
++      frame_->DomWindow()->GetSecurityOrigin()->IsSameOriginWith(
++          SecurityOrigin::Create(standalone_scope).get()) &&
++      IsUrlInProductStandaloneScope(static_cast<GURL>(url_),
++                                    static_cast<GURL>(standalone_scope))) {
++    product_standalone_scope_ = std::move(standalone_scope);
++  }
++#endif
+ 
+   // If the navigation is cross-origin, clear the natural size.
+   if (RuntimeEnabledFeatures::ResponsiveIframesEnabled() && frame_->Owner()) {
+diff --git a/third_party/blink/renderer/core/loader/document_loader.h b/third_party/blink/renderer/core/loader/document_loader.h
+--- a/third_party/blink/renderer/core/loader/document_loader.h
++++ b/third_party/blink/renderer/core/loader/document_loader.h
+@@ -169,6 +169,12 @@
+   // WebDocumentLoader overrides:
+   WebString OriginalReferrer() const override;
+   WebURL GetUrl() const override { return Url(); }
++#if BUILDFLAG(IS_ANDROID)
++  bool HasProductStandaloneRole() const {
++    return state_ >= kCommitted && !product_standalone_scope_.IsEmpty();
++  }
++  void RevokeProductStandaloneRole() override;
++#endif
+   WebString HttpMethod() const override;
+   WebString Referrer() const override { return GetReferrer(); }
+   bool HasUnreachableURL() const override {
+@@ -686,6 +692,9 @@
+   DocumentToken token_;
+   KURL url_;
+   KURL original_url_;
++#if BUILDFLAG(IS_ANDROID)
++  KURL product_standalone_scope_;
++#endif
+   AtomicString http_method_;
+   // The referrer on the final request for this document.
+   AtomicString referrer_;

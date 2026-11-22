@@ -14,6 +14,9 @@ import com.ahoo.abs.android.browser.ControlProtocol;
 import com.ahoo.abs.android.data.BootstrapStore;
 import com.ahoo.abs.android.data.BootstrapStore.ActiveLaunch;
 import com.ahoo.abs.android.data.BootstrapStore.State;
+import com.ahoo.abs.android.webapp.WebApp;
+import com.ahoo.abs.android.webapp.WebAppRegistry;
+import com.ahoo.abs.android.webapp.WebAppShortcuts;
 import com.ahoo.abs.core.LaunchSpec;
 import com.ahoo.abs.core.ProfileSpec;
 import com.ahoo.abs.core.ProxySpec;
@@ -48,6 +51,9 @@ public final class FreshSessionLaunchContractTest {
         stopDoesNotConsume();
         disconnectedExitCanRetry();
         exitControlTimeoutIsFailClosed();
+        webAppHandoff();
+        webAppFailClosed();
+        webAppScopeAndLabel();
         System.out.println("FreshSessionLaunchContractTest: " + checks + " checks passed");
     }
 
@@ -297,6 +303,102 @@ public final class FreshSessionLaunchContractTest {
         check(f.coordinator.status().contains("超时"), "Refresh cannot replace exit failure with generic persisted state");
     }
 
+    private static void webAppHandoff() throws Exception {
+        Fixture f = new Fixture();
+        WebApp app = WebAppRegistry.make(f.profile.id);
+        f.coordinator.openWebApp(f.profile, app);
+        check(f.context.attempts.isEmpty() && WebAppRegistry.issues == 0, "No pin handoff before HELLO");
+        f.claimAndConnect();
+        Message wrongIncarnation = f.hello();
+        wrongIncarnation.getData().putString(ControlProtocol.INCARNATION, OTHER_SESSION);
+        f.reply(wrongIncarnation);
+        check(f.context.attempts.isEmpty() && WebAppRegistry.issues == 0, "Mismatched HELLO cannot issue pin handoff");
+        f.reply(f.hello());
+        check(WebAppRegistry.issues == 1 && WebAppRegistry.issued.sameInstall(app)
+                && f.launch.sessionId.equals(WebAppRegistry.session) && f.incarnation.equals(WebAppRegistry.incarnation)
+                && f.profile.revision.equals(WebAppRegistry.revision) && WebAppRegistry.pid == 456,
+                "Private handoff binds install, session, incarnation, revision and PID");
+        Bundle envelope = f.last().getExtras();
+        check(f.last().getFlags() == FRESH && envelope.size() == 3
+                && WebAppRegistry.TICKET.equals(envelope.getString(ControlProtocol.WEB_APP_TICKET))
+                && f.launch.sessionId.equals(envelope.getString(ControlProtocol.SESSION))
+                && f.launch.nonce.equals(envelope.getString(ControlProtocol.NONCE)), "Fresh opaque envelope only");
+        f.reply(f.hello());
+        check(WebAppRegistry.issues == 1 && f.context.starts.size() == 1, "Duplicate HELLO must not open another app");
+        f.coordinator.openWebApp(f.profile, app);
+        f.reply(f.hello());
+        check(WebAppRegistry.issues == 2 && f.context.starts.size() == 2 && f.last().getFlags() == RETAIN,
+                "Warm app uses exact retained session path");
+        f.coordinator.open(f.profile);
+        f.reply(f.hello());
+        check(f.last().getExtras().size() == 2 && WebAppRegistry.issues == 2, "Ordinary Continue does not reuse pin handoff");
+    }
+
+    private static void webAppFailClosed() throws Exception {
+        Fixture f = new Fixture();
+        WebApp app = WebAppRegistry.make(f.profile.id);
+        f.coordinator.openWebApp(f.profile, WebAppRegistry.make(OTHER_SESSION));
+        check(BootstrapStore.publications == 0, "Reject apps owned by another profile");
+        f.context.supportWebApps = false;
+        f.coordinator.openWebApp(f.profile, app);
+        check(BootstrapStore.publications == 0, "Fallback runtime cannot launch native apps");
+        f.context.supportWebApps = true;
+        WebAppShortcuts.state = WebAppShortcuts.PinState.UNAVAILABLE;
+        f.coordinator.openWebApp(f.profile, app);
+        check(BootstrapStore.publications == 0, "Unknown pin state does not publish");
+        WebAppShortcuts.state = WebAppShortcuts.PinState.CONFIRMED;
+        f.coordinator.openWebApp(f.profile, app);
+        f.claimAndConnect();
+        WebAppShortcuts.state = WebAppShortcuts.PinState.NOT_PINNED;
+        f.reply(f.hello());
+        check(f.context.attempts.isEmpty() && WebAppRegistry.issues == 0, "Recheck pin after HELLO");
+        WebAppShortcuts.state = WebAppShortcuts.PinState.CONFIRMED;
+        f.coordinator.openWebApp(f.profile, app);
+        f.coordinator.cancelWebAppOpen();
+        f.reply(f.hello());
+        check(f.context.attempts.isEmpty() && WebAppRegistry.issues == 0, "Losing manager foreground doesn't fall back to a plain open");
+        f.coordinator.openWebApp(f.profile, app);
+        f.coordinator.open(profile(OTHER_SESSION, f.profile.revision));
+        f.reply(f.hello());
+        check(f.context.attempts.isEmpty() && WebAppRegistry.issues == 0, "Blocked explicit open cannot deliver an older pin request");
+        f.coordinator.openWebApp(f.profile, app);
+        WebAppRegistry.failIssue = true;
+        f.reply(f.hello());
+        check(f.context.attempts.isEmpty(), "Registry revocation/unavailability fails without navigation");
+        f.coordinator.openWebApp(f.profile, app);
+        WebAppRegistry.failIssue = false;
+        f.context.failStart = true;
+        f.reply(f.hello());
+        check(WebAppRegistry.issues == 1 && WebAppRegistry.revocations == 1 && f.launch.sessionId.equals(f.marker()),
+                "Failed dispatch revokes only its pin handoff and retains fresh session authority");
+        f.reply(f.hello());
+        check(f.context.attempts.size() == 1, "Failed pin dispatch is not replayed by duplicate HELLO");
+        f.context.failStart = false;
+        f.coordinator.open(f.profile);
+        f.reply(f.hello());
+        check(f.last().getExtras().size() == 2 && f.last().getFlags() == FRESH,
+                "A new ordinary open recovers fresh authority without a pin handoff");
+    }
+
+    private static void webAppScopeAndLabel() {
+        WebApp app = WebAppRegistry.make(OTHER_SESSION);
+        for (String path : List.of("/web", "/web/start?q=1#anchor", "/web/%E7%BD%91")) {
+            check(app.contains("https://app.test" + path), "Valid scoped path rejected: " + path);
+        }
+        for (String url : List.of("https://app.test/web2", "https://app.test/web/../out",
+                "https://app.test/web/%2E%2e/out", "https://app.test/web/a%2Fb", "https://app.test/web/a%5Cb",
+                "https://app.test/web/%252e%252e", "https://app.test/web/%00", "https://app.test:443/web",
+                "https://app.test:444/web", "https://app.test.evil.test/web", "https://app.test@evil.test/web",
+                "http://app.test/web", "https://APP.test/web", "data:text/html,hello")) {
+            check(!app.contains(url), "Out-of-scope path accepted: " + url);
+        }
+        check("网页 应用".equals(WebApp.displayName(" 网页\n\u202e\r应用 ")), "Control / bidi characters must not alter origin display");
+        check(WebApp.displayName("好".repeat(100)).length() == 80, "Page name must be bounded");
+        check(!WebApp.isOpaqueId("00000000-0000-0000-0000-000000000000")
+                && !WebApp.isOpaqueId("78B03BDE-882F-4625-BD0A-E55E205119CB") && WebApp.isOpaqueId(WebAppRegistry.TICKET),
+                "Only canonical opaque v4 IDs may be passed to Android intents");
+    }
+
     private static ProfileSpec profile(String id, String revision) {
         return new ProfileSpec(id, revision, "host-only", new ProxySpec(ProxySpec.Scheme.HTTP, "192.0.2.1", 8080, false),
                 "US", "America/New_York", List.of("en-US"), ProfileSpec.DeviceMode.NATIVE, "host-only-model", "");
@@ -336,6 +438,10 @@ public final class FreshSessionLaunchContractTest {
             BootstrapStore.active = null;
             BootstrapStore.publications = 0;
             BootstrapStore.failPublish = false;
+            WebAppRegistry.issued = null;
+            WebAppRegistry.issues = WebAppRegistry.revocations = 0;
+            WebAppRegistry.failIssue = false;
+            WebAppShortcuts.state = WebAppShortcuts.PinState.CONFIRMED;
             android.system.Os.alive = true;
             long now = System.currentTimeMillis();
             launch = new LaunchSpec(profile, UUID.randomUUID().toString(), UUID.randomUUID().toString(), now, now + 120000);
@@ -391,6 +497,7 @@ public final class FreshSessionLaunchContractTest {
         final List<Intent> starts = new ArrayList<>();
         ServiceConnection connection;
         boolean failStart;
+        boolean supportWebApps = true;
         boolean expectPublication = true;
         int badEntry = -1;
         int extraFlags;
@@ -417,6 +524,7 @@ public final class FreshSessionLaunchContractTest {
             if (badEntry == 5) i.putExtra("extra", "unsafe");
             return i;
         }
+        @Override public boolean supportsWebApps() { return supportWebApps; }
         @Override public LaunchSpec requireLaunch() { throw new AssertionError("Not a browser runtime"); }
         @Override public String incarnation() { throw new AssertionError("Not a browser runtime"); }
         @Override public void activateController() { throw new AssertionError("IPC only"); }

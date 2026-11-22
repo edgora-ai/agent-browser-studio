@@ -319,6 +319,8 @@ public final class NativeBrowserApplication extends Application implements Brows
                 Intent.FLAG_ACTIVITY_REORDER_TO_FRONT | Intent.FLAG_ACTIVITY_SINGLE_TOP);
     }
 
+    @Override public boolean supportsWebApps() { return true; }
+
     @Override
     public void markDraining() {
         requireLaunch();

@@ -1,0 +1,357 @@
+From 6363d8b6d36db4ac13c8185567c37c407c016402 Mon Sep 17 00:00:00 2001
+From: Hongchan Choi <hongchan@google.com>
+Date: Mon, 5 Oct 2026 15:41:46 -0700
+Subject: [PATCH] [WebAudio] Construct MediaStreamAudioDestinationNode with
+ options count
+
+MediaStreamAudioDestinationNode::Create(context, options, ...)
+previously constructed the node with kDefaultNumberOfChannels (2) before
+calling setChannelCount(), causing the underlying
+WebAudioMediaStreamSource to initialize with 2 channels. In addition,
+MediaStreamAudioDestinationHandler::SetChannelCount() on the main thread
+did not immediately update destination_consumer_->SetFormat().
+
+This CL fixes both issues:
+- Validate and pass options->channelCount() (bounded by
+  kMaxChannelCountSupported = 8) directly to the
+  MediaStreamAudioDestinationNode constructor.
+- Update destination_consumer_->SetFormat() under consumer_lock_ inside
+  MediaStreamAudioDestinationHandler::SetChannelCount().
+- Add unit tests in MediaStreamAudioDestinationHandlerTest.
+
+Fixed: 40711696
+Change-Id: I86a0974a04f9335146c3929eae79923926be7f5d
+Reviewed-on: https://chromium-review.googlesource.com/c/chromium/src/+/8468847
+Commit-Queue: Hongchan Choi <hongchan@google.com>
+Reviewed-by: Mahesh Kannan <kmaheshb@google.com>
+Cr-Commit-Position: refs/heads/main@{#1711759}
+---
+ .../media_stream_audio_destination_handler.cc | 67 ++++++-------------
+ .../media_stream_audio_destination_handler.h  |  9 ++-
+ ...a_stream_audio_destination_handler_test.cc | 65 +++++++++++++++---
+ .../media_stream_audio_destination_node.cc    | 40 ++++++-----
+ 4 files changed, 108 insertions(+), 73 deletions(-)
+
+diff --git a/third_party/blink/renderer/modules/webaudio/media_stream_audio_destination_handler.cc b/third_party/blink/renderer/modules/webaudio/media_stream_audio_destination_handler.cc
+index 83cbe7ecad9acb..f71247915578c2 100644
+--- a/third_party/blink/renderer/modules/webaudio/media_stream_audio_destination_handler.cc
++++ b/third_party/blink/renderer/modules/webaudio/media_stream_audio_destination_handler.cc
+@@ -21,15 +21,6 @@
+ 
+ namespace blink {
+ 
+-namespace {
+-
+-// Channel counts greater than 8 are ignored by some audio tracks/sinks (see
+-// WebAudioMediaStreamSource), so we set a limit here to avoid anything that
+-// could cause a crash.
+-constexpr uint32_t kMaxChannelCountSupported = 8;
+-
+-}  // namespace
+-
+ MediaStreamAudioDestinationHandler::MediaStreamAudioDestinationHandler(
+     AudioNode& node,
+     uint32_t number_of_channels,
+@@ -44,20 +35,20 @@ MediaStreamAudioDestinationHandler::MediaStreamAudioDestinationHandler(
+ 
+   AddInput();
+   consumer_bus_wrapper_.ReserveInitialCapacity(kMaxChannelCountSupported);
+-  SetConsumer(webaudio_consumer,
+-              static_cast<int>(number_of_channels),
++  SetConsumer(webaudio_consumer, static_cast<int>(number_of_channels),
+               node.context()->sampleRate());
++  channel_count_ = number_of_channels;
+   SetInternalChannelCountMode(V8ChannelCountMode::Enum::kExplicit);
+   Initialize();
+ }
+ 
+ scoped_refptr<MediaStreamAudioDestinationHandler>
+ MediaStreamAudioDestinationHandler::Create(
+-    AudioNode& node, uint32_t number_of_channels,
++    AudioNode& node,
++    uint32_t number_of_channels,
+     scoped_refptr<WebAudioDestinationConsumer> webaudio_consumer) {
+-  return base::AdoptRef(
+-      new MediaStreamAudioDestinationHandler(
+-          node, number_of_channels, std::move(webaudio_consumer)));
++  return base::AdoptRef(new MediaStreamAudioDestinationHandler(
++      node, number_of_channels, std::move(webaudio_consumer)));
+ }
+ 
+ MediaStreamAudioDestinationHandler::~MediaStreamAudioDestinationHandler() {
+@@ -69,39 +60,14 @@ void MediaStreamAudioDestinationHandler::Process(uint32_t number_of_frames) {
+   TRACE_EVENT0(TRACE_DISABLED_BY_DEFAULT("webaudio.audionode"),
+                "MediaStreamAudioDestinationHandler::Process");
+ 
+-  // Conform the input bus into the internal mix bus, which represents
+-  // MediaStreamDestination's channel count.
+-
+-  const unsigned old_channel_count = mix_bus_->NumberOfChannels();
+-  unsigned new_channel_count = old_channel_count;
+-  {
+-    // Synchronize with possible dynamic changes to the channel count.
+-    base::AutoTryLock try_locker(process_lock_);
+-
+-    // If we can get the lock, we can process normally by updating the
+-    // mix bus to a new channel count, if needed.  If not, just use the
+-    // old mix bus to do the mixing; we'll update the bus next time
+-    // around.
+-    if (try_locker.is_acquired()) {
+-      new_channel_count = ChannelCount();
+-    }
+-  }
+-
+-  if (new_channel_count != old_channel_count) {
+-    mix_bus_ = AudioBus::Create(new_channel_count,
+-                                GetDeferredTaskHandler().RenderQuantumFrames());
+-    {
+-      base::AutoLock consumer_locker(consumer_lock_);
+-      if (destination_consumer_) {
+-        TRACE_EVENT2("webaudio", "MediaStreamAudioDestinationHandler::Process",
+-                     "old_channel_count", old_channel_count,
+-                     "new_channel_count", new_channel_count);
+-        destination_consumer_->SetFormat(new_channel_count,
+-                                         Context()->sampleRate());
+-      }
+-    }
++  // Synchronize with possible dynamic changes to the channel count.
++  base::AutoTryLock try_locker(process_lock_);
++  if (!try_locker.is_acquired()) {
++    return;
+   }
+ 
++  // Conform the input bus into the internal mix bus, which represents
++  // MediaStreamDestination's channel count.
+   scoped_refptr<AudioBus> input_bus = Input(0).Bus();
+   const AudioBus* bus_to_consume = input_bus.get();
+ 
+@@ -138,7 +104,16 @@ void MediaStreamAudioDestinationHandler::SetChannelCount(
+   // needs to update mix_bus_.
+   base::AutoLock locker(process_lock_);
+ 
++  const unsigned old_channel_count = ChannelCount();
+   AudioHandler::SetChannelCount(channel_count, exception_state);
++  if (ChannelCount() != old_channel_count && !exception_state.HadException()) {
++    base::AutoLock consumer_locker(consumer_lock_);
++    mix_bus_ = AudioBus::Create(ChannelCount(),
++                                GetDeferredTaskHandler().RenderQuantumFrames());
++    if (destination_consumer_) {
++      destination_consumer_->SetFormat(ChannelCount(), Context()->sampleRate());
++    }
++  }
+ }
+ 
+ void MediaStreamAudioDestinationHandler::PullInputs(
+diff --git a/third_party/blink/renderer/modules/webaudio/media_stream_audio_destination_handler.h b/third_party/blink/renderer/modules/webaudio/media_stream_audio_destination_handler.h
+index e6a6063b21cdb1..d8a15b0c0ae388 100644
+--- a/third_party/blink/renderer/modules/webaudio/media_stream_audio_destination_handler.h
++++ b/third_party/blink/renderer/modules/webaudio/media_stream_audio_destination_handler.h
+@@ -26,6 +26,11 @@ class WebAudioDestinationConsumer;
+ class MODULES_EXPORT MediaStreamAudioDestinationHandler final
+     : public AudioHandler {
+  public:
++  // Channel counts greater than 8 are ignored by some audio tracks/sinks (see
++  // WebAudioMediaStreamSource), so we set a limit here to avoid anything that
++  // could cause a crash.
++  static constexpr uint32_t kMaxChannelCountSupported = 8;
++
+   static scoped_refptr<MediaStreamAudioDestinationHandler> Create(
+       AudioNode&,
+       uint32_t number_of_channels,
+@@ -82,8 +87,8 @@ class MODULES_EXPORT MediaStreamAudioDestinationHandler final
+   // thread-safe bridge between the AudioHandler on the real-time audio thread
+   // and the WebAudioMediaStreamSource on the main thread. It handles proper
+   // synchronization to prevent Use-After-Free issues during garbage collection.
+-  scoped_refptr<WebAudioDestinationConsumer>
+-      destination_consumer_ GUARDED_BY(consumer_lock_);
++  scoped_refptr<WebAudioDestinationConsumer> destination_consumer_
++      GUARDED_BY(consumer_lock_);
+   Vector<const float*> consumer_bus_wrapper_ GUARDED_BY(consumer_lock_);
+ 
+   // This synchronizes dynamic changes to the channel count with
+diff --git a/third_party/blink/renderer/modules/webaudio/media_stream_audio_destination_handler_test.cc b/third_party/blink/renderer/modules/webaudio/media_stream_audio_destination_handler_test.cc
+index 306ccffd6e2385..310598ba4b0e19 100644
+--- a/third_party/blink/renderer/modules/webaudio/media_stream_audio_destination_handler_test.cc
++++ b/third_party/blink/renderer/modules/webaudio/media_stream_audio_destination_handler_test.cc
+@@ -20,6 +20,7 @@
+ #include "third_party/blink/public/platform/web_audio_sink_descriptor.h"
+ #include "third_party/blink/renderer/bindings/core/v8/v8_binding_for_core.h"
+ #include "third_party/blink/renderer/bindings/modules/v8/v8_audio_context_options.h"
++#include "third_party/blink/renderer/bindings/modules/v8/v8_audio_node_options.h"
+ #include "third_party/blink/renderer/core/frame/frame_test_helpers.h"
+ #include "third_party/blink/renderer/core/frame/frame_types.h"
+ #include "third_party/blink/renderer/core/frame/local_dom_window.h"
+@@ -31,6 +32,7 @@
+ #include "third_party/blink/renderer/modules/webaudio/audio_context.h"
+ #include "third_party/blink/renderer/modules/webaudio/media_stream_audio_destination_node.h"
+ #include "third_party/blink/renderer/modules/webaudio/testing/mock_web_audio_device.h"
++#include "third_party/blink/renderer/platform/bindings/exception_state.h"
+ #include "third_party/blink/renderer/platform/loader/fetch/memory_cache.h"
+ #include "third_party/blink/renderer/platform/mediastream/webaudio_destination_consumer.h"
+ #include "third_party/blink/renderer/platform/mediastream/webaudio_media_stream_source.h"
+@@ -53,8 +55,8 @@ class AudioContextTestPlatform : public TestingPlatformSupport {
+       const WebAudioLatencyHint& latency_hint,
+       std::optional<float> context_sample_rate,
+       media::AudioRendererSink::RenderCallback*) override {
+-    return std::make_unique<MockWebAudioDevice>(
+-        AudioHardwareSampleRate(), AudioHardwareBufferSize());
++    return std::make_unique<MockWebAudioDevice>(AudioHardwareSampleRate(),
++                                                AudioHardwareBufferSize());
+   }
+ 
+   double AudioHardwareSampleRate() override { return 44100; }
+@@ -76,8 +78,8 @@ class MediaStreamAudioDestinationHandlerTest : public testing::Test {
+     AudioContext* audio_context = AudioContext::Create(
+         page->GetFrame().DomWindow(), AudioContextOptions::Create(),
+         ASSERT_NO_EXCEPTION);
+-    node_ = MediaStreamAudioDestinationNode::Create(
+-        *audio_context, 2, ASSERT_NO_EXCEPTION);
++    node_ = MediaStreamAudioDestinationNode::Create(*audio_context, 2,
++                                                    ASSERT_NO_EXCEPTION);
+     bus_ = AudioBus::Create(2, 10);
+     consumer_ =
+         base::MakeRefCounted<StrictMock<MockWebAudioDestinationConsumer>>();
+@@ -97,11 +99,9 @@ class MediaStreamAudioDestinationHandlerTest : public testing::Test {
+     Handler().SetConsumer(std::move(consumer), num_channels, sample_rate);
+   }
+ 
+-  bool CallRemoveDestinationConsumer() {
+-    return Handler().RemoveConsumer();
+-  }
++  bool CallRemoveDestinationConsumer() { return Handler().RemoveConsumer(); }
+ 
+-  void CallConsumeAudio(AudioBus *bus, int number_of_frames) {
++  void CallConsumeAudio(AudioBus* bus, int number_of_frames) {
+     Handler().ConsumeAudio(bus, number_of_frames);
+   }
+ 
+@@ -205,4 +205,53 @@ TEST_F(MediaStreamAudioDestinationHandlerTest, AudioConsumerStressTest) {
+   done_event.Wait();
+ }
+ 
++TEST_F(MediaStreamAudioDestinationHandlerTest,
++       SetChannelCountUpdatesConsumerFormat) {
++  EXPECT_CALL(*consumer_, SetFormat(2, 44100));
++  CallSetDestinationConsumer(consumer_, 2, 44100);
++
++  // Updating the channel count on the node/handler must update the consumer.
++  EXPECT_CALL(*consumer_, SetFormat(6, 44100));
++  node_->setChannelCount(6, ASSERT_NO_EXCEPTION);
++  EXPECT_EQ(node_->channelCount(), 6u);
++
++  // Setting the same channel count again is a no-op and must not reset format.
++  EXPECT_CALL(*consumer_, SetFormat(_, _)).Times(0);
++  node_->setChannelCount(6, ASSERT_NO_EXCEPTION);
++}
++
++TEST_F(MediaStreamAudioDestinationHandlerTest, CreateWithOptionsChannelCount) {
++  auto page = std::make_unique<DummyPageHolder>();
++  AudioContext* audio_context =
++      AudioContext::Create(page->GetFrame().DomWindow(),
++                           AudioContextOptions::Create(), ASSERT_NO_EXCEPTION);
++  auto* options = AudioNodeOptions::Create();
++  options->setChannelCount(6);
++  auto* dest = MediaStreamAudioDestinationNode::Create(audio_context, options,
++                                                       ASSERT_NO_EXCEPTION);
++  ASSERT_NE(dest, nullptr);
++  EXPECT_EQ(dest->channelCount(), 6u);
++  auto* audio_source = MediaStreamAudioSource::From(dest->source());
++  ASSERT_NE(audio_source, nullptr);
++  EXPECT_EQ(audio_source->GetAudioParameters().channels(), 6);
++}
++
++TEST_F(MediaStreamAudioDestinationHandlerTest,
++       CreateWithInvalidChannelCountThrows) {
++  auto page = std::make_unique<DummyPageHolder>();
++  AudioContext* audio_context =
++      AudioContext::Create(page->GetFrame().DomWindow(),
++                           AudioContextOptions::Create(), ASSERT_NO_EXCEPTION);
++  auto* options = AudioNodeOptions::Create();
++  options->setChannelCount(9);
++  DummyExceptionStateForTesting exception_state;
++  MediaStreamAudioDestinationNode* dest =
++      MediaStreamAudioDestinationNode::Create(audio_context, options,
++                                              exception_state);
++  EXPECT_EQ(dest, nullptr);
++  EXPECT_TRUE(exception_state.HadException());
++  EXPECT_EQ(exception_state.Code(),
++            static_cast<int>(DOMExceptionCode::kNotSupportedError));
++}
++
+ }  // namespace blink
+diff --git a/third_party/blink/renderer/modules/webaudio/media_stream_audio_destination_node.cc b/third_party/blink/renderer/modules/webaudio/media_stream_audio_destination_node.cc
+index 0c05656edd5054..6af43f1683e19e 100644
+--- a/third_party/blink/renderer/modules/webaudio/media_stream_audio_destination_node.cc
++++ b/third_party/blink/renderer/modules/webaudio/media_stream_audio_destination_node.cc
+@@ -56,7 +56,7 @@ MediaStreamAudioDestinationNode::MediaStreamAudioDestinationNode(
+       ActiveScriptWrappable<MediaStreamAudioDestinationNode>({}) {
+   DVLOG(1) << "Creating WebAudio media stream source.";
+   auto audio_source = std::make_unique<WebAudioMediaStreamSource>(
+-    context.GetExecutionContext()->GetTaskRunner(TaskType::kInternalMedia));
++      context.GetExecutionContext()->GetTaskRunner(TaskType::kInternalMedia));
+   WebAudioMediaStreamSource* audio_source_ptr = audio_source.get();
+ 
+   String source_id = StrCat({"WebAudio-", CreateCanonicalUuidString()});
+@@ -70,8 +70,7 @@ MediaStreamAudioDestinationNode::MediaStreamAudioDestinationNode(
+   capabilities.voice_isolation = Vector<bool>({false});
+   capabilities.sample_size = {
+       media::SampleFormatToBitsPerChannel(media::kSampleFormatS16),
+-      media::SampleFormatToBitsPerChannel(media::kSampleFormatS16)
+-  };
++      media::SampleFormatToBitsPerChannel(media::kSampleFormatS16)};
+ 
+   source_ = MakeGarbageCollected<MediaStreamSource>(
+       source_id, MediaStreamSource::kTypeAudio,
+@@ -81,12 +80,10 @@ MediaStreamAudioDestinationNode::MediaStreamAudioDestinationNode(
+   stream_ = MediaStream::Create(
+       context.GetExecutionContext(),
+       MediaStreamTrackVector({MediaStreamUtils::CreateLocalAudioTrack(
+-          context.GetExecutionContext(),
+-          source_)}));
++          context.GetExecutionContext(), source_)}));
+ 
+-  SetHandler(
+-      MediaStreamAudioDestinationHandler::Create(
+-          *this, number_of_channels, audio_source_ptr->Consumer()));
++  SetHandler(MediaStreamAudioDestinationHandler::Create(
++      *this, number_of_channels, audio_source_ptr->Consumer()));
+ 
+   SendLogMessage(
+       __func__,
+@@ -123,18 +120,27 @@ MediaStreamAudioDestinationNode* MediaStreamAudioDestinationNode::Create(
+   if (!context->CheckExecutionContextAndThrowIfNecessary(exception_state)) {
+     return nullptr;
+   }
+-  MediaStreamAudioDestinationNode* node =
+-      MakeGarbageCollected<MediaStreamAudioDestinationNode>(
+-          *context, kDefaultNumberOfChannels);
+-
+-  // Need to handle channelCount here ourselves because the upper
+-  // limit is different from the normal AudioNode::setChannelCount
+-  // limit of 32.  Error messages will sometimes show the wrong
+-  // limits.
++  uint32_t number_of_channels = kDefaultNumberOfChannels;
+   if (options->hasChannelCount()) {
+-    node->setChannelCount(options->channelCount(), exception_state);
++    number_of_channels = options->channelCount();
++    if (number_of_channels < 1 ||
++        number_of_channels >
++            MediaStreamAudioDestinationHandler::kMaxChannelCountSupported) {
++      exception_state.ThrowDOMException(
++          DOMExceptionCode::kNotSupportedError,
++          ExceptionMessages::IndexOutsideRange<unsigned>(
++              "channel count", number_of_channels, 1,
++              ExceptionMessages::kInclusiveBound,
++              MediaStreamAudioDestinationHandler::kMaxChannelCountSupported,
++              ExceptionMessages::kInclusiveBound));
++      return nullptr;
++    }
+   }
+ 
++  MediaStreamAudioDestinationNode* node =
++      MakeGarbageCollected<MediaStreamAudioDestinationNode>(*context,
++                                                            number_of_channels);
++
+   node->HandleChannelOptions(options, exception_state);
+ 
+   return node;

@@ -1,10 +1,13 @@
 import com.sun.source.tree.ClassTree;
 import com.sun.source.tree.CompilationUnitTree;
+import com.sun.source.tree.LambdaExpressionTree;
+import com.sun.source.tree.MethodInvocationTree;
 import com.sun.source.tree.MethodTree;
 import com.sun.source.tree.NewClassTree;
 import com.sun.source.tree.Tree;
 import com.sun.source.tree.VariableTree;
 import com.sun.source.util.JavacTask;
+import com.sun.source.util.TreeScanner;
 import java.lang.reflect.InvocationTargetException;
 import java.net.URL;
 import java.net.URLClassLoader;
@@ -19,8 +22,8 @@ import javax.tools.StandardJavaFileManager;
 import javax.tools.ToolProvider;
 
 /**
- * Executes source-extracted Activity recovery/preview control flow on deterministic JDK17 hosts.
- * Android Views, Chromium, the frame clock and PixelCopy delivery are fakes, not production hooks.
+ * Executes source-extracted Activity recovery, preview, fullscreen and web-app control flow.
+ * Android UI, Chromium callbacks, PixelCopy and persistence/shortcut ports are deterministic fakes.
  * This proves callback/state behavior, not Android compilation, real renderer recovery, actual
  * pixel content, device lifecycle timing, layout/accessibility, or visual acceptance.
  */
@@ -29,7 +32,11 @@ public final class NativeBrowserRecoveryHostTest {
             "MAX_PREVIEW_RETRIES", "restoreSplashShown", "restoreInterrupted", "restoreEpoch", "restoreShell",
             "restoreContents", "restoreUrl", "restoreGeneration", "restoreTimeout", "chromeShell",
             "chromeContents", "previewInFlight", "previewRequested", "previewCapturePosted", "previewRetries", "previewEpoch",
-            "previewCapture", "tabPreviews", "previewUrls", "newTabUrls", "historyObservers", "lastBackExitHint");
+            "previewCapture", "tabPreviews", "previewUrls", "newTabUrls", "historyObservers", "lastBackExitHint",
+            "fullscreenOwner", "fullscreenSignal", "browserFullscreenRequest", "browserFullscreen",
+            "fullscreenExits", "fullscreenRefreshPosted", "fullscreenPriorUiFlags", "fullscreenPriorBarsBehavior",
+            "fullscreenUsesInsetsController", "webAppInstall", "fullscreenRefresh", "chromeRefresh",
+            "webAppOffer", "WEB_APP_CHECK_TIMEOUT_MS", "webAppShells", "browserBack");
     private static final List<String> METHOD_NAMES = List.of(
             "showPageRestoring", "beginPageRestoring", "pageInterruption", "reloadPage",
             "ownsPageRestoring", "hidePageRestoring", "retryPageRestoring",
@@ -39,7 +46,21 @@ public final class NativeBrowserRecoveryHostTest {
             "onPause", "onStop", "onResume", "syncWebContentsVisibility", "installShellObserverHooks",
             "installPreviewSurfaceHooks", "observeShell", "trackHistory", "contents",
             "performMenuAction", "showTabSwitcher", "dismissTabSwitcher", "dismissFromSwitcherListener",
-            "onBackPressed", "ShellHistoryObserver");
+            "onBackPressed", "ShellHistoryObserver", "selectedFullscreenObserver", "ownsUncoveredPage",
+            "canPresentFullscreen", "requestBrowserFullscreen", "wakePendingFullscreen", "requestFullscreenRefresh",
+            "requestFullscreenExit", "revokeCoveredFullscreen", "reconcilePageFullscreen",
+            "exitRequestedFullscreen", "exitNativeFullscreen", "exitSelectedFullscreen", "clearPageFullscreen",
+            "setFullscreenOwner", "updateBrowserChromeVisibility", "applyPageFullscreenWindow", "withoutPageSystemBars",
+            "onWindowFocusChanged", "quiesceForShutdown", "closeNativeView", "onDestroy", "createBrowserFrame",
+            "applyPageFullscreenInsets", "requestChromeRefresh", "clickOverflowAction", "dismissOverflowFromListener", "showHistoryPanel",
+            "WebAppPage", "WebAppOffer", "WebAppInstall", "setWebAppOfferVisible", "canShowWebAppOffer",
+            "useWebAppOffer", "refreshWebAppOffer", "receiveWebAppOffer", "ownsWebAppPage",
+            "requestWebAppInstall", "beginWebAppInstall", "ownsWebAppInstallPage", "ownsWebAppInstall",
+            "cancelWebAppInstall", "armWebAppInstallTimeout", "expireWebAppInstall", "onWebAppInstallWindowFocusChanged",
+            "receiveWebAppInstallManifest", "eligibleManifest", "showWebAppConsent", "completeWebAppInstall",
+            "WebAppShell", "webAppShell", "showSelectedWebAppInBrowser", "closeWebApp", "backFromWebApp",
+            "urlOrigin", "webAppOriginInstalled",
+            "setTextIfChanged", "registerBrowserBack", "unregisterBrowserBack");
 
     private NativeBrowserRecoveryHostTest() { }
 
@@ -47,13 +68,15 @@ public final class NativeBrowserRecoveryHostTest {
         if (args.length != 2) throw new IllegalArgumentException("Usage: NativeBrowserRecoveryHostTest ROOT OUTPUT");
         Path root = Path.of(args[0]).toAbsolutePath();
         Path output = Path.of(args[1]).toAbsolutePath().resolve("recovery-host");
-        JavaCompiler compiler = ToolProvider.getSystemJavaCompiler();
-        if (compiler == null) throw new AssertionError("A full JDK17 is required");
+        JavaCompiler javac = ToolProvider.getSystemJavaCompiler();
+        if (javac == null) throw new AssertionError("A full JDK17 is required");
         Path activity = root.resolve("mobile/android/native-kernel/src/main/java/com/ahoo/abs/android/nativekernel/NativeBrowserActivity.java");
+        HostCompiler compiler = new HostCompiler(javac,
+                root.resolve("mobile/android/app/src/main/java/com/ahoo/abs/android/webapp/WebApp.java"));
         Map<String, String> methods = new HashMap<>();
         Map<String, String> fields = new HashMap<>();
-        try (StandardJavaFileManager files = compiler.getStandardFileManager(null, null, StandardCharsets.UTF_8)) {
-            JavacTask task = (JavacTask) compiler.getTask(null, files, null,
+        try (StandardJavaFileManager files = javac.getStandardFileManager(null, null, StandardCharsets.UTF_8)) {
+            JavacTask task = (JavacTask) javac.getTask(null, files, null,
                     List.of("-proc:none", "--release", "17"), null, files.getJavaFileObjects(activity));
             for (CompilationUnitTree unit : task.parse()) {
                 for (Tree top : unit.getTypeDecls()) {
@@ -64,6 +87,7 @@ public final class NativeBrowserRecoveryHostTest {
                             if (methods.put(name, method.toString()) != null && METHOD_NAMES.contains(name)) {
                                 throw new AssertionError("Ambiguous production method: " + name);
                             }
+                            if (name.equals("showMenu")) extractOverflowAction(method, methods);
                         }
                         if (member instanceof VariableTree field) {
                             fields.put(field.getName().toString(), field + ";\n");
@@ -79,8 +103,8 @@ public final class NativeBrowserRecoveryHostTest {
                                 }
                             }
                         }
-                        if (member instanceof ClassTree nested && nested.getSimpleName().contentEquals("ShellHistoryObserver")) {
-                            methods.put("ShellHistoryObserver", nested.toString());
+                        if (member instanceof ClassTree nested && METHOD_NAMES.contains(nested.getSimpleName().toString())) {
+                            methods.put(nested.getSimpleName().toString(), nested.toString());
                         }
                     }
                 }
@@ -150,10 +174,59 @@ public final class NativeBrowserRecoveryHostTest {
         rejected += rejects(compiler, output, fields, methods, "fresh-router-url-not-followed",
                 "ShellHistoryObserver", "interruptedUrl = url;", "interruptedUrl = \"https://mutation.invalid/stale-router\";",
                 "fresh committed replacement proof follows its successful same-document router URL");
-        System.out.println(checks + " source-extracted recovery/preview fake-host checks, "
+        rejected += rejects(compiler, output, fields, methods, "native-fullscreen-revoked-for-focus-loss",
+                "canPresentFullscreen", "ownsUncoveredPage(observer) &&", "hasWindowFocus() && ownsUncoveredPage(observer) &&",
+                "temporary focus loss never revokes granted native fullscreen");
+        rejected += rejects(compiler, output, fields, methods, "browser-fullscreen-without-popup-page-epoch",
+                "clickOverflowAction", " && popupOwner.webAppPageEpoch == popupPageEpoch", "",
+                "stale popup cannot bind even a same-URL replacement");
+        rejected += rejects(compiler, output, fields, methods, "pwa-offer-keeps-hidden-probe",
+                "ShellHistoryObserver", "if (!webAppOffer.completed) webAppOffer = null;", "",
+                "hide drops only the pending passive lookup");
+        rejected += rejects(compiler, output, fields, methods, "pwa-confirm-keeps-reply-across-blur",
+                "receiveWebAppInstallManifest", " || focusEpoch != install.focusEpoch", "",
+                "even a completed consent blur/refocus interval retires the old reply");
+        rejected += rejects(compiler, output, fields, methods, "pwa-install-without-activity-focus",
+                "beginWebAppInstall", "if (!hasWindowFocus()) return;", "",
+                "install waits for Activity focus without polling");
+        rejected += rejects(compiler, output, fields, methods, "pwa-confirm-without-dialog-focus",
+                "ownsWebAppInstall", " && consent.getDecorView().hasWindowFocus()", "",
+                "unfocused consent cannot request confirmation");
+        rejected += rejects(compiler, output, fields, methods, "pwa-confirm-edited-name",
+                "completeWebAppInstall", " || !shown.name.equals(confirmed.name)", "",
+                "changed manifest cannot register or request a pin after consent");
+        rejected += rejects(compiler, output, fields, methods, "pwa-back-traverses-standalone-history",
+                "onBackPressed", "if (backFromWebApp(active)) return;", "",
+                "standalone framework Back closes the app and restores its exact previous tab without traversing app history");
+        System.out.println(checks + " source-extracted recovery/preview/fullscreen/PWA fake-host checks, "
                 + rejected + " behavioral mutation controls rejected, 0 failures");
         System.out.println("Host-only evidence: no Android build, device, real pixels, timing, or visual acceptance asserted.");
     }
+
+    private static void extractOverflowAction(MethodTree method, Map<String, String> methods) {
+        new TreeScanner<Void, Void>() {
+            @Override public Void visitMethodInvocation(MethodInvocationTree call, Void unused) {
+                if (call.getMethodSelect().toString().equals("action.setOnClickListener")
+                        && call.getArguments().size() == 1
+                        && call.getArguments().get(0) instanceof LambdaExpressionTree listener) {
+                    // Run the actual popup click body without simulating its layout and styling.
+                    methods.put("clickOverflowAction", "private void clickOverflowAction(PopupWindow popup, "
+                            + "ShellHistoryObserver popupOwner, long popupPageEpoch, String title, View "
+                            + listener.getParameters().get(0).getName() + ") " + listener.getBody());
+                }
+                if (call.getMethodSelect().toString().equals("popup.setOnDismissListener")
+                        && call.getArguments().size() == 1
+                        && call.getArguments().get(0) instanceof LambdaExpressionTree listener) {
+                    methods.put("dismissOverflowFromListener", "private void dismissOverflowFromListener("
+                            + "PopupWindow popup, View anchor, View.OnLayoutChangeListener anchorLayout) "
+                            + listener.getBody());
+                }
+                return super.visitMethodInvocation(call, unused);
+            }
+        }.scan(method.getBody(), null);
+    }
+
+    private record HostCompiler(JavaCompiler javac, Path webApp) { }
 
     private static String required(Map<String, String> values, String name) {
         String value = values.get(name);
@@ -168,7 +241,7 @@ public final class NativeBrowserRecoveryHostTest {
         return actual.toString();
     }
 
-    private static int rejects(JavaCompiler compiler, Path output, Map<String, String> fields,
+    private static int rejects(HostCompiler compiler, Path output, Map<String, String> fields,
             Map<String, String> methods, String label, String method, String before, String after,
             String expectedFailure) throws Exception {
         Map<String, String> changed = new HashMap<>(methods);
@@ -193,25 +266,26 @@ public final class NativeBrowserRecoveryHostTest {
         throw new AssertionError("Behavioral mutation survived: " + label);
     }
 
-    private static int execute(JavaCompiler compiler, Path output, String actual) throws Exception {
+    private static int execute(HostCompiler compiler, Path output, String actual) throws Exception {
         Files.createDirectories(output);
         Path host = output.resolve("RecoveryHost.java");
         Files.writeString(host, HOST.replace("@ACTUAL@", actual), StandardCharsets.UTF_8);
         Path ids = output.resolve("org/chromium/content_shell/R.java");
         Files.createDirectories(ids.getParent());
         Files.writeString(ids, "package org.chromium.content_shell; public final class R { public static final class id { public static final int contentview_holder = 1; } }", StandardCharsets.UTF_8);
-        try (StandardJavaFileManager files = compiler.getStandardFileManager(null, null, StandardCharsets.UTF_8)) {
-            boolean compiled = compiler.getTask(null, files, null,
+        try (StandardJavaFileManager files = compiler.javac().getStandardFileManager(null, null, StandardCharsets.UTF_8)) {
+            boolean compiled = compiler.javac().getTask(null, files, null,
                     List.of("--release", "17", "-Xlint:all", "-Werror", "-d", output.toString()),
-                    null, files.getJavaFileObjects(host, ids)).call();
+                    null, files.getJavaFileObjects(host, ids, compiler.webApp())).call();
             if (!compiled) throw new AssertionError("Source-extracted recovery host did not compile: " + output);
         }
         try (URLClassLoader loader = new URLClassLoader(new URL[] {output.toUri().toURL()}, NativeBrowserRecoveryHostTest.class.getClassLoader())) {
-            return (Integer) loader.loadClass("RecoveryHost").getMethod("run").invoke(null);
+            return (Integer) loader.loadClass("com.ahoo.abs.android.webapp.RecoveryHost").getMethod("run").invoke(null);
         }
     }
 
     private static final String HOST = String.join("", """
+            package com.ahoo.abs.android.webapp;
             import java.util.*;
             public final class RecoveryHost {
                 static int checks;
@@ -220,9 +294,26 @@ public final class NativeBrowserRecoveryHostTest {
                     if (!pass) throw new AssertionError(message);
                 }
                 static final class Handler {
+                    private record Delayed(Runnable task, long deadline) { }
                     final ArrayDeque<Runnable> queue = new ArrayDeque<>();
+                    final List<Delayed> delayed = new ArrayList<>();
                     void post(Runnable task) { queue.add(task); }
-                    void removeCallbacks(Runnable task) { queue.removeIf(item -> item == task); }
+                    void postDelayed(Runnable task, long delay) {
+                        delayed.add(new Delayed(task, android.os.SystemClock.elapsedRealtime() + delay));
+                    }
+                    void removeCallbacks(Runnable task) {
+                        queue.removeIf(item -> item == task);
+                        delayed.removeIf(item -> item.task() == task);
+                    }
+                    void advance(long millis) {
+                        android.os.SystemClock.now += millis;
+                        List<Delayed> due = delayed.stream()
+                                .filter(item -> item.deadline() <= android.os.SystemClock.elapsedRealtime())
+                                .sorted(java.util.Comparator.comparingLong(Delayed::deadline)).toList();
+                        delayed.removeAll(due);
+                        for (Delayed item : due) queue.add(item.task());
+                        all();
+                    }
                     void all() {
                         int delivered = 0;
                         while (!queue.isEmpty()) {
@@ -231,8 +322,36 @@ public final class NativeBrowserRecoveryHostTest {
                         }
                     }
                 }
+                static final class ViewTreeObserver {
+                    interface OnWindowFocusChangeListener { void onWindowFocusChanged(boolean focus); }
+                    final List<OnWindowFocusChangeListener> focusListeners = new ArrayList<>();
+                    boolean isAlive() { return true; }
+                    void addOnWindowFocusChangeListener(OnWindowFocusChangeListener value) { focusListeners.add(value); }
+                    void removeOnWindowFocusChangeListener(OnWindowFocusChangeListener value) { focusListeners.remove(value); }
+                }
                 static class View {
+                    interface OnLayoutChangeListener { }
+                    void removeOnLayoutChangeListener(OnLayoutChangeListener ignored) { }
                     static final int VISIBLE = 0, INVISIBLE = 4, GONE = 8;
+                    static final int SYSTEM_UI_FLAG_LAYOUT_STABLE = 0x100, SYSTEM_UI_FLAG_LIGHT_STATUS_BAR = 0x2000,
+                            SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR = 0x10, SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN = 0x400,
+                            SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION = 0x200, SYSTEM_UI_FLAG_FULLSCREEN = 4,
+                            SYSTEM_UI_FLAG_HIDE_NAVIGATION = 2, SYSTEM_UI_FLAG_IMMERSIVE_STICKY = 0x1000;
+                    static final int TEXT_DIRECTION_LTR = 3;
+                    boolean windowFocus = true;
+                    final ViewTreeObserver tree = new ViewTreeObserver();
+                    ViewTreeObserver getViewTreeObserver() { return tree; }
+                    boolean hasWindowFocus() { return windowFocus; }
+                    void dispatchWindowFocus(boolean focus) {
+                        if (windowFocus == focus) return;
+                        windowFocus = focus;
+                        for (var listener : List.copyOf(tree.focusListeners)) listener.onWindowFocusChanged(focus);
+                    }
+                    void performHapticFeedback(int kind) { }
+                    void bringToFront() { }
+                    int flags;
+                    int getSystemUiVisibility() { return flags; }
+                    void setSystemUiVisibility(int value) { flags = value; }
                     static final int IMPORTANT_FOR_ACCESSIBILITY_AUTO = 0,
                             IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS = 4;
                     int visibility = VISIBLE, width = 1080, height = 1920, draws, visibilityWrites;
@@ -256,10 +375,19 @@ public final class NativeBrowserRecoveryHostTest {
                         void onChildViewAdded(View parent, View child);
                         void onChildViewRemoved(View parent, View child);
                     }
+                    static final int FOCUS_BLOCK_DESCENDANTS = 0x60000;
+                    void setDescendantFocusability(int value) { }
                     OnHierarchyChangeListener hierarchy;
                     void setOnHierarchyChangeListener(OnHierarchyChangeListener value) { hierarchy = value; }
                 }
-                static final class Frame extends ViewGroup {
+                static class FrameLayout extends ViewGroup {
+                    FrameLayout(Activity activity) { }
+                    Insets padding = Insets.NONE;
+                    void setPadding(int l, int t, int r, int b) { padding = Insets.of(l, t, r, b); }
+                    public WindowInsets onApplyWindowInsets(WindowInsets insets) {
+                        padding = insets.getSystemWindowInsets();
+                        return insets;
+                    }
                     static final class Task {
                         final Runnable runnable;
                         final long due;
@@ -267,7 +395,8 @@ public final class NativeBrowserRecoveryHostTest {
                     }
                     final List<Task> tasks = new ArrayList<>();
                     long now;
-                    int animationPosts, callbackRemovals;
+                    int animationPosts, callbackRemovals, insetsRequests;
+                    void requestApplyInsets() { insetsRequests++; }
                     void postOnAnimation(Runnable task) { animationPosts++; tasks.add(new Task(task, now + 16)); }
                     void postOnAnimationDelayed(Runnable task, long delay) { tasks.add(new Task(task, now + delay)); }
                     void removeCallbacks(Runnable task) { callbackRemovals++; tasks.removeIf(item -> item.runnable == task); }
@@ -293,10 +422,22 @@ public final class NativeBrowserRecoveryHostTest {
                 }
                 static final class TextView extends View {
                     String text = "";
+                    int direction;
+                    boolean selectable;
+                    String getText() { return text; }
                     void setText(String value) { text = value; }
+                    void setTextDirection(int value) { direction = value; }
+                    void setTextIsSelectable(boolean value) { selectable = value; }
                 }
-                static final class NewTabPage extends View { void dismissDialogs() { } }
-                static final class HistoryPanel extends View { void dismiss() { visibility = GONE; } }
+                static final class NewTabPage extends View {
+                    void dismissDialogs() { }
+                    void quiesce() { }
+                }
+                static final class HistoryPanel extends View {
+                    void show() { visibility = VISIBLE; }
+                    void dismiss() { visibility = GONE; }
+                    void quiesce() { dismiss(); }
+                }
                 static final class TabSwitcherView {
                     static final class TabItem { }
                     boolean showing;
@@ -305,11 +446,18 @@ public final class NativeBrowserRecoveryHostTest {
                     void show(List<TabItem> items) { showing = true; shows++; }
                     void dismiss() { showing = false; }
                     void bringToFront() { }
+                    void release() { }
+                    void retainInsetsAnchor() { }
                 }
-                static final class Popup { int dismisses; void dismiss() { dismisses++; } }
+                static final class PopupWindow {
+                    int dismisses;
+                    Runnable onDismiss = () -> { };
+                    void dismiss() { dismisses++; onDismiss.run(); }
+                }
                 static final class Store {
                     int flushes, visits, titles;
                     void flush() { flushes++; }
+                    void removeLoadListener(Runnable callback) { }
                     void recordVisit(String url, String title) { visits++; }
                     void updateTitle(String url, String title) { titles++; }
                 }
@@ -319,18 +467,42 @@ public final class NativeBrowserRecoveryHostTest {
                 // Monotonic Android clock and Chromium are host API fakes; the observer below is extracted.
                 static final class android {
                     static final class view {
+                        static final class HapticFeedbackConstants { static final int KEYBOARD_TAP = 3; }
                         static final class inputmethod {
                             static final class InputMethodManager {
                                 void hideSoftInputFromWindow(Object token, int flags) { }
                             }
                         }
                     }
+                    static final class window {
+                        interface OnBackInvokedCallback { void onBackInvoked(); }
+                        static final class OnBackInvokedDispatcher {
+                            static final int PRIORITY_DEFAULT = 0;
+                            OnBackInvokedCallback callback;
+                            int priority;
+                            void registerOnBackInvokedCallback(int value, OnBackInvokedCallback next) {
+                                priority = value; callback = next;
+                            }
+                            void unregisterOnBackInvokedCallback(OnBackInvokedCallback old) {
+                                if (callback == old) callback = null;
+                            }
+                        }
+                    }
                     static final class os {
+                        static final class Build {
+                            static final class VERSION { static int SDK_INT = 29; }
+                            static final class VERSION_CODES { static final int R = 30; }
+                        }
                         static final class SystemClock {
                             static long now;
                             static long elapsedRealtime() { return now; }
                         }
                     }
+                }
+                static final class Looper {
+                    static final Looper MAIN = new Looper();
+                    static Looper myLooper() { return MAIN; }
+                    static Looper getMainLooper() { return MAIN; }
                 }
                 static final class NavigationHandle {
                     String url;
@@ -351,8 +523,11 @@ public final class NativeBrowserRecoveryHostTest {
                         observing = contents;
                         if (contents != null) contents.observers.add(this);
                     }
+                    public void didToggleFullscreenModeForTab(boolean enteredFullscreen, boolean willCauseResize) { }
                     public void primaryMainFrameRenderProcessGone(int status) { }
                     public void didStartNavigationInPrimaryMainFrame(NavigationHandle navigation) { }
+                    public void didRedirectNavigation(NavigationHandle navigation) { }
+                    public void didChangeVisibleSecurityState() { }
                     public void didFinishNavigationInPrimaryMainFrame(NavigationHandle navigation) { }
                     public void didFirstVisuallyNonEmptyPaint() { }
                     public void didStopLoading(GURL url, boolean valid) { }
@@ -362,8 +537,11 @@ public final class NativeBrowserRecoveryHostTest {
                     public void titleWasSet(String title) { }
                 }
                 static final class Toast {
-                    static final int LENGTH_SHORT = 0;
-                    static Toast makeText(Object context, String text, int length) { return new Toast(); }
+                    static final int LENGTH_SHORT = 0, LENGTH_LONG = 1;
+                    static Toast makeText(Object context, String text, int length) {
+                        if (context instanceof Activity host) host.toasts.add(text);
+                        return new Toast();
+                    }
                     void show() { }
                 }
                 static final class GURL {
@@ -372,12 +550,12 @@ public final class NativeBrowserRecoveryHostTest {
                     String getSpec() { return value; }
                 }
                 static final class NavigationController {
-                    int reloads;
-                    boolean lastCheckForRepost;
+                    int reloads, backCalls;
+                    boolean lastCheckForRepost, hasBack;
                     boolean canGoForward() { return false; }
-                    boolean canGoBack() { return false; }
+                    boolean canGoBack() { return hasBack; }
                     void goForward() { }
-                    void goBack() { }
+                    void goBack() { backCalls++; }
                     Runnable onReload;
                     void reload(boolean checkForRepost) {
                         reloads++; lastCheckForRepost = checkForRepost;
@@ -391,10 +569,14 @@ public final class NativeBrowserRecoveryHostTest {
                 static final class Visibility { static final int VISIBLE = 0, HIDDEN = 1; }
                 static final class WebContents {
                     String url, lastCommittedUrl, title;
-                    boolean destroyed;
+                    boolean destroyed, nativeFullscreen, insideFullscreenObserver, loading;
+                    int fullscreenExits, fullscreenQueries, stops;
                     int visibility = Visibility.VISIBLE;
                     final NavigationController navigation = new NavigationController();
                     final List<WebContentsObserver> observers = new ArrayList<>();
+                    boolean securePage = true, standalonePage = true;
+                    String standaloneScope;
+                    final List<NativePwaBridge.Callback> manifests = new ArrayList<>();
                     boolean isDestroyed() { return destroyed; }
                     RenderWidgetHostView renderer = new RenderWidgetHostView();
                     WebContents(String url, boolean ready) {
@@ -406,7 +588,34 @@ public final class NativeBrowserRecoveryHostTest {
                     RenderWidgetHostView getRenderWidgetHostView() { return renderer; }
                     NavigationController getNavigationController() { return navigation; }
                     int getVisibility() { return visibility; }
-                    void updateWebContentsVisibility(int value) { visibility = value; }
+                    boolean isLoading() { return loading; }
+                    void updateWebContentsVisibility(int value) {
+                        if (visibility == value) return;
+                        visibility = value;
+                        for (var observer : List.copyOf(observers)) observer.onVisibilityChanged(value);
+                    }
+                    boolean isFullscreenForCurrentTab() {
+                        if (destroyed) throw new AssertionError("queried destroyed fullscreen contents");
+                        fullscreenQueries++;
+                        return nativeFullscreen;
+                    }
+                    void exitFullscreen() {
+                        if (destroyed || insideFullscreenObserver || !nativeFullscreen) {
+                            throw new AssertionError("unsafe exit JNI");
+                        }
+                        fullscreenExits++;
+                        nativeFullscreen = false;
+                        signalFullscreen(false, true);
+                    }
+                    void signalFullscreen(boolean entered, boolean willResize) {
+                        insideFullscreenObserver = true;
+                        try {
+                            for (WebContentsObserver observer : List.copyOf(observers)) {
+                                observer.didToggleFullscreenModeForTab(entered, willResize);
+                            }
+                        } finally { insideFullscreenObserver = false; }
+                    }
+                    void stop() { stops++; }
                 }
                 static final class Shell extends View {
                     WebContents contents;
@@ -416,6 +625,7 @@ public final class NativeBrowserRecoveryHostTest {
                     boolean isDestroyed() { return destroyed; }
                     WebContents getWebContents() { return contents; }
                     @Override View findViewById(int id) { return holder; }
+                    void close() { destroyed = true; contents.destroyed = true; }
                 }
                 static final class ShellManager extends ViewGroup {
                     final List<Shell> shells = new ArrayList<>();
@@ -428,10 +638,15 @@ public final class NativeBrowserRecoveryHostTest {
                     Shell getActiveShell() { return active; }
                     List<Shell> getShells() { return shells; }
                     void selectShell(Shell shell) {
-                        Shell old = active; active = shell;
+                        Shell old = active;
+                        if (old == shell) return;
+                        // Pinned ShellManager nulls active before removing and assigns after adding.
+                        active = null;
                         if (hierarchy != null && old != null) hierarchy.onChildViewRemoved(this, old);
                         if (hierarchy != null && shell != null) hierarchy.onChildViewAdded(this, shell);
+                        active = shell;
                     }
+                    void destroy() { shells.clear(); active = null; }
                     void closeShell(Shell shell) {
                         shells.remove(shell);
                         if (active == shell) active = shells.isEmpty() ? null : shells.get(0);
@@ -443,6 +658,7 @@ public final class NativeBrowserRecoveryHostTest {
                     boolean valid = true;
                     long ownerGeneration = 7;
                     boolean isCurrent(Activity activity, long generation) { return valid && ownerGeneration == generation; }
+                    void detach(Activity host) { valid = false; }
                 }
                 static final class Surface { boolean valid = true; boolean isValid() { return valid; } }
                 static final class SurfaceHolder {
@@ -455,6 +671,7 @@ public final class NativeBrowserRecoveryHostTest {
                     Callback callback;
                     Surface getSurface() { return surface; }
                     void addCallback(Callback value) { callback = value; }
+                    void removeCallback(Callback value) { if (callback == value) callback = null; }
                     void destroy() { surface.valid = false; callback.surfaceDestroyed(this); }
                     void change() { callback.surfaceChanged(this, 0, 1080, 1920); }
                 }
@@ -491,7 +708,83 @@ public final class NativeBrowserRecoveryHostTest {
                         if (x <= 0 || y <= 0) throw new AssertionError("invalid canvas scale");
                     }
                 }
-                static final class Window { }
+                static final class Window {
+                    final View decor = new View();
+                    final WindowInsetsController controller = new WindowInsetsController();
+                    boolean controllerAvailable = true, fits = true;
+                    int controllerReads;
+                    View getDecorView() { return decor; }
+                    WindowInsetsController getInsetsController() {
+                        controllerReads++; return controllerAvailable ? controller : null;
+                    }
+                    void setDecorFitsSystemWindows(boolean value) { fits = value; }
+                    void destroy() { }
+                }
+                static final class WindowInsetsController {
+                    static final int BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE = 2;
+                    int behavior = 1, hiddenTypes, hideCalls, showCalls;
+                    void hide(int types) { hiddenTypes |= types; hideCalls++; }
+                    void show(int types) { hiddenTypes &= ~types; showCalls++; }
+                    int getSystemBarsBehavior() { return behavior; }
+                    void setSystemBarsBehavior(int value) { behavior = value; }
+                }
+                static final class Insets {
+                    static final Insets NONE = of(0, 0, 0, 0);
+                    final int left, top, right, bottom;
+                    private Insets(int l, int t, int r, int b) { left = l; top = t; right = r; bottom = b; }
+                    static Insets of(int l, int t, int r, int b) { return new Insets(l, t, r, b); }
+                    boolean empty() { return left == 0 && top == 0 && right == 0 && bottom == 0; }
+                    Insets inset(int l, int t, int r, int b) {
+                        return of(Math.max(0, left - l), Math.max(0, top - t),
+                                Math.max(0, right - r), Math.max(0, bottom - b));
+                    }
+                }
+                static final class WindowInsets {
+                    static final class Type {
+                        static int statusBars() { return 1; }
+                        static int navigationBars() { return 2; }
+                        static int ime() { return 4; }
+                        static int displayCutout() { return 8; }
+                        static int captionBar() { return 16; }
+                    }
+                    Insets current = Insets.of(0, 24, 35, 48), stable = current;
+                    Insets ime = Insets.of(0, 0, 0, 250);
+                    Insets cutout = Insets.of(17, 0, 0, 0);
+                    Insets gesture = Insets.of(29, 0, 8, 0);
+                    Insets getSystemWindowInsets() { return current; }
+                    Insets getStableInsets() { return stable; }
+                    Insets getInsets(int types) {
+                        check(types == 20, "fullscreen fits only IME and caption bar on API30+");
+                        return Insets.of(0, 0, 0, ime.bottom);
+                    }
+                    WindowInsets inset(int l, int t, int r, int b) {
+                        WindowInsets copy = new WindowInsets();
+                        copy.current = current.inset(l, t, r, b); copy.stable = stable.inset(l, t, r, b);
+                        copy.ime = ime.inset(l, t, r, b); copy.cutout = cutout.inset(l, t, r, b);
+                        copy.gesture = gesture.inset(l, t, r, b);
+                        return copy;
+                    }
+                    static final class Builder {
+                        final WindowInsets copy = new WindowInsets();
+                        Builder(WindowInsets source) {
+                            copy.current = source.current; copy.stable = source.stable;
+                            copy.ime = source.ime; copy.cutout = source.cutout; copy.gesture = source.gesture;
+                        }
+                        Builder setStableInsets(Insets value) { copy.stable = value; return this; }
+                        Builder setSystemWindowInsets(Insets value) { copy.current = value; return this; }
+                        Builder setInsets(int types, Insets value) {
+                            check(types == 11, "visible status, navigation and cutout geometry is overridden");
+                            if ((types & Type.displayCutout()) != 0) copy.cutout = value;
+                            return setSystemWindowInsets(value);
+                        }
+                        Builder setInsetsIgnoringVisibility(int types, Insets value) {
+                            check(types == 11, "stable status, navigation and cutout geometry is overridden");
+                            if ((types & Type.displayCutout()) != 0) copy.cutout = value;
+                            return setStableInsets(value);
+                        }
+                        WindowInsets build() { return copy; }
+                    }
+                }
                 interface CopyResult { void complete(int result); }
                 static final class PixelCopy {
                     static final int SUCCESS = 0, ERROR_UNKNOWN = 1, ERROR_TIMEOUT = 2,
@@ -529,25 +822,136 @@ public final class NativeBrowserRecoveryHostTest {
                     static void d(String tag, String text) { }
                     static void w(String tag, String text) { }
                 }
+                // PWA platform boundaries. Ownership, posting, eligibility, consent and recheck
+                // use Activity/WebApp production code; the host chooses when each callback arrives.
+                @java.lang.annotation.Target(java.lang.annotation.ElementType.TYPE_USE)
+                @interface Nullable { }
+                static final class NativePwaBridge {
+                    @FunctionalInterface
+                    interface Callback { void onResult(@Nullable InstallManifest manifest); }
+                    static final class InstallManifest {
+                        final String id, name, startUrl, scope, origin;
+                        InstallManifest(String id, String name, String startUrl, String scope, String origin) {
+                            this.id = id; this.name = name; this.startUrl = startUrl; this.scope = scope; this.origin = origin;
+                        }
+                    }
+                    static boolean isSecurePage(@Nullable WebContents contents) {
+                        return contents != null && !contents.isDestroyed() && contents.securePage;
+                    }
+                    static void requestManifest(WebContents contents, Callback callback) {
+                        if (contents.destroyed || contents.nativeFullscreen || contents.insideFullscreenObserver
+                                || contents.getVisibility() != Visibility.VISIBLE) {
+                            throw new AssertionError("manifest read on an unpresentable page");
+                        }
+                        contents.manifests.add(callback);
+                    }
+                    static boolean isStandalonePage(WebContents contents) {
+                        return contents != null && !contents.isDestroyed() && contents.standaloneScope != null && contents.standalonePage;
+                    }
+                    static boolean setStandaloneScope(WebContents contents, @Nullable String scope) {
+                        if (contents.isDestroyed()) return false;
+                        contents.standaloneScope = scope;
+                        return true;
+                    }
+                }
+                static final String APP_ID = "7d5f7fe5-2032-428b-b83a-f943d0f949b6";
+                static final String PROFILE_ID = "75c9ee1a-2a71-434c-a8a6-fdafd7816b5c";
+                static final class Application {
+                    static final class Profile { final String id = PROFILE_ID; }
+                    static final class Launch { final Profile profile = new Profile(); }
+                    void requireBrowserActivation() { }
+                    Launch requireLaunch() { return new Launch(); }
+                }
+                static final class WebAppRegistry implements AutoCloseable {
+                    private final Activity host;
+                    WebAppRegistry(Activity host) { this.host = host; }
+                    WebApp register(String profile, String id, String name, String start, String scope, String origin) {
+                        WebApp app = new WebApp(APP_ID, profile, id, name, start, scope, origin);
+                        host.registered.add(app);
+                        return app;
+                    }
+                    List<WebApp> list() { return new ArrayList<>(host.registered); }
+                    @Override public void close() { }
+                }
+                static final class WebAppShortcuts {
+                    static final class PinRequest {
+                        final String message = "test pin request";
+                    }
+                    static PinRequest requestPin(Activity host, WebApp app) {
+                        host.pinRequests.add(app);
+                        return new PinRequest();
+                    }
+                }
+                static final class Dialog {
+                    final Window window = new Window();
+                    boolean showing;
+                    java.util.function.Consumer<Dialog> onDismiss;
+                    Window getWindow() { return window; }
+                    boolean isShowing() { return showing; }
+                    void setOnDismissListener(java.util.function.Consumer<Dialog> listener) { onDismiss = listener; }
+                    void dismiss() {
+                        if (!showing) return;
+                        showing = false;
+                        window.decor.dispatchWindowFocus(false);
+                        if (onDismiss != null) onDismiss.accept(this);
+                    }
+                }
+                static final class Ui {
+                    static TextView body(Activity host, String text) {
+                        TextView view = new TextView(); view.setText(text); return view;
+                    }
+                    static final class Sheet {
+                        final Activity host;
+                        final Dialog dialog = new Dialog();
+                        final List<String> lines = new ArrayList<>();
+                        TextView origin;
+                        Runnable cancel, confirm;
+                        Sheet(Activity host) { this.host = host; }
+                        static Sheet create(Activity host, String title, String subtitle) { return new Sheet(host); }
+                        Sheet text(String value) { lines.add(value); return this; }
+                        Sheet content(TextView view) { origin = view; return this; }
+                        Dialog dialog() { return dialog; }
+                        void actions(String cancelLabel, Runnable cancelAction, String confirmLabel, Runnable confirmAction) {
+                            cancel = cancelAction; confirm = confirmAction;
+                        }
+                        void updateText(String text) { }
+                        void show() { dialog.showing = true; host.consent = this; }
+                    }
+                }
                 // Runtime permission routing is outside this recovery host's scope.
-                static final class MediaPermissionBridge { static void setHost(Object host) { } }
+                static final class MediaPermissionBridge {
+                    static void setHost(Object host) { }
+                    static void clearHost(Object host) { }
+                }
                 static class BaseActivity {
-                    boolean finishing, destroyed;
+                    boolean finishing, destroyed, windowFocus = true;
                     int pauses, stops;
+                    final android.window.OnBackInvokedDispatcher backDispatcher = new android.window.OnBackInvokedDispatcher();
+                    android.window.OnBackInvokedDispatcher getOnBackInvokedDispatcher() { return backDispatcher; }
                     boolean isFinishing() { return finishing; }
                     boolean isDestroyed() { return destroyed; }
                     protected void onPause() { pauses++; }
                     protected void onStop() { stops++; }
                     protected void onResume() { }
+                    protected void onDestroy() { destroyed = true; }
                     public void onBackPressed() { }
+                    public void onWindowFocusChanged(boolean focus) { windowFocus = focus; }
+                    boolean hasWindowFocus() { return windowFocus; }
                 }
                 static final class Activity extends BaseActivity {
                     static final String TAG = "Host", INPUT_METHOD_SERVICE = "input_method";
                     static final int MAX_TABS = 10;
                     final Handler main = new Handler(), previewResults = new Handler();
-                    final Frame browserFrame = new Frame();
+                    final FrameLayout browserFrame = createBrowserFrame();
                     final View splash = new View(), splashSpinner = new View(), progressBar = new View();
-                    final View root = new View(), address = new View(), urlSuggest = new View();
+                    final ViewGroup root = new ViewGroup();
+                    final View address = new View(), urlSuggest = new View(), chromeBar = new View(), webAppBar = new View();
+                    final TextView webAppTitle = new TextView();
+                    final Application application = new Application();
+                    final List<WebApp> registered = new ArrayList<>(), pinRequests = new ArrayList<>();
+                    final List<String> toasts = new ArrayList<>();
+                    View webAppOfferBar;
+                    Ui.Sheet consent;
                     final TextView splashTitle = new TextView(), splashStatus = new TextView(), restoreRetry = new TextView();
                     final NewTabPage newTab = new NewTabPage();
                     final HistoryPanel historyPanel = new HistoryPanel();
@@ -555,15 +959,20 @@ public final class NativeBrowserRecoveryHostTest {
                     List<TabSwitcherView.TabItem> shownTabs = new ArrayList<>();
                     final Store historyStore = new Store();
                     final Runtime runtime = new Runtime();
-                    final ContentViewRenderView renderView = new ContentViewRenderView();
+                    ContentViewRenderView renderView = new ContentViewRenderView();
+                    final Window activityWindow = new Window();
+                    Window window = new Window();
+                    final Runnable historyLoaded = () -> { };
                     SurfaceHolder.Callback previewSurfaceObserver;
-                    final Runnable chromeRefresh = () -> { chromeRefreshPosted = false; refreshChrome(); };
                     ShellManager manager = new ShellManager();
-                    Popup overflowMenu;
+                    PopupWindow overflowMenu;
+                    Runnable overflowResize;
+                    final List<Object> overflowPalette = new ArrayList<>(), overflowFonts = new ArrayList<>();
                     long generation = 7;
-                    boolean resumed = true, uiBuilt = true, closed, quiescing, chromeRefreshPosted, ntpRenderDirty;
+                    boolean resumed = true, uiBuilt = true, closed, quiescing, cleanupComplete,
+                            chromeRefreshPosted, ntpRenderDirty;
                     Shell loadingShell;
-                    int switcherRefreshes, focusCancellations;
+                    int switcherRefreshes, focusCancellations, returns;
                     Activity(boolean ready) {
                         android.os.SystemClock.now = 0;
                         splash.visibility = View.GONE; restoreRetry.visibility = View.GONE;
@@ -577,24 +986,25 @@ public final class NativeBrowserRecoveryHostTest {
                         main.queue.clear(); chromeRefreshPosted = false;
                     }
                     void cancelNavigationFocus() { focusCancellations++; }
-                    void hideUrlSuggestions() { }
+                    void hideUrlSuggestions() { urlSuggest.visibility = View.GONE; }
                     void dismissAddressEditor() { address.clearFocus(); urlSuggest.visibility = View.GONE; }
                     void refreshTabSwitcher(boolean force) { if (force) switcherRefreshes++; }
-                    void requestChromeRefresh() {
-                        if (!chromeRefreshPosted) { chromeRefreshPosted = true; main.post(chromeRefresh); }
-                    }
+                    // Ticket consumption and navigation-focus handoff have separate source-extracted suites.
+                    void openPendingWebApp() { }
+                    void replacePendingWebAppTicket(String ticket) { }
+                    void completeNavigationFocus() { }
                     // Rendering/card construction have dedicated suites; these destinations remain fake.
                     List<TabSwitcherView.TabItem> tabItems() { return List.of(); }
                     void createBlankTab() { manager.retain("about:blank", true); }
-                    void showHistoryPanel() { historyPanel.visibility = View.VISIBLE; }
                     void closeTab(Shell shell) { manager.closeShell(shell); }
-                    void returnToList() { }
+                    void returnToList() { returns++; }
                     void requestEnvironmentExit() { quiescing = true; cancelUiWork(); }
-                    void refreshChrome() { trackHistory(); reconcilePageRestoring(); }
-                    Window getWindow() { return new Window(); }
+                    void refreshChrome() { trackHistory(); reconcilePageRestoring(); syncWebContentsVisibility(); }
+                    Window getWindow() { return activityWindow; }
                     Object getSystemService(String service) { return null; }
                     @ACTUAL@
                 }
+            """, """
                 static void covered(Activity a, Shell shell, String message) {
                     check(a.restoreSplashShown && a.splash.visibility == View.VISIBLE
                             && a.restoreShell == shell && a.restoreContents == shell.contents
@@ -1686,6 +2096,797 @@ public final class NativeBrowserRecoveryHostTest {
                     check(a.progressBar.visibility == View.INVISIBLE && a.progressBar.visibilityWrites == 4,
                             "pause plus stop retire loading animation with one hidden write");
                 }
+            """, """
+                static void fullscreenPresented(Activity a, Shell shell, String label) {
+                    check(a.fullscreenOwner == a.historyObservers.get(shell) && a.fullscreenOwner != null
+                            && a.chromeBar.visibility == View.GONE && a.urlSuggest.visibility == View.GONE, label);
+                }
+                static void fullscreenCleared(Activity a, String label) {
+                    check(a.fullscreenOwner == null && a.chromeBar.visibility == View.VISIBLE, label);
+                }
+                static void enterFullscreen(Activity a, Shell shell) {
+                    shell.contents.nativeFullscreen = true;
+                    shell.contents.signalFullscreen(true, true);
+                    a.main.all();
+                    fullscreenPresented(a, shell, "live selected native fullscreen owns ABS presentation");
+                }
+                static void fullscreenSignalsAndNavigation() {
+                    Activity a = new Activity(true);
+                    Shell shell = a.manager.active;
+                    WebContents page = shell.contents;
+                    int queries = page.fullscreenQueries;
+                    a.urlSuggest.visibility = View.VISIBLE;
+                    // Simulate Chromium settling its authoritative bit after observer notification.
+                    for (int i = 0; i < 25; i++) page.signalFullscreen(false, i % 2 == 0);
+                    check(a.main.queue.size() == 1 && a.fullscreenOwner == null && page.fullscreenQueries == queries,
+                            "native signal burst coalesces without querying or changing window inline");
+                    page.nativeFullscreen = true;
+                    a.main.all();
+                    fullscreenPresented(a, shell, "native bit wins over all false/resize callback arguments");
+                    var observer = a.historyObservers.get(shell);
+                    NavigationHandle router = new NavigationHandle(page.url + "#same-document");
+                    router.sameDocument = true;
+                    observer.didStartNavigationInPrimaryMainFrame(router);
+                    page.url = router.url;
+                    observer.didFinishNavigationInPrimaryMainFrame(router);
+                    a.main.all();
+                    fullscreenPresented(a, shell, "same-document router never synthesizes fullscreen exit");
+                    check(page.fullscreenExits == 0, "same-document navigation does not call exit JNI");
+                    // Chromium pre-commit clears native fullscreen before cross-document commit.
+                    NavigationHandle replacement = new NavigationHandle("https://a.invalid/replacement");
+                    observer.didStartNavigationInPrimaryMainFrame(replacement);
+                    page.nativeFullscreen = false;
+                    page.signalFullscreen(true, false);
+                    page.url = replacement.url;
+                    observer.didFinishNavigationInPrimaryMainFrame(replacement);
+                    a.main.all();
+                    fullscreenCleared(a, "cross-document native exit wins over true callback argument");
+                    check(page.fullscreenExits == 0, "cross-document exit is owned by Chromium");
+                    enterFullscreen(a, shell);
+                    page.nativeFullscreen = false;
+                    page.signalFullscreen(false, true);
+                    observer.primaryMainFrameRenderProcessGone(1);
+                    a.main.all();
+                    fullscreenCleared(a, "renderer death restores chrome through native exit signal");
+                    check(page.fullscreenExits == 0 && a.restoreSplashShown,
+                            "renderer death remains Chromium-owned and retains existing recovery cover");
+                    Activity transientSignal = new Activity(true);
+                    var transientPage = transientSignal.manager.active.contents;
+                    transientPage.nativeFullscreen = true;
+                    transientPage.signalFullscreen(true, false);
+                    transientPage.nativeFullscreen = false;
+                    transientPage.signalFullscreen(false, false);
+                    transientSignal.main.all();
+                    fullscreenCleared(transientSignal, "enter then native exit before delivery does not flash chrome");
+                    check(transientSignal.chromeBar.visibilityWrites == 0, "coalesced native enter/exit has no UI transition");
+                }
+                static void fullscreenIdentityAndSwitch() {
+                    Activity a = new Activity(true);
+                    Shell first = a.manager.active;
+                    Shell second = a.manager.retain("https://b.invalid/", true);
+                    enterFullscreen(a, first);
+                    var oldObserver = a.historyObservers.get(first);
+                    a.manager.selectShell(second);
+                    check(first.contents.fullscreenExits == 0, "Shell removal never exits JNI inline");
+                    second.contents.nativeFullscreen = true;
+                    second.contents.signalFullscreen(true, false);
+                    a.main.all();
+                    fullscreenPresented(a, second, "deferred exit of previous owner does not clear new selected owner");
+                    check(first.contents.fullscreenExits == 1 && second.contents.fullscreenExits == 0,
+                            "tab switch exits only the detached exact WebContents once");
+                    oldObserver.didToggleFullscreenModeForTab(false, false);
+                    a.main.all();
+                    fullscreenPresented(a, second, "retained inactive callback cannot restore bars on current owner");
+                    a.manager.selectShell(first); a.main.all();
+                    fullscreenCleared(a, "reselection does not silently revive old fullscreen");
+                    enterFullscreen(a, first);
+                    a.manager.selectShell(second); a.manager.selectShell(first); a.main.all();
+                    fullscreenCleared(a, "detach/reattach before delivery still revokes fullscreen");
+                    check(first.contents.fullscreenExits == 2, "rapid detach exits fullscreen on the original owner");
+                    Activity replaced = new Activity(true);
+                    Shell reused = replaced.manager.active;
+                    WebContents old = reused.contents;
+                    var retired = replaced.historyObservers.get(reused);
+                    old.nativeFullscreen = true; old.signalFullscreen(true, false);
+                    reused.contents = new WebContents("https://replacement.invalid/", true);
+                    replaced.observeShell(reused);
+                    reused.contents.nativeFullscreen = true; // No signal from this new document yet.
+                    replaced.main.all();
+                    fullscreenCleared(replaced, "queued retired signal cannot promote replacement contents");
+                    check(old.fullscreenExits == 0 && reused.contents.fullscreenQueries == 0,
+                            "retired signal must not query or exit replacement contents");
+                    enterFullscreen(replaced, reused);
+                    retired.didToggleFullscreenModeForTab(false, true);
+                    replaced.main.all();
+                    fullscreenPresented(replaced, reused, "late replaced observer cannot affect newer ownership");
+                    reused.contents.destroyed = true;
+                    var destroyed = replaced.historyObservers.get(reused);
+                    destroyed.webContentsDestroyed();
+                    destroyed.didToggleFullscreenModeForTab(true, true);
+                    replaced.main.all();
+                    fullscreenCleared(replaced, "destroyed contents clean presentation without any dead JNI query");
+                    Activity obsolete = new Activity(true);
+                    WebContents stale = obsolete.manager.active.contents;
+                    stale.nativeFullscreen = true; stale.signalFullscreen(true, false);
+                    obsolete.runtime.valid = false;
+                    obsolete.main.all();
+                    fullscreenCleared(obsolete, "superseded Activity generation ignores posted enter signal");
+                    check(stale.fullscreenQueries == 0 && stale.fullscreenExits == 0,
+                            "superseded Activity work does not query or exit outside quiesce");
+                }
+                static void fullscreenOverlaysAndFocus() {
+                    for (int blocked = 0; blocked < 7; blocked++) {
+                        Activity a = new Activity(true);
+                        Shell shell = a.manager.active;
+                        switch (blocked) {
+                            case 0 -> a.historyPanel.visibility = View.VISIBLE;
+                            case 1 -> a.tabSwitcher.showing = true;
+                            case 2 -> a.newTab.visibility = View.VISIBLE;
+                            case 3 -> a.overflowMenu = new PopupWindow();
+                            case 4 -> a.beginPageRestoring(shell, true);
+                            case 5 -> a.onPause();
+                            default -> a.uiBuilt = false;
+                        }
+                        shell.contents.nativeFullscreen = true;
+                        shell.contents.signalFullscreen(true, false);
+                        check(shell.contents.fullscreenExits == 0, "covered request never exits JNI on observer stack " + blocked);
+                        a.main.all();
+                        fullscreenCleared(a, "not interactive/foreground or covered: no immersive entry " + blocked);
+                        check(shell.contents.fullscreenExits == 1 && a.chromeBar.visibilityWrites == 0,
+                                "rejected native fullscreen is exited once without hiding chrome " + blocked);
+                    }
+                    Activity a = new Activity(true);
+                    Shell shell = a.manager.active;
+                    shell.contents.nativeFullscreen = true; shell.contents.signalFullscreen(true, true);
+                    // Overlay opens and dismisses before posted enter: rejection must stick.
+                    a.tabSwitcher.showing = true; a.syncWebContentsVisibility();
+                    a.tabSwitcher.showing = false; a.syncWebContentsVisibility();
+                    a.main.all();
+                    fullscreenCleared(a, "covered pending enter cannot resume when overview dismisses");
+                    check(shell.contents.fullscreenExits == 1 && a.chromeBar.visibilityWrites == 0,
+                            "overview interval rejects pending entry without hiding chrome");
+                    enterFullscreen(a, shell);
+                    a.historyPanel.visibility = View.VISIBLE; a.syncWebContentsVisibility();
+                    a.main.all();
+                    fullscreenCleared(a, "browser overlay revokes a presented owner");
+                    check(shell.contents.fullscreenExits == 2, "cover exit targets the installed live owner");
+                }
+                static void fullscreenWaitsForWindowFocus() {
+                    for (int order = 0; order < 3; order++) {
+                        Activity a = new Activity(true);
+                        Shell shell = a.manager.active;
+                        WebContents page = shell.contents;
+                        if (order != 1) a.onWindowFocusChanged(false);
+                        page.nativeFullscreen = true; page.signalFullscreen(true, true);
+                        if (order == 1) a.onWindowFocusChanged(false);
+                        if (order == 2) a.onWindowFocusChanged(true);
+                        a.main.all();
+                        check(page.nativeFullscreen && page.fullscreenExits == 0,
+                                "temporary focus loss never revokes granted native fullscreen " + order);
+                        if (order != 2) {
+                            fullscreenCleared(a, "waiting for focus keeps chrome visible " + order);
+                            check(a.main.queue.isEmpty(), "pending fullscreen does not poll");
+                            a.onWindowFocusChanged(true); a.main.all();
+                        }
+                        fullscreenPresented(a, shell, "focus return presents the exact still-granted page " + order);
+                        check(a.chromeBar.visibilityWrites == 1, "fullscreen presents exactly once");
+                    }
+                    for (String revoke : List.of("native exit", "Back", "cover", "switch", "pause")) {
+                        Activity a = new Activity(true);
+                        Shell shell = a.manager.active;
+                        WebContents page = shell.contents;
+                        a.onWindowFocusChanged(false);
+                        page.nativeFullscreen = true; page.signalFullscreen(true, true);
+                        a.main.all();
+                        switch (revoke) {
+                            case "native exit" -> page.exitFullscreen();
+                            case "Back" -> a.onBackPressed();
+                            case "cover" -> {
+                                a.tabSwitcher.showing = true; a.syncWebContentsVisibility();
+                                a.tabSwitcher.showing = false; a.syncWebContentsVisibility();
+                            }
+                            case "switch" -> {
+                                Shell other = a.manager.retain("https://other.invalid/", true);
+                                a.manager.selectShell(other);
+                                a.manager.selectShell(shell);
+                            }
+                            case "pause" -> { a.onPause(); a.onResume(); }
+                            default -> throw new AssertionError(revoke);
+                        }
+                        a.onWindowFocusChanged(true); a.main.all();
+                        fullscreenCleared(a, revoke + " revokes a pending owner even if focus returns");
+                        check(page.fullscreenExits == 1 && !page.nativeFullscreen && a.chromeBar.visibilityWrites == 0,
+                                revoke + " leaves no fullscreen to present");
+                    }
+                }
+
+                static void fullscreenBackAndLifecycle() {
+                    for (int route = 0; route < 3; route++) {
+                        Activity a = new Activity(true);
+                        Shell shell = a.manager.active;
+                        WebContents page = shell.contents;
+                        page.navigation.hasBack = route == 0;
+                        if (route == 1) a.manager.retain("https://b.invalid/", true);
+                        // Back also handles entry already native but not yet presented by ABS.
+                        page.nativeFullscreen = true; page.signalFullscreen(true, false);
+                        if (route != 0) a.main.all();
+                        a.onBackPressed(); a.main.all();
+                        fullscreenCleared(a, "Back exits immersive presentation before any browser action " + route);
+                        check(page.fullscreenExits == 1 && page.navigation.backCalls == 0
+                                && a.manager.active == shell && a.returns == 0, "first Back is consumed by native fullscreen " + route);
+                        a.onBackPressed();
+                        check(route == 0 ? page.navigation.backCalls == 1
+                                : route == 1 ? a.manager.active != shell : a.returns == 1,
+                                "second Back resumes ordinary navigation/tab/list handling " + route);
+                    }
+                    for (int route = 0; route < 4; route++) {
+                        Activity a = new Activity(true);
+                        Shell shell = a.manager.active;
+                        enterFullscreen(a, shell);
+                        // Native runtime revokes isCurrent before shutdown quiescence.
+                        if (route >= 2) a.runtime.valid = false;
+                        switch (route) {
+                            case 0 -> a.onPause();
+                            case 1 -> a.onStop();
+                            case 2 -> a.quiesceForShutdown();
+                            default -> a.onDestroy();
+                        }
+                        fullscreenCleared(a, "lifecycle departure restores normal chrome promptly " + route);
+                        check(shell.contents.fullscreenExits == 1 && a.main.queue.isEmpty()
+                                && a.fullscreenExits.isEmpty() && a.fullscreenSignal == null,
+                                "lifecycle departure exits exactly once and cancels pending fullscreen work " + route);
+                        if (route < 2) {
+                            a.onResume(); a.main.all();
+                            fullscreenCleared(a, "resume does not restore a revoked owner " + route);
+                        } else {
+                            check(shell.contents.stops == 1 && (route == 2 ? !shell.destroyed : a.cleanupComplete && shell.destroyed),
+                                    "quiesce exits/stops before destruction; onDestroy closes only afterward " + route);
+                        }
+                    }
+                }
+                static void fullscreenWindowAndInsets() {
+                    int stable = View.SYSTEM_UI_FLAG_LAYOUT_STABLE, unrelated = 0x4000;
+                    int legacy = View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+                            | View.SYSTEM_UI_FLAG_FULLSCREEN | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                            | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY;
+                    for (int sdk : new int[]{29, 30, 35, 36}) {
+                        android.os.Build.VERSION.SDK_INT = sdk;
+                        boolean modern = sdk >= 30;
+                        Activity a = new Activity(true);
+                        Window window = a.activityWindow;
+                        WindowInsetsController bars = window.controller;
+                        window.decor.flags = stable | View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
+                        WindowInsets original = new WindowInsets();
+                        check(a.browserFrame.onApplyWindowInsets(original) == original, "normal insets unmodified " + sdk);
+                        Shell shell = a.manager.active;
+                        enterFullscreen(a, shell);
+                        check(a.browserFrame.insetsRequests == 1 && (window.decor.flags & stable) == stable,
+                                "fullscreen requests inset traversal and preserves stable flag " + sdk);
+                        check(modern ? !window.fits && bars.hiddenTypes == 3 && bars.hideCalls == 1
+                                        && bars.behavior == WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+                                : window.controllerReads == 0 && (window.decor.flags & legacy) == legacy,
+                                "API-specific fullscreen layout and transient bar behavior " + sdk);
+                        WindowInsets barsOnly = new WindowInsets();
+                        barsOnly.ime = Insets.NONE; barsOnly.cutout = Insets.NONE;
+                        WindowInsets immersive = a.browserFrame.onApplyWindowInsets(barsOnly);
+                        check(immersive.current.empty() && immersive.stable.empty() && !barsOnly.stable.empty()
+                                && a.browserFrame.padding.empty(),
+                                "only fullscreen clears both current and stable bar gutters " + sdk);
+                        if (!modern) original.current = Insets.of(0, 24, 35, 250);
+                        WindowInsets withKeyboard = a.browserFrame.onApplyWindowInsets(original);
+                        check(a.browserFrame.padding.bottom == 250 && a.browserFrame.padding.right == 0
+                                && a.browserFrame.padding.left == 0 && a.browserFrame.padding.top == 0,
+                                "fullscreen fits the IME only; bar and cutout gutters are cleared " + sdk);
+                        check(withKeyboard.current.empty() && withKeyboard.stable.empty() && withKeyboard.ime.empty()
+                                && withKeyboard.cutout.left == (modern ? 0 : 17)
+                                && withKeyboard.gesture.left == 29
+                                && original.ime.bottom == 250 && original.cutout.left == 17,
+                                "fitted geometry is not double-applied; cutout and gestures dispatch unmodified " + sdk);
+                        window.decor.flags ^= View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
+                        window.decor.flags |= unrelated | View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
+                        a.onWindowFocusChanged(false); a.onWindowFocusChanged(true); a.main.all();
+                        fullscreenPresented(a, shell, "dialog focus churn does not exit fullscreen " + sdk);
+                        check(a.browserFrame.insetsRequests == 1 && bars.hideCalls == (modern ? 1 : 0),
+                                "focus churn does not re-hide transient bars or request relayout " + sdk);
+                        a.onBackPressed(); a.main.all();
+                        check(window.fits && window.decor.flags == (stable | unrelated | View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR)
+                                && a.browserFrame.insetsRequests == 2 && (modern ? bars.hiddenTypes == 0
+                                        && bars.showCalls == 1 && bars.behavior == 1 : window.controllerReads == 0),
+                                "exit restores normal fitting/flags/behavior without undoing palette changes " + sdk);
+                        check(a.browserFrame.onApplyWindowInsets(original) == original
+                                && a.browserFrame.padding == original.current,
+                                "normal inset forwarding and IME geometry resume unchanged " + sdk);
+                    }
+                    android.os.Build.VERSION.SDK_INT = 29;
+                }
+            """, """
+                private static final String INSTALL = "安装网页应用";
+                private static final String BROWSER_FULLSCREEN = "全屏浏览";
+                private static final NativePwaBridge.InstallManifest MANIFEST = new NativePwaBridge.InstallManifest(
+                        "https://a.invalid/app-id", "Reference app", "https://a.invalid/page/start",
+                        "https://a.invalid/", "https://a.invalid");
+
+                static PopupWindow openOverflow(Activity a, Runnable beforeDismiss) {
+                    View anchor = new View();
+                    PopupWindow popup = new PopupWindow();
+                    a.overflowMenu = popup;
+                    popup.onDismiss = () -> {
+                        beforeDismiss.run();
+                        a.dismissOverflowFromListener(popup, anchor, null);
+                    };
+                    return popup;
+                }
+
+                static void queueBrowserFullscreen(Activity a) {
+                    Activity.ShellHistoryObserver owner = a.historyObservers.get(a.manager.active);
+                    a.onWindowFocusChanged(false);
+                    PopupWindow popup = openOverflow(a, () -> check(a.browserFullscreenRequest == owner,
+                            "browser fullscreen captures its exact page before dismissing its popup"));
+                    a.clickOverflowAction(popup, owner, owner.webAppPageEpoch, BROWSER_FULLSCREEN, new View());
+                    check(popup.dismisses == 1 && a.overflowMenu == null && a.fullscreenOwner == null,
+                            "menu click dismisses once and never mutates the window inline");
+                    a.main.all();
+                    fullscreenCleared(a, "closed popup still waits for Activity focus");
+                    check(a.browserFullscreenRequest == owner && a.main.queue.isEmpty(),
+                            "browser fullscreen waits without polling or forcing focus");
+                }
+
+                static void browserFullscreenFromOverflow() {
+                    Activity a = new Activity(true);
+                    Shell shell = a.manager.active;
+                    WebContents page = shell.contents;
+                    page.navigation.hasBack = true;
+                    queueBrowserFullscreen(a);
+                    a.onWindowFocusChanged(true);
+                    fullscreenCleared(a, "Activity focus does not present fullscreen on its own stack");
+                    a.main.all();
+                    fullscreenPresented(a, shell, "Activity focus presents the queued menu action");
+                    check(a.browserFullscreen && !page.nativeFullscreen && page.fullscreenExits == 0,
+                            "browser fullscreen changes only native chrome and leaves DOM fullscreen unset");
+                    a.onWindowFocusChanged(false); a.main.all();
+                    fullscreenPresented(a, shell, "temporary blur preserves browser-owned fullscreen");
+                    a.onWindowFocusChanged(true); a.main.all();
+                    a.onBackPressed(); a.main.all();
+                    fullscreenCleared(a, "Back restores native chrome from browser fullscreen");
+                    check(page.navigation.backCalls == 0 && page.fullscreenExits == 0 && a.manager.active == shell,
+                            "browser fullscreen consumes one Back without history or a DOM exit");
+                    a.onBackPressed(); a.main.all();
+                    check(page.navigation.backCalls == 1, "a later Back uses history normally");
+
+                    queueBrowserFullscreen(a);
+                    a.onWindowFocusChanged(true); a.main.all();
+                    int chromeWrites = a.chromeBar.visibilityWrites;
+                    page.nativeFullscreen = true; page.signalFullscreen(true, false); a.main.all();
+                    fullscreenPresented(a, shell, "native video or DOM fullscreen takes over without a window flash");
+                    check(!a.browserFullscreen && a.chromeBar.visibilityWrites == chromeWrites,
+                            "takeover does not show and hide chrome again");
+                    a.onBackPressed(); a.main.all();
+                    fullscreenCleared(a, "Back routes a taken-over window through the actual native fullscreen exit");
+                    check(page.fullscreenExits == 1 && page.navigation.backCalls == 1,
+                            "native takeover consumes one Back without a second history traversal");
+                }
+
+                static void browserFullscreenCannotReplayStaleMenuOrRequest() {
+                    for (String action : List.of(BROWSER_FULLSCREEN, INSTALL)) {
+                        Activity a = new Activity(true);
+                        Shell shell = a.manager.active;
+                        Activity.ShellHistoryObserver owner = a.historyObservers.get(shell);
+                        long oldEpoch = owner.webAppPageEpoch;
+                        a.onWindowFocusChanged(false);
+                        PopupWindow popup = openOverflow(a, () -> { });
+                        owner.didStartNavigationInPrimaryMainFrame(new NavigationHandle(shell.contents.url));
+                        a.clickOverflowAction(popup, owner, oldEpoch, action, new View());
+                        a.onWindowFocusChanged(true); a.main.all();
+                        check(popup.dismisses == 1 && a.browserFullscreenRequest == null && a.fullscreenOwner == null
+                                && a.webAppInstall == null && shell.contents.manifests.isEmpty(),
+                                "stale popup cannot bind even a same-URL replacement: " + action);
+                    }
+                    for (String revoke : List.of("Back", "navigation", "security", "visibility", "cover", "switch", "pause")) {
+                        Activity a = new Activity(true);
+                        Shell shell = a.manager.active;
+                        Activity.ShellHistoryObserver owner = a.historyObservers.get(shell);
+                        shell.contents.navigation.hasBack = true;
+                        queueBrowserFullscreen(a);
+                        switch (revoke) {
+                            case "Back" -> a.onBackPressed();
+                            case "navigation" -> owner.didStartNavigationInPrimaryMainFrame(new NavigationHandle(shell.contents.url));
+                            case "security" -> owner.didChangeVisibleSecurityState();
+                            case "visibility" -> {
+                                shell.contents.updateWebContentsVisibility(Visibility.HIDDEN);
+                                shell.contents.updateWebContentsVisibility(Visibility.VISIBLE);
+                            }
+                            case "cover" -> {
+                                a.tabSwitcher.showing = true; a.syncWebContentsVisibility();
+                                a.tabSwitcher.showing = false; a.syncWebContentsVisibility();
+                            }
+                            case "switch" -> {
+                                Shell other = a.manager.retain("https://other.invalid/", true);
+                                a.manager.selectShell(other);
+                                a.manager.selectShell(shell);
+                            }
+                            case "pause" -> { a.onPause(); a.onResume(); }
+                            default -> throw new AssertionError(revoke);
+                        }
+                        a.onWindowFocusChanged(true); a.main.all();
+                        fullscreenCleared(a, revoke + " permanently retires the posted menu fullscreen action");
+                        check(a.browserFullscreenRequest == null && shell.contents.fullscreenExits == 0
+                                && shell.contents.navigation.backCalls == 0,
+                                revoke + " cannot replay fullscreen or traverse history");
+                    }
+                }
+
+                static WebContents beginInstallFromPopup(Activity a) {
+                    // The popup, not the Activity, owns focus when the real click listener runs.
+                    Shell selected = a.manager.active;
+                    WebContents page = selected.contents;
+                    a.onWindowFocusChanged(false);
+                    PopupWindow popup = openOverflow(a, () -> check(a.webAppInstall != null
+                                    && a.webAppInstall.owner == a.historyObservers.get(selected),
+                            "install click captures the exact selected page before dismissing its popup"));
+                    Activity.ShellHistoryObserver owner = a.historyObservers.get(selected);
+                    long epoch = owner.webAppPageEpoch;
+                    View item = new View();
+                    item.windowFocus = false;
+                    a.clickOverflowAction(popup, owner, epoch, INSTALL, item);
+                    check(popup.dismisses == 0 && a.webAppInstall == null, "unfocused menu item cannot start install");
+                    item.windowFocus = true;
+                    a.clickOverflowAction(popup, owner, epoch, INSTALL, item);
+                    check(popup.dismisses == 1 && a.overflowMenu == null && page.manifests.isEmpty(),
+                            "focused menu click dismisses once and does not call Chromium inline");
+                    a.main.all();
+                    check(page.manifests.isEmpty() && a.main.queue.isEmpty(), "install waits for Activity focus without polling");
+                    a.onWindowFocusChanged(true);
+                    check(page.manifests.isEmpty(), "focus return defers manifest access to the posted pass");
+                    a.main.all();
+                    check(page.manifests.size() == 1, "focus return starts exactly one manifest request");
+                    return page;
+                }
+
+                static void deliverManifest(Activity a, WebContents page, int request, NativePwaBridge.InstallManifest result) {
+                    // Model the asynchronous Chromium callback on the Activity's UI thread.
+                    a.main.post(() -> page.manifests.get(request).onResult(result));
+                    a.main.all();
+                }
+
+                static Ui.Sheet requestInstallConfirmation(Activity a, WebContents page) {
+                    deliverManifest(a, page, 0, MANIFEST);
+                    Ui.Sheet sheet = a.consent;
+                    check(sheet != null && sheet.dialog.isShowing() && a.pinRequests.isEmpty()
+                            && a.registered.isEmpty(), "first manifest offers consent without registration or a pin request");
+                    check(sheet.lines.contains(MANIFEST.name) && MANIFEST.origin.equals(sheet.origin.getText()),
+                            "consent shows the label with a separate origin");
+                    a.onWindowFocusChanged(false);
+                    check(sheet.dialog.isShowing(), "Activity focus loss to the consent window does not cancel it");
+                    Runnable confirm = sheet.confirm;
+                    View decor = sheet.dialog.getWindow().getDecorView();
+                    decor.dispatchWindowFocus(false);
+                    confirm.run(); a.main.all();
+                    check(page.manifests.size() == 1, "unfocused consent cannot request confirmation");
+                    decor.dispatchWindowFocus(true);
+                    confirm.run(); confirm.run();
+                    check(page.manifests.size() == 1 && sheet.confirm == null,
+                            "confirmation schedules rather than touches Chromium from the click");
+                    a.main.all();
+                    check(page.manifests.size() == 2 && sheet.confirm == null,
+                            "consent's own focus authorizes exactly one confirmation while the Activity lacks focus");
+                    return sheet;
+                }
+
+                static void installConsentRequiresFreshManifest() {
+                    Activity a = new Activity(true);
+                    WebContents page = beginInstallFromPopup(a);
+                    a.onWindowFocusChanged(true); a.main.all();
+                    check(page.manifests.size() == 1 && a.main.queue.isEmpty(), "another posted refresh cannot repeat manifest access");
+                    Ui.Sheet sheet = requestInstallConfirmation(a, page);
+                    // Distinct JNI results can agree by value.
+                    deliverManifest(a, page, 1, new NativePwaBridge.InstallManifest(
+                            MANIFEST.id, MANIFEST.name, MANIFEST.startUrl, MANIFEST.scope, MANIFEST.origin));
+                    check(a.registered.size() == 1 && a.pinRequests.equals(a.registered),
+                            "confirmed identical manifest registers and requests exactly one pin");
+                    WebApp saved = a.registered.get(0);
+                    check(saved.profileId.equals(PROFILE_ID) && saved.manifestId.equals(MANIFEST.id)
+                            && saved.name.equals(MANIFEST.name) && saved.startUrl.equals(MANIFEST.startUrl)
+                            && saved.scope.equals(MANIFEST.scope) && saved.origin.equals(MANIFEST.origin),
+                            "only confirmed metadata goes to the currently attached profile");
+                    check(a.webAppInstall == null && !sheet.dialog.isShowing(), "successful consent retires");
+
+                    for (NativePwaBridge.InstallManifest changed : List.of(
+                            new NativePwaBridge.InstallManifest("https://a.invalid/new-id", MANIFEST.name,
+                                    MANIFEST.startUrl, MANIFEST.scope, MANIFEST.origin),
+                            new NativePwaBridge.InstallManifest(MANIFEST.id, "Reference  app",
+                                    MANIFEST.startUrl, MANIFEST.scope, MANIFEST.origin),
+                            new NativePwaBridge.InstallManifest(MANIFEST.id, MANIFEST.name,
+                                    "https://a.invalid/other-entry", MANIFEST.scope, MANIFEST.origin),
+                            new NativePwaBridge.InstallManifest(MANIFEST.id, MANIFEST.name,
+                                    MANIFEST.startUrl, "https://a.invalid/page", MANIFEST.origin),
+                            new NativePwaBridge.InstallManifest(MANIFEST.id, MANIFEST.name,
+                                    MANIFEST.startUrl, MANIFEST.scope, "https://other.invalid"))) {
+                        Activity host = new Activity(true);
+                        WebContents current = beginInstallFromPopup(host);
+                        Ui.Sheet consent = requestInstallConfirmation(host, current);
+                        deliverManifest(host, current, 1, changed);
+                        check(host.webAppInstall == null && !consent.dialog.isShowing()
+                                && host.registered.isEmpty() && host.pinRequests.isEmpty(),
+                                "changed manifest cannot register or request a pin after consent");
+                    }
+                }
+
+                static void installWaitsForWindowFocus() {
+                    Activity a = new Activity(true);
+                    WebContents page = beginInstallFromPopup(a);
+                    a.onWindowFocusChanged(false);
+                    deliverManifest(a, page, 0, MANIFEST);
+                    check(a.webAppInstall != null && a.consent == null && a.main.queue.isEmpty(),
+                            "a valid manifest never disappears or opens a sheet behind another focused window");
+                    a.onWindowFocusChanged(true); a.main.all();
+                    check(page.manifests.size() == 2 && a.consent == null,
+                            "focus return rechecks the exact selected document, not cached manifest data");
+                    deliverManifest(a, page, 1, MANIFEST);
+                    check(a.consent != null && a.consent.dialog.isShowing(), "fresh result shows consent");
+                    a.onWindowFocusChanged(false);
+                    a.consent.confirm.run(); a.main.all();
+                    check(page.manifests.size() == 3, "confirmation checks the manifest once");
+                    View decor = a.consent.dialog.getWindow().getDecorView();
+                    decor.dispatchWindowFocus(false);
+                    deliverManifest(a, page, 2, MANIFEST);
+                    check(a.webAppInstall != null && a.consent.dialog.isShowing() && a.pinRequests.isEmpty(),
+                            "an unfocused consent never pins or silently closes");
+                    decor.dispatchWindowFocus(true);
+                    check(page.manifests.size() == 3, "consent focus gain posts the recheck");
+                    a.main.all();
+                    check(page.manifests.size() == 4 && a.pinRequests.isEmpty(),
+                            "consent focus gain requests a fresh result without a second click");
+                    decor.dispatchWindowFocus(false); decor.dispatchWindowFocus(true);
+                    deliverManifest(a, page, 3, MANIFEST);
+                    check(page.manifests.size() == 5 && a.pinRequests.isEmpty(),
+                            "even a completed consent blur/refocus interval retires the old reply");
+                    deliverManifest(a, page, 4, MANIFEST);
+                    check(a.registered.size() == 1 && a.pinRequests.equals(a.registered)
+                            && !a.consent.dialog.isShowing() && decor.tree.focusListeners.isEmpty()
+                            && a.main.delayed.isEmpty(), "only a continuously focused reply pins and clears the listener/deadline");
+                }
+
+                static void installWaitsForFullscreenExit() {
+                    Activity a = new Activity(true);
+                    Shell shell = a.manager.active;
+                    Activity.ShellHistoryObserver owner = a.historyObservers.get(shell);
+                    WebContents page = shell.contents;
+                    PopupWindow popup = openOverflow(a, () -> { });
+                    a.requestChromeRefresh(); // Earlier chrome pass must still defer to the native exit.
+                    page.nativeFullscreen = true; page.signalFullscreen(true, true);
+                    a.clickOverflowAction(popup, owner, owner.webAppPageEpoch, INSTALL, new View());
+                    check(page.manifests.isEmpty() && page.fullscreenExits == 0, "click enqueues both native exit and installation");
+                    a.main.all();
+                    check(page.fullscreenExits == 1 && page.manifests.size() == 1,
+                            "install checks the same visible page exactly once after fullscreen exits");
+                }
+
+                static void installHasBoundedPhasesAndCancellation() {
+                    Activity waiting = new Activity(true);
+                    Activity.ShellHistoryObserver waitingOwner = waiting.historyObservers.get(waiting.manager.active);
+                    waiting.onWindowFocusChanged(false);
+                    PopupWindow waitPopup = openOverflow(waiting, () -> { });
+                    waiting.clickOverflowAction(waitPopup, waitingOwner, waitingOwner.webAppPageEpoch, INSTALL, new View());
+                    waiting.main.all();
+                    waiting.main.advance(Activity.WEB_APP_CHECK_TIMEOUT_MS);
+                    waiting.onWindowFocusChanged(true); waiting.main.all();
+                    check(waiting.webAppInstall == null && waitingOwner.contents.manifests.isEmpty(),
+                            "focus restored after the phase deadline cannot replay the install click");
+
+                    Activity a = new Activity(true);
+                    WebContents page = beginInstallFromPopup(a);
+                    a.main.advance(Activity.WEB_APP_CHECK_TIMEOUT_MS - 1);
+                    check(a.webAppInstall != null && a.consent == null, "manifest lookup remains valid before deadline");
+                    deliverManifest(a, page, 0, MANIFEST);
+                    Ui.Sheet sheet = a.consent;
+                    View decor = sheet.dialog.getWindow().getDecorView();
+                    a.onWindowFocusChanged(false);
+                    a.main.advance(2 * Activity.WEB_APP_CHECK_TIMEOUT_MS);
+                    check(a.webAppInstall != null && sheet.dialog.isShowing() && a.main.delayed.isEmpty(),
+                            "time spent reading explicit consent does not consume either lookup budget");
+                    sheet.confirm.run(); a.main.all();
+                    check(page.manifests.size() == 2 && a.main.delayed.size() == 1,
+                            "confirmation starts a new bounded phase");
+                    a.main.advance(Activity.WEB_APP_CHECK_TIMEOUT_MS);
+                    check(a.webAppInstall == null && !sheet.dialog.isShowing() && a.main.delayed.isEmpty()
+                            && decor.tree.focusListeners.isEmpty() && a.toasts.contains("网页应用检查超时，请重试。"),
+                            "timeout exits a focused confirmation with feedback, no listener or orphan timer");
+                    deliverManifest(a, page, 1, MANIFEST);
+                    check(a.pinRequests.isEmpty() && a.registered.isEmpty(), "late confirmation after timeout cannot pin");
+
+                    for (String cancel : List.of("Back", "dismiss", "Cancel")) {
+                        Activity host = new Activity(true);
+                        WebContents current = beginInstallFromPopup(host);
+                        Ui.Sheet consent = requestInstallConfirmation(host, current);
+                        switch (cancel) {
+                            case "Back" -> host.onBackPressed();
+                            case "dismiss" -> consent.dialog.dismiss();
+                            case "Cancel" -> consent.cancel.run();
+                            default -> throw new AssertionError(cancel);
+                        }
+                        deliverManifest(host, current, 1, MANIFEST);
+                        check(host.webAppInstall == null && !consent.dialog.isShowing() && host.main.delayed.isEmpty()
+                                && consent.dialog.window.decor.tree.focusListeners.isEmpty()
+                                && host.pinRequests.isEmpty() && host.registered.isEmpty()
+                                && current.navigation.backCalls == 0 && host.returns == 0,
+                                cancel + " retires a confirming consent without loading, traversing or pinning anything");
+                    }
+                }
+
+                static void passiveOfferRevalidatesExactPageAndVisibility() {
+                    Activity a = new Activity(true);
+                    a.webAppOfferBar = new View(); a.webAppOfferBar.visibility = View.GONE;
+                    Shell shell = a.manager.active;
+                    Activity.ShellHistoryObserver owner = a.historyObservers.get(shell);
+                    WebContents page = shell.contents;
+                    page.securePage = false;
+                    a.requestChromeRefresh(); a.main.all();
+                    check(page.manifests.isEmpty(), "passive discovery ignores pages without secure HTTPS");
+                    page.securePage = true; page.loading = true;
+                    owner.didChangeVisibleSecurityState(); a.main.all();
+                    check(page.manifests.isEmpty(), "passive discovery waits until loading settles");
+                    page.loading = false;
+                    owner.didStopLoading(page.getVisibleUrl(), true); a.main.all();
+                    check(page.manifests.size() == 1 && a.webAppOfferBar.visibility == View.GONE,
+                            "eligible foreground document starts one passive lookup without changing its viewport");
+                    Activity.WebAppOffer pending = a.webAppOffer;
+                    page.updateWebContentsVisibility(Visibility.HIDDEN);
+                    check(a.webAppOffer == null, "hide drops only the pending passive lookup");
+                    page.updateWebContentsVisibility(Visibility.VISIBLE);
+                    a.main.all();
+                    check(a.webAppOffer != pending && page.manifests.size() == 2,
+                            "hide then visible re-arms once for the same owner and URL");
+                    deliverManifest(a, page, 0, null);
+                    check(a.webAppOffer != null && !a.webAppOffer.completed && a.webAppOfferBar.visibility == View.GONE,
+                            "stale null reply from before hide cannot poison a fresh same-document probe");
+                    deliverManifest(a, page, 1, MANIFEST);
+                    Activity.WebAppOffer eligible = a.webAppOffer;
+                    check(eligible.completed && a.webAppOfferBar.visibility == View.VISIBLE && a.consent == null
+                            && a.webAppInstall == null && a.registered.isEmpty() && a.pinRequests.isEmpty(),
+                            "eligible passive result shows only the nonmodal native action");
+                    a.onWindowFocusChanged(false); a.main.all();
+                    check(a.webAppOfferBar.visibility == View.GONE, "foreign window focus hides the passive offer");
+                    a.onWindowFocusChanged(true); a.main.all();
+                    check(a.webAppOfferBar.visibility == View.VISIBLE && page.manifests.size() == 2,
+                            "focus restores the same completed offer without fetching again");
+                    a.useWebAppOffer(true); a.main.all();
+                    check(eligible.dismissed && a.webAppOfferBar.visibility == View.GONE && a.consent == null,
+                            "dismissal is local to this page and does not open consent");
+                    page.updateWebContentsVisibility(Visibility.HIDDEN);
+                    page.updateWebContentsVisibility(Visibility.VISIBLE); a.main.all();
+                    check(a.webAppOffer == eligible && a.webAppOfferBar.visibility == View.GONE && page.manifests.size() == 2,
+                            "completed dismissal survives hide/visible, with no repeated offer");
+                    owner.didStartNavigationInPrimaryMainFrame(new NavigationHandle(page.url));
+                    a.main.all();
+                    check(page.manifests.size() == 3 && a.webAppOffer != eligible,
+                            "same URL navigation invalidates the completed prior offer");
+                    deliverManifest(a, page, 2, new NativePwaBridge.InstallManifest(MANIFEST.id, MANIFEST.name,
+                            MANIFEST.startUrl, "https://a.invalid/page/", MANIFEST.origin));
+                    check(a.webAppOfferBar.visibility == View.GONE && a.webAppInstall == null,
+                            "manifest scope must include both the visible page and start URL");
+                    owner.didChangeVisibleSecurityState(); a.main.all();
+                    deliverManifest(a, page, 3, MANIFEST);
+                    a.useWebAppOffer(false);
+                    check(a.webAppOfferBar.visibility == View.GONE && a.consent == null && page.manifests.size() == 4,
+                            "offer tap withdraws the chip and schedules a fresh check, not consent on cached data");
+                    a.main.all();
+                    check(page.manifests.size() == 5 && a.consent == null, "eligible offer starts explicit installation only on a posted pass");
+                    deliverManifest(a, page, 4, MANIFEST);
+                    check(a.consent != null && a.consent.dialog.isShowing() && a.pinRequests.isEmpty(),
+                            "only an explicit offer tap and another fresh eligible response open consent");
+                }
+
+                static void installedOriginSuppressesOffer() {
+                    Activity a = new Activity(true);
+                    a.webAppOfferBar = new View(); a.webAppOfferBar.visibility = View.GONE;
+                    Shell shell = a.manager.active;
+                    Activity.ShellHistoryObserver owner = a.historyObservers.get(shell);
+                    WebContents page = shell.contents;
+                    page.securePage = true;
+                    owner.didStopLoading(page.getVisibleUrl(), true); a.main.all();
+                    check(page.manifests.size() == 1 && a.webAppOfferBar.visibility == View.GONE,
+                            "uninstalled origin still arms exactly one passive lookup");
+                    deliverManifest(a, page, 0, MANIFEST);
+                    check(a.webAppOfferBar.visibility == View.VISIBLE,
+                            "before any install the eligible offer shows");
+                    a.registered.add(new WebApp(APP_ID, PROFILE_ID, MANIFEST.id, MANIFEST.name,
+                            MANIFEST.startUrl, MANIFEST.scope, MANIFEST.origin));
+                    a.onWindowFocusChanged(false); a.main.all();
+                    a.onWindowFocusChanged(true); a.main.all();
+                    check(a.webAppOfferBar.visibility == View.GONE,
+                            "an origin already installed in this profile hides the stale offer without new work");
+                    owner.didStartNavigationInPrimaryMainFrame(new NavigationHandle(page.url));
+                    a.main.all();
+                    check(page.manifests.size() == 1 && a.webAppOffer == null
+                            && a.webAppOfferBar.visibility == View.GONE,
+                            "a fresh document on an installed origin never probes or offers again");
+                    a.registered.clear();
+                    owner.didChangeVisibleSecurityState(); a.main.all();
+                    check(page.manifests.size() == 2 && a.webAppOffer != null,
+                            "uninstalling restores the passive offer on the next refresh");
+                    deliverManifest(a, page, 1, MANIFEST);
+                    check(a.webAppOfferBar.visibility == View.VISIBLE,
+                            "offer returns once the origin is no longer installed");
+                }
+
+                static void staleInstallResultsCannotPin() {
+                    for (String change : List.of("pause", "renderer loss", "navigation",
+                            "redirect", "security", "retired Shell", "history overlay", "visibility")) {
+                        Activity a = new Activity(true);
+                        Shell owner = a.manager.active;
+                        WebContents page = beginInstallFromPopup(a);
+                        Ui.Sheet sheet = change.equals("pause") ? null : requestInstallConfirmation(a, page);
+                        Activity.ShellHistoryObserver observer = a.historyObservers.get(owner);
+                        switch (change) {
+                            case "pause" -> { a.onPause(); a.onResume(); }
+                            case "renderer loss" -> observer.primaryMainFrameRenderProcessGone(1);
+                            case "navigation" -> observer.didStartNavigationInPrimaryMainFrame(new NavigationHandle(MANIFEST.startUrl));
+                            case "redirect" -> observer.didRedirectNavigation(new NavigationHandle(MANIFEST.startUrl));
+                            case "security" -> observer.didChangeVisibleSecurityState();
+                            case "retired Shell" -> a.manager.closeShell(owner);
+                            case "history overlay" -> a.showHistoryPanel();
+                            case "visibility" -> {
+                                page.updateWebContentsVisibility(Visibility.HIDDEN);
+                                page.updateWebContentsVisibility(Visibility.VISIBLE);
+                            }
+                            default -> throw new AssertionError(change);
+                        }
+                        deliverManifest(a, page, sheet == null ? 0 : 1, MANIFEST);
+                        check(a.webAppInstall == null && (sheet == null ? a.consent == null : !sheet.dialog.isShowing()),
+                                change + " leaves no stale consent when the manifest arrives");
+                        check(a.registered.isEmpty() && a.pinRequests.isEmpty(), change + " prevents the late callback from installing");
+                    }
+                }
+
+                static void frameworkBackPreservesDispatchOrder() {
+                    int sdk = android.os.Build.VERSION.SDK_INT;
+                    try {
+                        android.os.Build.VERSION.SDK_INT = 32;
+                        Activity legacy = new Activity(true);
+                        legacy.registerBrowserBack();
+                        check(legacy.browserBack == null && legacy.backDispatcher.callback == null,
+                                "pre-33 Activity has no framework callback");
+                        legacy.manager.active.contents.navigation.hasBack = true;
+                        legacy.onBackPressed();
+                        check(legacy.manager.active.contents.navigation.backCalls == 1, "legacy Back still uses browser policy");
+
+                        android.os.Build.VERSION.SDK_INT = 33;
+                        Activity a = new Activity(true);
+                        Shell first = a.manager.active;
+                        Shell previous = a.manager.retain("https://ordinary.invalid/previous", true);
+                        Shell installed = a.manager.retain(MANIFEST.startUrl, true);
+                        a.manager.selectShell(installed); a.main.all();
+                        WebApp app = new WebApp(APP_ID, PROFILE_ID, MANIFEST.id, MANIFEST.name,
+                                MANIFEST.startUrl, MANIFEST.scope, MANIFEST.origin);
+                        installed.contents.standaloneScope = app.scope;
+                        a.webAppShells.put(installed, new Activity.WebAppShell(app, installed.contents, previous));
+                        installed.contents.navigation.hasBack = true;
+                        a.registerBrowserBack();
+                        var callback = a.backDispatcher.callback;
+                        check(callback != null && callback == a.browserBack
+                                && a.backDispatcher.priority == android.window.OnBackInvokedDispatcher.PRIORITY_DEFAULT,
+                                "API 33 registers the browser callback at the default priority");
+                        enterFullscreen(a, installed);
+                        callback.onBackInvoked(); a.main.all();
+                        check(a.fullscreenOwner == null && a.webAppBar.visibility == View.VISIBLE
+                                && a.chromeBar.visibility == View.GONE && MANIFEST.name.equals(a.webAppTitle.getText()),
+                                "framework Back exits fullscreen to standalone chrome, not the browser toolbar");
+                        check(a.manager.active == installed && !installed.destroyed && installed.contents.fullscreenExits == 1
+                                && installed.contents.navigation.backCalls == 0, "fullscreen consumes the first framework Back");
+                        callback.onBackInvoked(); a.main.all();
+                        check(installed.destroyed && a.manager.active == previous && !first.destroyed
+                                && installed.contents.navigation.backCalls == 0,
+                                "standalone framework Back closes the app and restores its exact previous tab without traversing app history");
+                        previous.contents.navigation.hasBack = true;
+                        callback.onBackInvoked();
+                        check(previous.contents.navigation.backCalls == 1 && a.returns == 0, "ordinary Back works after leaving standalone mode");
+                        a.onDestroy();
+                        check(a.backDispatcher.callback == null && a.browserBack == null, "destroy unregisters the installed framework callback");
+                    } finally {
+                        android.os.Build.VERSION.SDK_INT = sdk;
+                    }
+                }
+
                 public static int run() {
                     loadFeedbackPresentation();
                     previewRequestCoalescing();
@@ -1708,6 +2909,22 @@ public final class NativeBrowserRecoveryHostTest {
                     previewNoDataAndBounds();
                     previewStaleResults();
                     previewSourceAndOverlays();
+                    fullscreenOverlaysAndFocus();
+                    fullscreenWaitsForWindowFocus();
+                    fullscreenBackAndLifecycle();
+                    fullscreenWindowAndInsets();
+                    fullscreenSignalsAndNavigation();
+                    fullscreenIdentityAndSwitch();
+                    browserFullscreenFromOverflow();
+                    browserFullscreenCannotReplayStaleMenuOrRequest();
+                    installConsentRequiresFreshManifest();
+                    installWaitsForWindowFocus();
+                    installWaitsForFullscreenExit();
+                    installHasBoundedPhasesAndCancellation();
+                    passiveOfferRevalidatesExactPageAndVisibility();
+                    installedOriginSuppressesOffer();
+                    staleInstallResultsCannotPin();
+                    frameworkBackPreservesDispatchOrder();
                     return checks;
                 }
             }

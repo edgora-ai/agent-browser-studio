@@ -1,0 +1,40 @@
+{
+  "scope": "STATIC_AND_SYNTHETIC_OUTPUT_PARSER_ONLY_NOT_CXX_EXECUTION",
+  "status": "PREPARED_NOT_COMPILED_OR_EXECUTED",
+  "astParsed": true,
+  "importSideEffectsObserved": false,
+  "originalExactAuthoritativeMethodBytes": true,
+  "originalMethodBytes": 554,
+  "originalMethodSha256": "b7c81622a78135acbc67f4a400849ebdf5f0ab6f46e26d2d88a234921ec1edeb",
+  "canonicalPatchSha256AtPreparation": "00deba86d6df9962fcda7cf4999ddc8ea481cab56071e9e0e8e1d31ecc589ae7",
+  "productionDiffExtractedOnlyNotApplied": true,
+  "orderedCppCaseNamesMatchRunner": 11,
+  "expectedBaselineFailuresNotObservedTestResults": [
+    "root_detach_attach_provider_identity",
+    "root_detach_attach_support_generation",
+    "root_detach_attach_weak_lifetime",
+    "root_reuse_no_reallocation_or_renotify",
+    "three_sinks_thirty_rounds"
+  ],
+  "syntheticParserChecksOnly": [
+    "parser_expected_5_failure_shape",
+    "parser_expected_0_failure_shape",
+    "parser_rejects_crash_as_expected_red"
+  ],
+  "sourceModes": "directory 0700; all files 0600",
+  "compilerInvoked": false,
+  "hostBinaryExecuted": false,
+  "patchExecutableInvoked": false,
+  "chromiumNativeUnitCompiledOrRun": false,
+  "deviceOrRemoteActions": false,
+  "runtimeCaptureDependency": false,
+  "fileHashes": {
+    "run_control_flow.py": "1bc5e6334228b781ee207ca95199b1e3772fab8812f9e0e7dfb7c54baaa6a566",
+    "control_flow_test.cc": "d8ff0cdf070686d36d852d6245b47a0367e0201e47f0cab876e4a6ce991cd256",
+    "README.md": "e487065ac5e1f6b5a187b55c79036deb720295222000c3714a4fae942eeaf41f",
+    "input_manager.original.cc": "b7c81622a78135acbc67f4a400849ebdf5f0ab6f46e26d2d88a234921ec1edeb",
+    "fixture-source.json": "9333b8c6baf7d0db84f2f39183501237f01c1b3abbf83a344778535c18fcc990"
+  },
+  "parentLookupCaptureSha256Verified": "25ed3f1ccd56c24f34a0c868a3c27ff24b1ab95ff7ae2f335261d6f035aaacda",
+  "parentLookupCorrection": "direct parent only; invalid 0; root CHECK; nested/no-parent/root-CHECK setup assertions prepared, NOT EXECUTED"
+}

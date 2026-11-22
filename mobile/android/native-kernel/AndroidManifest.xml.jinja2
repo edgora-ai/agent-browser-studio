@@ -25,9 +25,15 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        <!-- LauncherApps starts a pinned shortcut as its publisher. Keep this alias private. -->
+        <activity-alias
+            android:name="com.ahoo.abs.android.PinnedWebApp"
+            android:targetActivity="com.ahoo.abs.android.MainActivity"
+            android:exported="false" />
         <activity
             android:name="com.ahoo.abs.android.nativekernel.NativeBrowserActivity"
             android:configChanges="orientation|screenSize|keyboardHidden|uiMode|fontScale"
+            android:enableOnBackInvokedCallback="true"
             android:exported="false"
             android:hardwareAccelerated="true"
             android:process=":browser" />

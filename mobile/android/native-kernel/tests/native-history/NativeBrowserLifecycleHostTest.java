@@ -1,5 +1,7 @@
 import com.sun.source.tree.ClassTree;
 import com.sun.source.tree.CompilationUnitTree;
+import com.sun.source.tree.ExpressionStatementTree;
+import com.sun.source.tree.MethodInvocationTree;
 import com.sun.source.tree.MethodTree;
 import com.sun.source.tree.StatementTree;
 import com.sun.source.tree.Tree;
@@ -24,9 +26,9 @@ import javax.tools.ToolProvider;
 
 /**
  * Pure-JDK deterministic callback/order tests of source-extracted production lifecycle methods.
- * Android, history/native flush completions, Shell teardown, navigation and the main-loop scheduler
- * are fake hosts. The runtime getter and two-completion drain barrier are extracted, not reimplemented.
- * History initialization/write waits below are controlled callback scenarios, not real history I/O.
+ * Android, history/native flush completions, Shell teardown, navigation, the ticket registry and the
+ * main-loop scheduler are fake hosts. Intent admission/scheduling/consumption and the two-completion
+ * drain barrier are extracted; neither the registry's SQLite transaction nor history I/O is exercised.
  * This is not a full Android compile, an ActivityManager/device test or any persistence proof.
  */
 public final class NativeBrowserLifecycleHostTest {
@@ -41,26 +43,25 @@ public final class NativeBrowserLifecycleHostTest {
         Files.createDirectories(output);
         JavaCompiler compiler = ToolProvider.getSystemJavaCompiler();
         Path source = root.resolve("mobile/android/native-kernel/src/main/java/com/ahoo/abs/android/nativekernel");
-        parse(compiler, List.of(source.resolve("NativeBrowserRuntime.java"), source.resolve("NativeBrowserActivity.java")));
+        Path app = root.resolve("mobile/android/app/src/main/java/com/ahoo/abs/android");
+        parse(compiler, List.of(source.resolve("NativeBrowserRuntime.java"), source.resolve("NativeBrowserActivity.java"),
+                app.resolve("browser/ControlProtocol.java"), app.resolve("webapp/WebApp.java")));
         String runtime = fieldMembers("NativeBrowserRuntime", List.of("TAG", "application", "launch", "view", "historyStore", "generation",
                 "draining", "drainReturned", "drainTimeout", "main", "DRAIN_TIMEOUT_MS", "status"))
                 + methodMembers("NativeBrowserRuntime", List.of("attach", "isCurrent", "historyStore", "detach", "beginDrain", "finishDrain", "requireMain"));
         String activity = fieldMembers("NativeBrowserActivity", List.of("TAG", "application", "runtime", "generation",
-                "closed", "quiescing", "cleanupComplete", "uiBuilt", "manager", "pageContainer"))
-                + methodMembers("NativeBrowserActivity", List.of("validateIntent", "current", "startupFailed", "returnToList", "onNewIntent", "onDestroy", "onStatus"));
-        String rejected = null;
-        for (StatementTree statement : methods.get("NativeBrowserActivity#onCreate").getBody().getStatements()) {
-            if (statement instanceof TryTree attempt && !attempt.getCatches().isEmpty()) {
-                if (rejected != null) throw new AssertionError("Ambiguous outer create rejection");
-                rejected = attempt.getCatches().get(0).getBlock().toString();
-            }
-        }
-        if (rejected == null) throw new AssertionError("Missing outer create rejection");
-        activity += "\nvoid rejectCreate(boolean runtimeAttached) " + rejected;
+                "closed", "quiescing", "cleanupComplete", "uiBuilt", "manager", "pageContainer", "main",
+                "resumed", "chromeRefreshPosted", "chromeRefresh", "lastBackExitHint", "pendingWebAppTicket"))
+                + methodMembers("NativeBrowserActivity", List.of("validateIntent", "isWebAppDelivery", "replacePendingWebAppTicket",
+                        "canQueueWebAppTicket", "current", "startupFailed", "returnToList", "onNewIntent", "onDestroy", "onStatus", "onResume",
+                        "requestChromeRefresh", "initializeBrowserUi", "interactive", "openPendingWebApp", "onWindowFocusChanged"))
+                + createAdmissionMembers();
         activity += "\nvoid failAsyncStartup() " + methods.get("#onFailure").getBody();
         activity += "\nvoid succeedAsyncStartup() " + methods.get("#onSuccess").getBody();
         Path host = output.resolve("LifecycleHost.java");
-        Files.writeString(host, HOST.replace("@RUNTIME@", runtime).replace("@ACTIVITY@", activity), StandardCharsets.UTF_8);
+        Files.writeString(host, HOST.replace("@RUNTIME@", runtime).replace("@ACTIVITY@", activity)
+                .replace("@PROTOCOL@", fieldMembers("ControlProtocol", List.of("SESSION", "NONCE", "WEB_APP_TICKET")))
+                .replace("@OPAQUE_ID@", methodMembers("WebApp", List.of("isOpaqueId"))), StandardCharsets.UTF_8);
         try (StandardJavaFileManager files = compiler.getStandardFileManager(null, null, StandardCharsets.UTF_8)) {
             boolean compiled = compiler.getTask(null, files, null,
                     List.of("--release", "17", "-Xlint:all", "-Werror", "-d", output.toString()), null,
@@ -99,6 +100,39 @@ public final class NativeBrowserLifecycleHostTest {
         }
     }
 
+    /** Exercise the actual cold admission without bringing up the Android/Chromium views. */
+    private static String createAdmissionMembers() {
+        VariableTree attached = null;
+        TryTree admission = null;
+        for (StatementTree statement : methods.get("NativeBrowserActivity#onCreate").getBody().getStatements()) {
+            if (statement instanceof VariableTree local && local.getName().contentEquals("runtimeAttached")) {
+                attached = local;
+            }
+            if (statement instanceof TryTree attempt && !attempt.getCatches().isEmpty()) {
+                if (admission != null) throw new AssertionError("Ambiguous outer create rejection");
+                admission = attempt;
+            }
+        }
+        if (attached == null || admission == null || admission.getCatches().size() != 1) {
+            throw new AssertionError("Missing cold admission ownership declaration or rejection");
+        }
+        var rejection = admission.getCatches().get(0);
+        StringBuilder prefix = new StringBuilder("\nvoid createThroughAttach(Bundle savedState) {\n")
+                .append(attached).append(";\ntry {\n");
+        for (StatementTree statement : admission.getBlock().getStatements()) {
+            if (statement instanceof ExpressionStatementTree expression
+                    && expression.getExpression() instanceof MethodInvocationTree call
+                    && call.getMethodSelect().toString().equals("DeviceUtils.updateDeviceSpecificUserAgentSwitch")) {
+                return prefix.append("}\n").append(rejection).append("\n}\n")
+                        .append("void rejectCreate(boolean runtimeAttached) ").append(rejection.getBlock()).toString();
+            }
+            prefix.append(statement);
+            if (statement instanceof VariableTree) prefix.append(';');
+            prefix.append('\n');
+        }
+        throw new AssertionError("Missing native bootstrap boundary after cold admission");
+    }
+
     private static String fieldMembers(String owner, List<String> names) {
         StringBuilder result = new StringBuilder();
         for (String name : names) {
@@ -119,7 +153,7 @@ public final class NativeBrowserLifecycleHostTest {
         return result.toString();
     }
 
-    private static final String HOST = """
+    private static final String HOST = String.join("", """
             import java.util.*;
             public final class LifecycleHost {
                 static int checks;
@@ -138,6 +172,10 @@ public final class NativeBrowserLifecycleHostTest {
                     ShellManager.synchronous = false; ShellManager.confirmed = true;
                     BrowserHistoryStore.creations = 0; Looper.current = Looper.main;
                     LibraryLoader.instance.initialized = true; BrowserStartupController.instance.started = true;
+                    WebAppRegistry.available.clear(); WebAppRegistry.expired.clear(); WebAppRegistry.probed.clear();
+                    WebAppRegistry.taken.clear(); WebAppRegistry.revoked.clear();
+                    WebAppRegistry.probeFailure = false; WebAppRegistry.takeFailure = false;
+                    WebAppShortcuts.state = WebAppShortcuts.PinState.CONFIRMED;
                 }
                 static final class Log {
                     static void i(String tag, String message) { logs.add(message); allLogs.add(message); }
@@ -232,34 +270,98 @@ public final class NativeBrowserLifecycleHostTest {
                 }
                 static final class NativeBrowserApplication {
                     final LaunchSpec launch = new LaunchSpec();
+                    NativeBrowserRuntime browserRuntime;
                     boolean draining;
-                    boolean activated = true;
+                    boolean activated = true, frozen = true;
+                    int frozenChecks, runtimeRequests;
                     void requireBrowserActivation() { if (!activated || draining) throw new IllegalStateException("https://private.invalid/exception-canary"); }
                     LaunchSpec requireLaunch() { return launch; }
                     boolean isDraining() { return draining; }
-                    void verifyFrozenCommandLine() { }
+                    void verifyFrozenCommandLine() {
+                        frozenChecks++;
+                        if (!frozen) throw new IllegalStateException("frozen-private-canary");
+                    }
+                    NativeBrowserRuntime browserRuntime() { runtimeRequests++; return browserRuntime; }
+                    String incarnation() { return "incarnation-private-canary"; }
                 }
                 static final class Bundle {
-                    final Map<String, String> values = new HashMap<>();
+                    final Map<String, Object> values = new HashMap<>();
                     int size() { return values.size(); }
-                    String getString(String name) { return values.get(name); }
+                    String getString(String name) { return values.get(name) instanceof String value ? value : null; }
                     boolean containsKey(String name) { return values.containsKey(name); }
                 }
-                static final class ControlProtocol { static final String SESSION = "session"; static final String NONCE = "nonce"; }
+                @interface Nullable { }
+                static final class ControlProtocol { @PROTOCOL@ }
+                static final class WebApp {
+                    @OPAQUE_ID@
+                    final String shortcutId = "test-shortcut";
+                }
+                static final class WebAppShortcuts {
+                    enum PinState { CONFIRMED, NOT_PINNED, UNAVAILABLE }
+                    static PinState state;
+                    static PinState pinState(Activity activity, String shortcutId) { return state; }
+                }
+                static final class android {
+                    static final class os {
+                        static final class Process {
+                            static int myPid() { return 452; }
+                        }
+                    }
+                }
                 static final class MainActivity { }
                 static final class Intent {
                     static final int FLAG_ACTIVITY_REORDER_TO_FRONT = 1;
                     static final int FLAG_ACTIVITY_SINGLE_TOP = 2;
                     Bundle extras;
                     Object data, selector, clip;
+                    String type;
                     int flags;
+                    boolean unreadableExtras;
                     Intent() { }
                     Intent(Object context, Class<?> target) { }
-                    Bundle getExtras() { return extras; }
+                    Intent(Intent source) {
+                        data = source.data; selector = source.selector; clip = source.clip; type = source.type; flags = source.flags;
+                        if (source.extras != null) { extras = new Bundle(); extras.values.putAll(source.extras.values); }
+                    }
+                    Bundle getExtras() {
+                        if (unreadableExtras) throw new IllegalArgumentException("extras-private-canary");
+                        return extras;
+                    }
+                    boolean hasExtra(String name) { return getExtras() != null && extras.containsKey(name); }
+                    void removeExtra(String name) { extras.values.remove(name); }
                     Object getData() { return data; }
+                    String getType() { return type; }
                     Object getSelector() { return selector; }
                     Object getClipData() { return clip; }
                     Intent addFlags(int value) { flags |= value; return this; }
+                }
+                /** Registry port only: records exact calls; probing is read-only and a take burns the token. */
+                static final class WebAppRegistry implements AutoCloseable {
+                    static final List<String> probed = new ArrayList<>(), taken = new ArrayList<>(), revoked = new ArrayList<>();
+                    static final Set<String> available = new HashSet<>(), expired = new HashSet<>();
+                    static boolean probeFailure, takeFailure;
+                    final Activity activity;
+                    WebAppRegistry(Activity activity) { this.activity = activity; }
+                    void assertBinding(LaunchSpec launch, String incarnation, int pid, String operation) {
+                        NativeBrowserApplication app = (NativeBrowserApplication) activity.getApplication();
+                        check(launch == app.launch && incarnation.equals(app.incarnation()) && pid == android.os.Process.myPid(),
+                                operation + " uses the attached launch, incarnation and process");
+                    }
+                    boolean canQueue(String ticket, LaunchSpec launch, String incarnation, int pid) {
+                        probed.add(ticket); assertBinding(launch, incarnation, pid, "non-consuming admission probe");
+                        if (probeFailure) throw new IllegalStateException("registry-private-canary");
+                        return available.contains(ticket) && !expired.contains(ticket);
+                    }
+                    WebApp take(String ticket, LaunchSpec launch, String incarnation, int pid) {
+                        events.add("TAKE_TICKET"); taken.add(ticket);
+                        assertBinding(launch, incarnation, pid, "consuming ticket claim");
+                        if (takeFailure) throw new IllegalStateException("registry-private-canary");
+                        return available.remove(ticket) && !expired.contains(ticket) ? new WebApp() : null;
+                    }
+                    void revokeTicket(String ticket) {
+                        events.add("REVOKE_TICKET"); revoked.add(ticket); available.remove(ticket);
+                    }
+                    @Override public void close() { }
                 }
                 static final class Toast {
                     static final int LENGTH_LONG = 1;
@@ -267,15 +369,22 @@ public final class NativeBrowserLifecycleHostTest {
                     void show() { events.add("TOAST"); }
                 }
                 static class Activity {
-                    boolean finishing, destroyed, failNavigation, failFinish;
+                    boolean finishing, destroyed, failNavigation, failFinish, windowFocus = true;
                     int finishes;
                     int flags;
                     boolean isFinishing() { return finishing; }
                     boolean isDestroyed() { return destroyed; }
                     void finish() { events.add("FINISH"); finishes++; if (failFinish) throw new IllegalStateException("exception-private-canary"); finishing = true; }
                     void startActivity(Intent intent) { events.add("RETURN_MANAGER"); if (failNavigation) throw new IllegalStateException("exception-private-canary"); flags = intent.flags; }
-                    void setIntent(Intent intent) { events.add("SET_INTENT"); }
+                    Object systemApplication;
+                    Intent retainedIntent;
+                    Object getApplication() { return systemApplication; }
+                    Intent getIntent() { return retainedIntent; }
+                    void setIntent(Intent intent) { events.add("SET_INTENT"); retainedIntent = intent; }
+                    boolean hasWindowFocus() { return windowFocus; }
+                    public void onWindowFocusChanged(boolean focus) { windowFocus = focus; }
                     protected void onNewIntent(Intent intent) { }
+                    protected void onResume() { }
                     protected void onDestroy() { destroyed = true; }
                 }
                 // Lifecycle fake-host stub: the real bridge needs Android runtime
@@ -294,11 +403,21 @@ public final class NativeBrowserLifecycleHostTest {
                     void prepareInitialTab() { events.add("PREPARE_TABS"); if (duringPrepare != null) duringPrepare.run(); fail(viewFailure); }
                     void refreshChrome() { events.add("REFRESH_CHROME"); }
                     void requestActivePreview(Object shell) { events.add("PREVIEW_REQUEST"); }
-                    // Mirrors the real post-success sequence minus the splash hide (no splash in this fake).
-                    void initializeBrowserUi() {
-                        prepareInitialTab(); uiBuilt = true; refreshChrome(); requestActivePreview(manager.getActiveShell());
-                    }
-                    void requestChromeRefresh() { events.add("REFRESH"); }
+                    void hideSplash() { }
+                    void reparentSplashToPageArea() { }
+                    void cancelNavigationFocus() { }
+                    void completeNavigationFocus() { }
+                    void syncWebContentsVisibility() { }
+                    // Rendering/mode effects are observed at the port, not simulated as Android views.
+                    void showOrdinaryBrowser() { events.add("SHOW_ORDINARY"); }
+                    void openWebApp(WebApp app) { events.add("OPEN_WEB_APP"); }
+                    // Observe the offer dispatch; manifest, consent and fullscreen are other hosts' concerns.
+                    int offerRefreshes;
+                    void beginWebAppInstall() { }
+                    void refreshWebAppOffer() { offerRefreshes++; }
+                    void onWebAppInstallWindowFocusChanged(boolean hasFocus) { }
+                    void wakePendingFullscreen() { }
+                    void unregisterBrowserBack() { }
                     void quiesceForShutdown() { if (quiescing || cleanupComplete) return; quiescing = true; events.add("QUIESCE"); fail(quietFailure); }
                     void closeNativeView() {
                         if (cleanupComplete) return;
@@ -315,7 +434,21 @@ public final class NativeBrowserLifecycleHostTest {
                     final NativeBrowserRuntime runtime = new NativeBrowserRuntime(app);
                     final NativeBrowserActivity activity = new NativeBrowserActivity();
                     final List<String> receipts = new ArrayList<>();
-                    Fixture() { activity.application = app; activity.runtime = runtime; activity.manager = new ShellManager(); activity.pageContainer = new FrameLayout(); activity.generation = runtime.attach(activity); }
+                    Fixture() { this(true); }
+                    Fixture(boolean alreadyAttached) {
+                        app.browserRuntime = runtime;
+                        activity.systemApplication = app;
+                        activity.retainedIntent = valid(app);
+                        activity.manager = new ShellManager();
+                        activity.pageContainer = new FrameLayout();
+                        if (alreadyAttached) {
+                            activity.application = app; activity.runtime = runtime; activity.generation = runtime.attach(activity);
+                        }
+                    }
+                    void create(Intent delivery, Bundle savedState) {
+                        activity.retainedIntent = delivery;
+                        activity.createThroughAttach(savedState);
+                    }
                     void drain() { runtime.beginDrain(outcome -> { events.add("CALLBACK"); receipts.add(outcome); }); }
                 }
                 static Intent valid(NativeBrowserApplication app) {
@@ -323,6 +456,33 @@ public final class NativeBrowserLifecycleHostTest {
                     intent.extras.values.put(ControlProtocol.SESSION, app.launch.sessionId);
                     intent.extras.values.put(ControlProtocol.NONCE, app.launch.nonce);
                     return intent;
+                }
+                static final String FIRST_TICKET = "67bdb5cd-57da-40bb-a563-56fff1e5b16e";
+                static final String SECOND_TICKET = "8108b394-d4c8-4e97-87c2-7e6f35e5735e";
+                static Intent webAppDelivery(NativeBrowserApplication app, Object ticket) {
+                    Intent intent = valid(app);
+                    intent.extras.values.put(ControlProtocol.WEB_APP_TICKET, ticket);
+                    return intent;
+                }
+                static Bundle savedState(String session) {
+                    Bundle state = new Bundle(); state.values.put(ControlProtocol.SESSION, session); return state;
+                }
+                record UnsafeDelivery(String label, java.util.function.Consumer<Intent> spoil) { }
+                static List<UnsafeDelivery> unsafeEnvelope() {
+                    return List.of(
+                            new UnsafeDelivery("data URI", i -> i.data = "https://private.invalid/url-canary"),
+                            new UnsafeDelivery("MIME type", i -> i.type = "text/plain"),
+                            new UnsafeDelivery("selector", i -> i.selector = new Object()),
+                            new UnsafeDelivery("clip data", i -> i.clip = new Object()),
+                            new UnsafeDelivery("extra URL key", i -> i.extras.values.put("url", "https://private.invalid/url-canary")),
+                            new UnsafeDelivery("command-line key at expected count", i -> {
+                                i.extras.values.remove(ControlProtocol.NONCE);
+                                i.extras.values.put("commandLineArgs", "switch-private-canary");
+                            }),
+                            new UnsafeDelivery("missing session", i -> i.extras.values.remove(ControlProtocol.SESSION)),
+                            new UnsafeDelivery("wrong session", i -> i.extras.values.put(ControlProtocol.SESSION, "stale-session-private-canary")),
+                            new UnsafeDelivery("wrong nonce", i -> i.extras.values.put(ControlProtocol.NONCE, "stale-nonce-private-canary")),
+                            new UnsafeDelivery("non-string nonce", i -> i.extras.values.put(ControlProtocol.NONCE, 123)));
                 }
                 static void callbackOutcomes() {
                     for (Boolean confirmed : Arrays.asList(true, false, null)) {
@@ -585,7 +745,7 @@ public final class NativeBrowserLifecycleHostTest {
                             "off-main rejection precedes history creation or drain state mutation");
                     equal(BrowserHistoryStore.creations, 0, "off-main access cannot create a history store");
                 }
-                static void createAndReuse() {
+                static void rejectedCreateRecords() {
                     reset(); NativeBrowserActivity rejected = new NativeBrowserActivity();
                     rejected.rejectCreate(false);
                     equal(events, List.of("TOAST", "RETURN_MANAGER", "FINISH"), "unattached create rejection returns before finish");
@@ -626,30 +786,297 @@ public final class NativeBrowserLifecycleHostTest {
                     check(f.activity.current(), "destroying rejected new record cannot detach existing owner");
                     equal(f.activity.closeCalls, 0, "existing owner native Shells are untouched");
                     equal(f.activity.finishes, 0, "existing owner is never finished");
-                    reset(); f = new Fixture(); long generation = f.activity.generation;
-                    f.activity.onNewIntent(valid(f.app));
-                    equal(events, List.of("SET_INTENT", "REFRESH"), "valid Continue only publishes validated intent and refreshes");
-                    equal(f.activity.generation, generation, "Continue does not attach again");
-                    check(f.activity.current(), "Continue preserves current runtime");
-                    for (int mode = 0; mode < 9; mode++) {
-                        reset(); f = new Fixture(); Intent intent = valid(f.app);
-                        if (mode == 0) intent = null;
-                        if (mode == 1) intent.data = "https://private.invalid/url-canary";
-                        if (mode == 2) intent.selector = new Object();
-                        if (mode == 3) intent.clip = new Object();
-                        if (mode == 4) intent.extras = null;
-                        if (mode == 5) intent.extras.values.put("commandLineArgs", "private-canary");
-                        if (mode == 6) intent.extras.values.put(ControlProtocol.SESSION, "stale-session-private-canary");
-                        if (mode == 7) intent.extras.values.put(ControlProtocol.NONCE, "stale-nonce-private-canary");
-                        if (mode == 8) f.app.activated = false;
-                        f.activity.onNewIntent(intent);
-                        equal(events, List.of("TOAST", "RETURN_MANAGER"), "invalid Continue does not finish or replace live tabs");
-                        equal(f.activity.finishes, 0, "invalid Continue never finishes active record");
-                        check(logs.contains("LIFECYCLE_ON_NEW_INTENT_REJECTED"), "new-intent failure has fixed phase");
-                    }
                     reset(); rejected = new NativeBrowserActivity(); rejected.failNavigation = true;
                     try { rejected.rejectCreate(false); throw new AssertionError("manager failure swallowed"); }
                     catch (IllegalStateException expected) { equal(rejected.finishes, 0, "finish requires successful manager return"); }
+                }
+            """, """
+                static void coldIntentAdmission() {
+                    reset(); Fixture ordinary = new Fixture(false); Intent base = valid(ordinary.app);
+                    ordinary.create(base, null);
+                    check(ordinary.activity.current(), "ordinary cold launch attaches its runtime");
+                    check(ordinary.activity.getIntent() == base, "ordinary cold launch keeps its original base Intent");
+                    equal(ordinary.activity.pendingWebAppTicket, null, "ordinary cold launch cannot queue a ticket");
+                    equal(events, List.of(), "ordinary cold admission does not set a new Intent or navigate");
+
+                    for (boolean restored : new boolean[] {false, true}) {
+                        reset(); Fixture f = new Fixture(false);
+                        Intent delivery = webAppDelivery(f.app, FIRST_TICKET).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP);
+                        WebAppRegistry.available.add(FIRST_TICKET);
+                        f.create(delivery, restored ? savedState(f.app.launch.sessionId) : null);
+                        check(f.activity.current(), "safe cold app envelope attaches the same native runtime");
+                        Intent retained = f.activity.getIntent();
+                        check(retained != delivery, "cold app delivery is stripped from a copy");
+                        equal(retained.getExtras().values, valid(f.app).getExtras().values,
+                                "cold retained Intent has exactly the ordinary session/nonce extras");
+                        equal(retained.flags, delivery.flags, "cold copy preserves the ordinary Intent flags");
+                        equal(delivery.getExtras().getString(ControlProtocol.WEB_APP_TICKET), FIRST_TICKET,
+                                "cold stripping does not mutate the delivered Intent");
+                        equal(f.activity.pendingWebAppTicket, restored ? null : FIRST_TICKET,
+                                "only fresh cold creation queues the optional ticket");
+                        equal(events, List.of("SET_INTENT"), "cold admission does not open an app or navigate");
+                        equal(WebAppRegistry.probed, restored ? List.of() : List.of(FIRST_TICKET),
+                                "only fresh cold creation probes ticket eligibility");
+                        check(WebAppRegistry.available.contains(FIRST_TICKET) && WebAppRegistry.taken.isEmpty()
+                                && WebAppRegistry.revoked.isEmpty(), "cold admission never consumes or revokes the ticket");
+                        equal(logs, List.of("LIFECYCLE_ON_CREATE_INTENT_VALIDATE", "LIFECYCLE_ON_CREATE_SAVED_STATE_SESSION_CHECK",
+                                "LIFECYCLE_ON_CREATE_RUNTIME_ATTACH", "LIFECYCLE_ON_CREATE_RUNTIME_ATTACHED"), "cold admission markers stay ordered");
+                    }
+
+                    for (String reason : List.of("unknown", "expired", "registry unavailable")) {
+                        reset(); Fixture f = new Fixture(false);
+                        if (reason.equals("expired")) {
+                            WebAppRegistry.available.add(FIRST_TICKET);
+                            WebAppRegistry.expired.add(FIRST_TICKET);
+                        }
+                        WebAppRegistry.probeFailure = reason.equals("registry unavailable");
+                        f.create(webAppDelivery(f.app, FIRST_TICKET), null);
+                        equal(WebAppRegistry.probed, List.of(FIRST_TICKET), reason + " cold handoff is checked once");
+                        check(f.activity.current() && !f.activity.getIntent().hasExtra(ControlProtocol.WEB_APP_TICKET)
+                                && f.activity.pendingWebAppTicket == null, reason + " cold handoff starts ordinary browser without queueing");
+                        f.activity.onResume(); f.activity.succeedAsyncStartup(); Handler.runPosted();
+                        check(!events.contains("OPEN_WEB_APP") && WebAppRegistry.taken.isEmpty()
+                                && WebAppRegistry.revoked.isEmpty(), reason + " cold ticket never reaches the consuming path");
+                    }
+                    for (UnsafeDelivery unsafe : unsafeEnvelope()) {
+                        reset(); Fixture f = new Fixture(false); Intent delivery = webAppDelivery(f.app, FIRST_TICKET);
+                        unsafe.spoil().accept(delivery);
+                        assertColdRejection(f, delivery, null, unsafe.label());
+                    }
+                    reset(); Fixture f = new Fixture(false);
+                    assertColdRejection(f, webAppDelivery(f.app, "not-a-ticket"), null, "malformed ticket");
+                    reset(); f = new Fixture(false);
+                    assertColdRejection(f, webAppDelivery(f.app, FIRST_TICKET), savedState("stale-session"), "stale saved session");
+                }
+                static void assertColdRejection(Fixture f, Intent delivery, Bundle state, String label) {
+                    f.create(delivery, state);
+                    equal(f.app.runtimeRequests, 0, label + " is rejected before runtime lookup or attach");
+                    check(f.runtime.view == null && f.runtime.generation == 0, label + " acquires no native runtime owner");
+                    check(f.activity.getIntent() == delivery && f.activity.pendingWebAppTicket == null,
+                            label + " cannot rewrite the base or queue a ticket");
+                    equal(events, List.of("TOAST", "RETURN_MANAGER", "FINISH"), label + " retains cold rejection behavior");
+                    check(logs.contains("LIFECYCLE_ON_CREATE_REJECTED"), label + " has a fixed rejection phase");
+                }
+                static void ordinaryContinue() {
+                    reset(); Fixture f = new Fixture(); long generation = f.activity.generation;
+                    f.activity.uiBuilt = true; f.activity.resumed = true;
+                    WebAppRegistry.available.add(FIRST_TICKET);
+                    f.activity.onNewIntent(webAppDelivery(f.app, FIRST_TICKET));
+                    equal(f.activity.pendingWebAppTicket, FIRST_TICKET, "pending PWA exists before ordinary Continue");
+                    Intent ordinary = valid(f.app);
+                    f.activity.onNewIntent(ordinary);
+                    equal(events, List.of("REVOKE_TICKET", "SHOW_ORDINARY", "SET_INTENT"),
+                            "ordinary Continue revokes the pending PWA and selects browser before retaining Intent or refreshing");
+                    check(f.activity.getIntent() == ordinary, "ordinary Continue retains the validated Intent");
+                    equal(f.activity.pendingWebAppTicket, null, "ordinary Continue clears pending PWA before the posted pass");
+                    equal(WebAppRegistry.revoked, List.of(FIRST_TICKET), "ordinary Continue revokes exactly the pending ticket once");
+                    equal(f.activity.generation, generation, "Continue does not attach again");
+                    check(f.activity.current(), "Continue preserves current runtime");
+                    equal(Handler.posted.size(), 1, "Continue coalesces with the already-scheduled PWA refresh");
+                    Handler.runPosted();
+                    equal(events, List.of("REVOKE_TICKET", "SHOW_ORDINARY", "SET_INTENT", "REFRESH_CHROME"),
+                            "only the ordinary browser refresh runs after superseding PWA");
+                    check(WebAppRegistry.taken.isEmpty(), "superseded ticket is never consumed");
+                    f.activity.onNewIntent(valid(f.app)); Handler.runPosted();
+                    equal(WebAppRegistry.revoked, List.of(FIRST_TICKET), "subsequent ordinary Continue cannot revoke the same ticket again");
+
+                    for (UnsafeDelivery unsafe : unsafeEnvelope()) {
+                        reset(); f = new Fixture(); Intent bad = valid(f.app); unsafe.spoil().accept(bad);
+                        assertOrdinaryRejection(f, bad, unsafe.label());
+                    }
+                    reset(); f = new Fixture(); assertOrdinaryRejection(f, null, "null Intent");
+                    reset(); f = new Fixture(); assertOrdinaryRejection(f, new Intent(), "missing extras");
+                    reset(); f = new Fixture(); f.app.activated = false;
+                    assertOrdinaryRejection(f, valid(f.app), "unactivated process");
+                    reset(); f = new Fixture(); f.app.frozen = false;
+                    assertOrdinaryRejection(f, valid(f.app), "frozen command line mismatch");
+                    reset(); f = new Fixture(); f.runtime.generation++;
+                    assertOrdinaryRejection(f, valid(f.app), "stale Activity generation");
+                }
+                static void assertOrdinaryRejection(Fixture f, Intent invalid, String label) {
+                    Intent retained = f.activity.getIntent();
+                    f.activity.onNewIntent(invalid);
+                    equal(events, List.of("TOAST", "RETURN_MANAGER"), label + " uses legacy ordinary startup failure");
+                    equal(f.activity.finishes, 0, label + " never finishes the active record");
+                    check(f.activity.getIntent() == retained && Handler.posted.isEmpty(), label + " cannot replace the Intent or post a refresh");
+                    equal(logs, List.of("LIFECYCLE_ON_NEW_INTENT_REJECTED"), label + " has the fixed reuse rejection log");
+                }
+                static void optionalDeliveryRejectedSoft() {
+                    for (UnsafeDelivery unsafe : unsafeEnvelope()) {
+                        reset(); Fixture f = new Fixture(); Intent delivery = webAppDelivery(f.app, SECOND_TICKET);
+                        unsafe.spoil().accept(delivery);
+                        assertSoftRejection(f, delivery, unsafe.label());
+                    }
+                    for (Object value : Arrays.asList(null, 42, "", "https://private.invalid/url-canary",
+                            "67bdb5cd-57da-10bb-a563-56fff1e5b16e", "67bdb5cd-57da-40bb-7563-56fff1e5b16e",
+                            "67BDB5CD-57DA-40BB-A563-56FFF1E5B16E")) {
+                        reset(); Fixture f = new Fixture();
+                        assertSoftRejection(f, webAppDelivery(f.app, value), "present but invalid ticket value " + value);
+                    }
+                    reset(); Fixture f = new Fixture(); Intent unreadable = webAppDelivery(f.app, SECOND_TICKET);
+                    unreadable.unreadableExtras = true;
+                    assertSoftRejection(f, unreadable, "unreadable extras");
+                    reset(); f = new Fixture(); f.app.activated = false;
+                    assertSoftRejection(f, webAppDelivery(f.app, SECOND_TICKET), "unactivated optional delivery");
+                    reset(); f = new Fixture(); f.app.frozen = false;
+                    assertSoftRejection(f, webAppDelivery(f.app, SECOND_TICKET), "optional delivery against a changed command line");
+                    reset(); f = new Fixture(); f.runtime.generation++;
+                    assertSoftRejection(f, webAppDelivery(f.app, SECOND_TICKET), "optional delivery to a stale Activity generation");
+                }
+                static void assertSoftRejection(Fixture f, Intent invalid, String label) {
+                    Intent retained = f.activity.getIntent();
+                    f.activity.uiBuilt = true; f.activity.resumed = true;
+                    f.activity.pendingWebAppTicket = FIRST_TICKET;
+                    f.activity.onNewIntent(invalid);
+                    check(Handler.posted.isEmpty(), label + " does not request a chrome pass");
+                    equal(events, List.of(), label + " cannot navigate, manipulate overlays, replace Intent or drain");
+                    check(f.activity.getIntent() == retained && !f.runtime.draining, label + " preserves the retained browser");
+                    equal(f.activity.pendingWebAppTicket, FIRST_TICKET, label + " leaves existing pending authority alone");
+                    check(WebAppRegistry.revoked.isEmpty() && WebAppRegistry.taken.isEmpty(), label + " cannot touch the registry");
+                }
+                static void warmTicketConsumption() {
+                    reset(); Fixture f = new Fixture(); f.activity.uiBuilt = true;
+                    Intent retained = f.activity.getIntent();
+                    Intent delivery = webAppDelivery(f.app, FIRST_TICKET);
+                    WebAppRegistry.available.add(FIRST_TICKET);
+                    f.activity.onNewIntent(delivery);
+                    f.activity.onNewIntent(delivery);
+                    equal(f.app.frozenChecks, 2, "duplicate optional envelopes still verify frozen setup");
+                    equal(f.activity.pendingWebAppTicket, FIRST_TICKET, "valid optional delivery queues without revoking the same pending token");
+                    equal(events, List.of(), "warm optional admission neither opens nor writes the base Intent inline");
+                    equal(Handler.posted.size(), 1, "duplicate optional envelopes coalesce the posted chrome pass");
+                    equal(WebAppRegistry.probed, List.of(FIRST_TICKET, FIRST_TICKET), "admission checks both deliveries without burning the token");
+                    Handler.runPosted();
+                    equal(f.activity.pendingWebAppTicket, FIRST_TICKET, "posted chrome pass keeps a ticket while backgrounded");
+                    check(WebAppRegistry.taken.isEmpty(), "background even with ready UI cannot take the ticket");
+                    equal(f.activity.offerRefreshes, 0, "background chrome pass cannot dispatch offer discovery");
+                    f.activity.onResume();
+                    check(WebAppRegistry.taken.isEmpty(), "onResume does not consume directly on its callback stack");
+                    equal(f.activity.offerRefreshes, 0, "onResume does not dispatch offer discovery inline");
+                    events.clear(); Handler.runPosted();
+                    equal(f.activity.offerRefreshes, 1, "the posted foreground pass dispatches offer reconciliation once");
+                    equal(WebAppRegistry.taken, List.of(FIRST_TICKET), "posted foreground pass consumes the queued token once");
+                    equal(events, List.of("TAKE_TICKET", "OPEN_WEB_APP", "REFRESH_CHROME"), "the ready foreground pass alone opens the app");
+                    equal(f.activity.pendingWebAppTicket, null, "pending capability is removed after the first attempt");
+                    check(f.activity.getIntent() == retained && f.activity.current(), "opening an app leaves the same base Intent and runtime");
+
+                    events.clear(); f.activity.requestChromeRefresh(); Handler.runPosted();
+                    equal(events, List.of("REFRESH_CHROME"), "subsequent chrome refresh cannot take the consumed slot again");
+                    // Replays and unknown tokens never reach the posted consumer.
+                    for (Intent stale : List.of(delivery, webAppDelivery(f.app, SECOND_TICKET))) {
+                        events.clear(); f.activity.onNewIntent(stale);
+                        equal(events, List.of(), "replayed or unavailable token cannot navigate on admission");
+                        equal(Handler.posted.size(), 0, "replay or miss does not schedule or poll chrome");
+                        Handler.runPosted();
+                        equal(events, List.of(), "replay or miss cannot take, navigate, change mode, drain or replace base Intent");
+                        equal(WebAppRegistry.taken, List.of(FIRST_TICKET), "only the original valid delivery reached the consuming path");
+                        equal(f.activity.pendingWebAppTicket, null, "registry miss never queues a retry");
+                        check(f.activity.getIntent() == retained && f.activity.current(), "registry miss preserves the live browser owner");
+                    }
+
+                    reset(); f = new Fixture(); f.activity.uiBuilt = true; f.activity.resumed = true; f.activity.windowFocus = false;
+                    WebAppRegistry.available.add(FIRST_TICKET);
+                    f.activity.onNewIntent(webAppDelivery(f.app, FIRST_TICKET));
+                    Handler.runPosted();
+                    equal(f.activity.pendingWebAppTicket, FIRST_TICKET, "the window-focus gate preserves the queued handoff");
+                    check(WebAppRegistry.taken.isEmpty(), "live implementation also defers while the window lacks focus");
+                    f.activity.onWindowFocusChanged(true);
+                    check(WebAppRegistry.taken.isEmpty(), "focus gain does not consume inline");
+                    Handler.runPosted();
+                    equal(WebAppRegistry.taken, List.of(FIRST_TICKET), "focus gain schedules the deferred ticket pass");
+
+                    for (boolean registryUnavailable : new boolean[] {false, true}) {
+                        reset(); f = new Fixture(); f.activity.uiBuilt = true; f.activity.resumed = true;
+                        retained = f.activity.getIntent(); WebAppRegistry.available.add(FIRST_TICKET);
+                        WebAppRegistry.takeFailure = registryUnavailable;
+                        if (!registryUnavailable) WebAppShortcuts.state = WebAppShortcuts.PinState.NOT_PINNED;
+                        f.activity.onNewIntent(webAppDelivery(f.app, FIRST_TICKET)); Handler.runPosted();
+                        equal(events, List.of("TAKE_TICKET", "REFRESH_CHROME"), "registry error or unpinned shortcut cannot open or mutate the base Intent");
+                        check(f.activity.current() && f.activity.getIntent() == retained && f.activity.pendingWebAppTicket == null,
+                                "registry error or unpinned shortcut leaves the live browser with no pending retry");
+                    }
+
+                    reset(); f = new Fixture(); f.activity.uiBuilt = true; f.activity.resumed = true;
+                    WebAppRegistry.available.add(FIRST_TICKET);
+                    f.activity.onNewIntent(webAppDelivery(f.app, FIRST_TICKET));
+                    // The registry's single slot may be replaced before the next Android delivery.
+                    WebAppRegistry.available.remove(FIRST_TICKET);
+                    WebAppRegistry.available.add(SECOND_TICKET);
+                    f.activity.onNewIntent(webAppDelivery(f.app, SECOND_TICKET));
+                    f.activity.onNewIntent(webAppDelivery(f.app, FIRST_TICKET));
+                    equal(f.activity.pendingWebAppTicket, SECOND_TICKET, "superseded delivery cannot replace the newest pending token");
+                    equal(WebAppRegistry.revoked, List.of(FIRST_TICKET), "new optional delivery revokes exactly its predecessor, not the new token");
+                    Handler.runPosted();
+                    equal(WebAppRegistry.taken, List.of(SECOND_TICKET), "only the newest pending ticket reaches the consumer");
+                    equal(events, List.of("REVOKE_TICKET", "TAKE_TICKET", "OPEN_WEB_APP", "REFRESH_CHROME"),
+                            "only the newest handoff opens after the posted pass");
+
+                    reset(); f = new Fixture(); f.activity.uiBuilt = true; f.activity.resumed = true;
+                    WebAppRegistry.available.add(FIRST_TICKET);
+                    f.activity.onNewIntent(webAppDelivery(f.app, FIRST_TICKET));
+                    f.runtime.generation++;
+                    Handler.runPosted();
+                    check(WebAppRegistry.taken.isEmpty(), "queued work cannot take a ticket after its runtime ownership expires");
+                    equal(events, List.of(), "stale posted work cannot open, refresh or navigate");
+                }
+                static void ineligibleTicketCannotDisplacePending() {
+                    for (String reason : List.of("unknown", "expired", "probe failed")) {
+                        reset(); Fixture f = new Fixture(); f.activity.uiBuilt = true; f.activity.resumed = true;
+                        f.activity.windowFocus = false;
+                        Intent retained = f.activity.getIntent();
+                        WebAppRegistry.available.add(FIRST_TICKET);
+                        f.activity.onNewIntent(webAppDelivery(f.app, FIRST_TICKET));
+                        Handler.runPosted(); events.clear();
+                        if (reason.equals("expired")) {
+                            WebAppRegistry.available.add(SECOND_TICKET);
+                            WebAppRegistry.expired.add(SECOND_TICKET);
+                        }
+                        WebAppRegistry.probeFailure = reason.equals("probe failed");
+                        f.activity.onNewIntent(webAppDelivery(f.app, SECOND_TICKET));
+                        equal(WebAppRegistry.probed, List.of(FIRST_TICKET, SECOND_TICKET), reason + " delivery is checked exactly once");
+                        equal(f.activity.pendingWebAppTicket, FIRST_TICKET, reason + " delivery cannot displace the waiting ticket");
+                        equal(Handler.posted.size(), 0, reason + " delivery adds no posted work");
+                        check(WebAppRegistry.taken.isEmpty() && WebAppRegistry.revoked.isEmpty() && events.isEmpty()
+                                && f.activity.getIntent() == retained, reason + " delivery cannot consume, revoke or change the ordinary Intent");
+                        f.activity.onWindowFocusChanged(true); Handler.runPosted();
+                        equal(WebAppRegistry.taken, List.of(FIRST_TICKET), "focus gain takes only the original waiting token");
+                        equal(events, List.of("TAKE_TICKET", "OPEN_WEB_APP", "REFRESH_CHROME"), "the original handoff still opens exactly once");
+                    }
+
+                    reset(); Fixture f = new Fixture(); f.activity.uiBuilt = true; f.activity.resumed = true;
+                    WebAppRegistry.available.add(FIRST_TICKET);
+                    f.activity.onNewIntent(webAppDelivery(f.app, FIRST_TICKET));
+                    WebAppRegistry.expired.add(FIRST_TICKET);
+                    Handler.runPosted();
+                    equal(WebAppRegistry.taken, List.of(FIRST_TICKET), "eligibility at delivery never substitutes for the later exact take");
+                    equal(events, List.of("TAKE_TICKET", "REFRESH_CHROME"), "expiry after admission cannot open an app or poll");
+                    check(f.activity.pendingWebAppTicket == null && Handler.posted.isEmpty(), "expired claim is cleared without retry");
+                }
+                static void coldTicketConsumptionWhenReady() {
+                    for (boolean restored : new boolean[] {false, true}) {
+                        reset(); Fixture f = new Fixture(false);
+                        WebAppRegistry.available.add(FIRST_TICKET);
+                        f.create(webAppDelivery(f.app, FIRST_TICKET), restored ? savedState(f.app.launch.sessionId) : null);
+                        f.activity.onResume(); Handler.runPosted();
+                        check(WebAppRegistry.taken.isEmpty(), "resumed Activity cannot take a ticket before native UI is ready");
+                        events.clear(); f.activity.succeedAsyncStartup();
+                        equal(WebAppRegistry.taken, restored ? List.of() : List.of(FIRST_TICKET),
+                                "native initialization takes only a freshly queued cold ticket once ready");
+                        check(events.contains("OPEN_WEB_APP") != restored, "restored Activity never opens its original app handoff again");
+                        check(!f.activity.getIntent().hasExtra(ControlProtocol.WEB_APP_TICKET), "cold readiness never restores the ticket to the base Intent");
+                        equal(f.activity.pendingWebAppTicket, null, "nothing stays queued after cold initialization");
+                    }
+
+                    reset(); Fixture f = new Fixture(false);
+                    WebAppRegistry.available.add(FIRST_TICKET);
+                    f.create(webAppDelivery(f.app, FIRST_TICKET), null);
+                    f.activity.succeedAsyncStartup();
+                    check(WebAppRegistry.taken.isEmpty(), "background initialization cannot consume the cold ticket");
+                    equal(f.activity.pendingWebAppTicket, FIRST_TICKET, "ready without foreground retains the cold ticket");
+                    f.activity.onResume();
+                    check(WebAppRegistry.taken.isEmpty(), "foreground transition defers a ready ticket to the posted turn");
+                    Handler.runPosted();
+                    equal(WebAppRegistry.taken, List.of(FIRST_TICKET), "posted pass consumes the cold ticket once ready and foreground");
                 }
                 static void lateStartupCallbacks() {
                     reset(); Fixture live = new Fixture();
@@ -704,7 +1131,9 @@ public final class NativeBrowserLifecycleHostTest {
                     callbackOutcomes(); timeoutAndSynchronous(); exceptionalOutcomes();
                     dualStorageOutcomes(); synchronousStorageCombinations(); historyInitializationAndInflightWaits();
                     storageFailuresAndMissingNative(); dualStorageTimeouts(); runtimeHistoryOwnership();
-                    createAndReuse(); lateStartupCallbacks();
+                    rejectedCreateRecords(); coldIntentAdmission(); ordinaryContinue(); optionalDeliveryRejectedSoft();
+                    warmTicketConsumption(); ineligibleTicketCannotDisplacePending();
+                    coldTicketConsumptionWhenReady(); lateStartupCallbacks();
                     for (String message : allLogs) {
                         check(message.matches("[A-Z_]+"), "lifecycle log is fixed phase only");
                         check(!message.contains("private") && !message.contains("http") && !message.contains("canary"), "no session/nonce/URL/exception leakage");
@@ -712,5 +1141,5 @@ public final class NativeBrowserLifecycleHostTest {
                     return checks;
                 }
             }
-            """;
+            """);
 }

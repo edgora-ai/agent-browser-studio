@@ -12,4 +12,6 @@ public interface BrowserProcessOwner {
     BrowserProcessRuntime existingControlRuntime();
     /** Returns an explicit internal intent without creating a runtime or consuming a launch. */
     Intent createBrowserActivityIntent();
+    /** The fallback manager/WebView product does not install Chromium web apps. */
+    default boolean supportsWebApps() { return false; }
 }

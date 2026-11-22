@@ -12,6 +12,36 @@ ANDROID = Path(__file__).resolve().parents[4]
 JDK = Path("/opt/homebrew/opt/openjdk@17/bin")
 
 STUBS = {
+    "com/ahoo/abs/android/webapp/WebAppRegistry.java": """package com.ahoo.abs.android.webapp;
+import com.ahoo.abs.core.LaunchSpec;
+public final class WebAppRegistry implements AutoCloseable {
+ public static final String TICKET = "78b03bde-882f-4625-bd0a-e55e205119cb";
+ public static WebApp issued;
+ public static String session, incarnation, revision;
+ public static int pid, issues, revocations;
+ public static boolean failIssue;
+ public WebAppRegistry(android.content.Context c) { }
+ public String issue(WebApp app, LaunchSpec launch, String inc, int p) {
+  if (failIssue) throw new IllegalStateException("WEB_APP_NOT_CURRENT");
+  issues++; issued=app; session=launch.sessionId; revision=launch.profile.revision; incarnation=inc; pid=p;
+  return TICKET;
+ }
+ public void revokeTicket(String token) {
+  if (!TICKET.equals(token)) throw new AssertionError("Wrong revocation");
+  revocations++;
+ }
+ public void close() { }
+ public static WebApp make(String profile) {
+  return new WebApp(java.util.UUID.randomUUID().toString(), profile, "https://app.test/id", "测试应用",
+    "https://app.test/web/start", "https://app.test/web", "https://app.test");
+ }
+}""",
+    "com/ahoo/abs/android/webapp/WebAppShortcuts.java": """package com.ahoo.abs.android.webapp;
+public final class WebAppShortcuts {
+ public enum PinState { CONFIRMED, NOT_PINNED, UNAVAILABLE }
+ public static PinState state;
+ public static PinState pinState(android.content.Context c, String id) { return state; }
+}""",
     "android/content/Context.java": """package android.content;
 public class Context {
  public static final int BIND_AUTO_CREATE = 1;
@@ -202,7 +232,7 @@ def main():
     for name in ("ValidationException", "CoreValidation", "CanonicalHash", "HostSyntax", "ProxySpec", "ProfileSpec", "LaunchSpec", "LaunchReplayGuard", "RuntimeStateMachine", "LifecycleControlPolicy", "AdmissionGate"):
         sources.append(core / (name + ".java"))
     app = ANDROID / "app/src/main/java/com/ahoo/abs/android"
-    for name in ("process/LaunchCoordinator.java", "process/BrowserProcessOwner.java", "process/BrowserProcessRuntime.java", "browser/ControlProtocol.java", "data/StorageException.java"):
+    for name in ("process/LaunchCoordinator.java", "process/BrowserProcessOwner.java", "process/BrowserProcessRuntime.java", "browser/ControlProtocol.java", "data/StorageException.java", "webapp/WebApp.java"):
         sources.append(app / name)
     sources.append(Path(__file__).with_name("FreshSessionLaunchContractTest.java"))
     classes = output / "classes"

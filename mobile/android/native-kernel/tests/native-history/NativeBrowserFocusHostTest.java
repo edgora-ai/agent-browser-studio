@@ -293,10 +293,30 @@ public final class NativeBrowserFocusHostTest {
                     final HistoryStore historyStore = new HistoryStore();
                     final Runtime runtime = new Runtime();
                     // Recovery ownership is covered by its real-observer extraction host, not this focus-only host.
-                    static final class ShellHistoryObserver { void clearInterruption() { } }
+                    static final class ShellHistoryObserver {
+                        void clearInterruption() { }
+                        void invalidateWebAppPage() { }
+                    }
                     final Map<Shell, ShellHistoryObserver> historyObservers = new HashMap<>();
                     final Map<Shell, Object> tabPreviews = new HashMap<>();
                     final Map<Shell, String> previewUrls = new HashMap<>(), newTabUrls = new HashMap<>();
+                    // Observe the page-work ports without simulating an install or manifest lookup.
+                    final Map<Shell, Object> webAppShells = new HashMap<>();
+                    Object webAppInstall;
+                    final List<Boolean> installFocusEdges = new ArrayList<>(), focusSeenByInstall = new ArrayList<>();
+                    int offerRefreshes, fullscreenWakeups;
+                    Object webAppShell(Shell shell) { return webAppShells.get(shell); }
+                    void openPendingWebApp() { }
+                    void beginWebAppInstall() { }
+                    void refreshWebAppOffer() { offerRefreshes++; }
+                    void onWebAppInstallWindowFocusChanged(boolean hasFocus) {
+                        installFocusEdges.add(hasFocus);
+                        focusSeenByInstall.add(hasWindowFocus());
+                    }
+                    void replacePendingWebAppTicket(String ticket) { }
+                    void updateBrowserChromeVisibility() { }
+                    void cancelWebAppInstall() { webAppInstall = null; }
+                    boolean backFromWebApp(Shell shell) { return false; }
                     final Runnable previewCapture = () -> { };
                     final android.view.inputmethod.InputMethodManager ime = new android.view.inputmethod.InputMethodManager();
                     ShellManager manager = new ShellManager(this);
@@ -315,6 +335,12 @@ public final class NativeBrowserFocusHostTest {
                     // deliberately stub it rather than simulate Android compositor readiness.
                     void reconcilePageRestoring() { }
                     void hidePageRestoring() { }
+                    // Fullscreen transitions are executed by the recovery/preview host.
+                    void requestFullscreenExit(ShellHistoryObserver observer) { }
+                    void wakePendingFullscreen() { fullscreenWakeups++; }
+                    void revokeCoveredFullscreen() { }
+                    void clearPageFullscreen() { }
+                    boolean exitSelectedFullscreen() { return false; }
                     void trackHistory() { }
                     void hideShellToolbar(Shell shell) { }
                     void tint(TextView text, boolean value) { }
@@ -354,7 +380,28 @@ public final class NativeBrowserFocusHostTest {
                     a.root.requestFocus(); a.requestChromeRefresh(); a.main.all();
                     check(cv.requests == 0, reason + " cannot resurrect after state returns");
                 }
+                static void windowFocusResettlesPostedWork() {
+                    Activity a = navigation(true);
+                    a.main.all();
+                    check(a.pendingFocusShell != null, "covered navigation waits for a real wake");
+                    int priorOffers = a.offerRefreshes;
+                    a.onWindowFocusChanged(false);
+                    check(a.pendingFocusShell == null && a.fullscreenWakeups == 0,
+                            "window focus loss retires navigation focus without waking fullscreen entry");
+                    a.onWindowFocusChanged(true);
+                    check(a.installFocusEdges.equals(List.of(false, true))
+                                    && a.focusSeenByInstall.equals(a.installFocusEdges),
+                            "install receives both focus transitions with the updated platform state");
+                    check(a.fullscreenWakeups == 1 && a.offerRefreshes == priorOffers && a.main.queue.size() == 1,
+                            "window focus gain wakes pending fullscreen and posts chrome without refreshing the offer inline");
+                    a.manager.active.contents.url = "https://owned.invalid/probe";
+                    a.main.all();
+                    check(a.offerRefreshes == priorOffers + 1 && a.main.queue.isEmpty()
+                                    && a.manager.active.content.requests == 0,
+                            "the posted offer pass does not rearm work or resurrect navigation focus");
+                }
                 public static int run() {
+                    windowFocusResettlesPostedWork();
                     Activity a = navigation(false); View cv = a.manager.active.content;
                     a.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_UP));
                     check(a.pendingFocusShell != null, "editor ENTER key-up preserves pending handoff");

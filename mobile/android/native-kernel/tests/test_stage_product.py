@@ -119,6 +119,7 @@ class ProductStageTests(unittest.TestCase):
         self.assertIn("java/com/ahoo/abs/android/nativekernel/NativeBrowserApplication.java", destinations)
         self.assertIn("java/com/ahoo/abs/android/nativekernel/NativeBrowserRuntime.java", destinations)
         self.assertIn("java/com/ahoo/abs/android/nativekernel/NativeBrowserActivity.java", destinations)
+        self.assertIn("java/com/ahoo/abs/android/nativekernel/NativePwaBridge.java", destinations)
         self.assertIn("java/com/ahoo/abs/android/process/LaunchCoordinator.java", destinations)
         self.assertIn("chromium/product-bootstrap.patch", destinations)
         self.assertIn("chromium/product-tabs.patch", destinations)
@@ -126,12 +127,31 @@ class ProductStageTests(unittest.TestCase):
         for release_patch in ("runtime", "dns", "java", "security", "packaging"):
             self.assertIn(f"chromium/product-{release_patch}-release.patch", destinations)
         self.assertIn("chromium/product-input-lifecycle.patch", destinations)
+        self.assertIn("chromium/product-webaudio-destination.patch", destinations)
         self.assertIn("chromium/agent_browser_android_product_policy_unittest.cc", destinations)
         product_gni = next(row["data"] for row in rows if row["destination"] == "agent_browser_product.gni")
         # Chromium's android_apk template consumes its version code as a GN string.
         self.assertIn(b'version_code = "10000"', product_gni)
         self.assertIn(b'debuggable = false', product_gni)
         self.assertTrue(all("debug.keystore" not in item and "androidTest" not in item for item in sources))
+
+    def test_product_java_compiles_per_class_jni_source_jar(self):
+        rows = {row["destination"]: row["data"] for row in stage.collect_inputs()}
+        product_gni = rows["agent_browser_product.gni"].decode()
+        java = product_gni.split('  android_library("${_prefix}_java") {', 1)[1]
+        java = java.split("\n  }\n", 1)[0]
+        # A generic native-header dep cannot supply *Jni.java to Java compilation.
+        self.assertRegex(java, r'(?m)^\s*srcjar_deps\s*=\s*\[\s*'
+                              r'"//content/shell:agent_browser_product_jni_headers"\s*,?\s*\]')
+        self.assertNotIn("libagent_browser_product__jni_registration", java)
+        apk = product_gni.split("  android_apk(target_name) {", 1)[1]
+        self.assertRegex(apk, r'(?m)^\s*srcjar_deps\s*=\s*\[\s*'
+                             r'"//content/shell/android:libagent_browser_product__jni_registration"\s*,?\s*\]')
+        bridge = rows["java/com/ahoo/abs/android/nativekernel/NativePwaBridge.java"]
+        self.assertIn(b"NativePwaBridgeJni.get()", bridge)
+        self.assertIn(
+            b'+      "android/agent_browser_product/java/com/ahoo/abs/android/nativekernel/NativePwaBridge.java",',
+            rows["chromium/product-pwa.patch"])
 
     def test_release_runtime_guards_native_readiness_and_avoids_raw_android_log(self):
         rows = stage.collect_inputs()
@@ -164,7 +184,7 @@ class ProductStageTests(unittest.TestCase):
         self.assertIn('+    if (defined(invoker.debuggable))', patch)
         self.assertIn('+      _debuggable = invoker.debuggable', patch)
 
-    def test_native_proxy_regression_inputs_are_frozen_in_manifest(self):
+    def test_native_regression_inputs_are_frozen_in_manifest(self):
         rows = stage.collect_inputs()
         frozen = stage.manifest(rows)
         for relative, kind in (
@@ -175,7 +195,10 @@ class ProductStageTests(unittest.TestCase):
                 ("chromium/product-java-release.patch", "patch"),
                 ("chromium/product-security-release.patch", "patch"),
                 ("chromium/product-packaging-release.patch", "patch"),
-                ("chromium/product-input-lifecycle.patch", "patch")):
+                ("chromium/product-input-lifecycle.patch", "patch"),
+                ("chromium/product-webaudio-destination.patch", "patch"),
+                ("chromium/agent_browser_android_pwa_bridge.cc", "native"),
+                ("chromium/product-pwa.patch", "patch")):
             with self.subTest(relative=relative):
                 row = next(item for item in rows if item["destination"] == relative)
                 data = stage.read_source(stage.MODULE / relative)

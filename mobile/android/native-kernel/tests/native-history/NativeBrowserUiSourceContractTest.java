@@ -1,8 +1,14 @@
+import com.sun.source.tree.BlockTree;
 import com.sun.source.tree.ClassTree;
 import com.sun.source.tree.CompilationUnitTree;
-import com.sun.source.tree.MethodTree;
+import com.sun.source.tree.IfTree;
+import com.sun.source.tree.LambdaExpressionTree;
+import com.sun.source.tree.LiteralTree;
 import com.sun.source.tree.MethodInvocationTree;
+import com.sun.source.tree.MethodTree;
 import com.sun.source.tree.Tree;
+import com.sun.source.tree.TryTree;
+import com.sun.source.tree.VariableTree;
 import com.sun.source.util.JavacTask;
 import com.sun.source.util.TreeScanner;
 import java.io.IOException;
@@ -14,6 +20,8 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Predicate;
+import javax.lang.model.element.Modifier;
 import javax.tools.Diagnostic;
 import javax.tools.DiagnosticCollector;
 import javax.tools.JavaCompiler;
@@ -36,6 +44,8 @@ public final class NativeBrowserUiSourceContractTest {
     private static final Map<String, String> sources = new HashMap<>();
     private static final Map<String, String> methods = new HashMap<>();
     private static final Map<String, String> methodDeclarations = new HashMap<>();
+    private static final Map<String, MethodTree> methodTrees = new HashMap<>();
+    private static String postedChrome = "";
     private static int checks;
     private static int failures;
 
@@ -49,6 +59,8 @@ public final class NativeBrowserUiSourceContractTest {
         Path root = args.length == 0 ? Path.of("") : Path.of(args[0]);
         parseSources(root.toAbsolutePath());
         retainedActivityAndFrozenReuse();
+        optionalWebAppTicketEnvelope();
+        frameworkBackDispatch();
         explicitEnvironmentExit();
         quietManagerList();
         quietComponentsAndEditors();
@@ -63,6 +75,8 @@ public final class NativeBrowserUiSourceContractTest {
         realPreviewOwnership();
         pageRestoreCover();
         popupAndHistorySemantics();
+        overflowPageActions();
+        webAppInstallAndOffer();
         overlaySafetyAndWarnings();
         frozenModeSpecificResolverChain();
         perProfileFingerprintSeeds();
@@ -87,6 +101,7 @@ public final class NativeBrowserUiSourceContractTest {
                 "mobile/android/app/src/main/java/com/ahoo/abs/android/ProfileEditor.java",
                 "mobile/android/app/src/main/java/com/ahoo/abs/android/ProxyEditor.java",
                 "mobile/android/app/src/main/java/com/ahoo/abs/android/process/LaunchCoordinator.java",
+                "mobile/android/app/src/main/java/com/ahoo/abs/android/webapp/WebAppRegistry.java",
                 "mobile/android/core/src/main/java/com/ahoo/abs/core/ProxySpec.java")) {
             Path path = root.resolve(relative);
             sources.put(path.getFileName().toString(), Files.readString(path, StandardCharsets.UTF_8));
@@ -119,19 +134,26 @@ public final class NativeBrowserUiSourceContractTest {
 
                     @Override public Void visitClass(ClassTree node, Void unused) {
                         classes.addLast(node.getSimpleName().toString());
+                        if (classes.getLast().equals("NativeBrowserActivity")) {
+                            for (Tree member : node.getMembers()) {
+                                if (member instanceof VariableTree field && field.getName().contentEquals("chromeRefresh")
+                                        && field.getInitializer() != null) postedChrome = field.getInitializer().toString();
+                            }
+                        }
                         try { return super.visitClass(node, unused); }
                         finally { classes.removeLast(); }
                     }
                     @Override public Void visitMethod(MethodTree node, Void unused) {
                         if (!classes.isEmpty() && node.getBody() != null) {
-                            methods.put(classes.getLast() + "#" + node.getName(), node.getBody().toString());
+                            String key = classes.getLast() + "#" + node.getName();
+                            methods.put(key, node.getBody().toString());
+                            methodTrees.put(key, node);
                             long start = positions.getStartPosition(unit, node.getBody());
                             long end = positions.getEndPosition(unit, node.getBody());
                             if (start < 0 || end <= start || end > unitSource.length()) {
                                 throw new AssertionError("Missing actual method source positions: " + node.getName());
                             }
-                            methodDeclarations.put(classes.getLast() + "#" + node.getName(),
-                                    unitSource.substring(Math.toIntExact(start), Math.toIntExact(end)));
+                            methodDeclarations.put(key, unitSource.substring(Math.toIntExact(start), Math.toIntExact(end)));
                         }
                         return super.visitMethod(node, unused);
                     }
@@ -162,10 +184,175 @@ public final class NativeBrowserUiSourceContractTest {
         lacks(reuse, "new ShellManager", "Continue cannot recreate retained shells");
     }
 
+    private static void optionalWebAppTicketEnvelope() {
+        String owner = "NativeBrowserActivity";
+        intentHelperSignature("validateIntent", "String", "Intent", false, false);
+        intentHelperSignature("isWebAppDelivery", "boolean", "Intent", true, false);
+        intentHelperSignature("canQueueWebAppTicket", "boolean", "String", false, false);
+        intentHelperSignature("replacePendingWebAppTicket", "void", "String", false, true);
+        String validate = method(owner, "validateIntent");
+        for (String guard : List.of("application.requireBrowserActivation()", "intent == null", "intent.getData() != null",
+                "intent.getType() != null", "intent.getSelector() != null", "intent.getClipData() != null", "extras == null",
+                "extras.size() != (appDelivery ? 3 : 2)", "extras.containsKey(ControlProtocol.WEB_APP_TICKET)",
+                "appDelivery && !WebApp.isOpaqueId(ticket)", "extras.containsKey(\"commandLineArgs\")",
+                "!launch.sessionId.equals(extras.getString(ControlProtocol.SESSION))",
+                "!launch.nonce.equals(extras.getString(ControlProtocol.NONCE))")) {
+            has(validate, guard, "safe ordinary/ticket envelope: " + guard);
+        }
+        has(method(owner, "isWebAppDelivery"), "hasExtra(ControlProtocol.WEB_APP_TICKET)",
+                "classify a present invalid ticket as optional, not as ordinary Continue");
+
+        String create = method(owner, "onCreate");
+        before(create, "validateIntent(getIntent())", "application.browserRuntime()", "validate cold envelope before runtime lookup/attach");
+        before(create, "if (savedState != null", "runtime.attach(this)", "reject stale saved session before claiming runtime");
+        has(create, "if (webAppTicket != null) { Intent ordinary = new Intent(getIntent());"
+                        + " ordinary.removeExtra(ControlProtocol.WEB_APP_TICKET); setIntent(ordinary); }",
+                "cold app delivery retains only a stripped copy as the replayable base Intent");
+        before(create, "setIntent(ordinary)", "runtime.attach(this)", "strip the ticket before attached startup can use the base Intent");
+        has(create, "if (savedState == null && webAppTicket != null && canQueueWebAppTicket(webAppTicket))"
+                        + " { pendingWebAppTicket = webAppTicket; }",
+                "only a fresh cold record with an eligible delivery queues the ticket");
+        lacks(method(owner, "onSaveInstanceState"), "WEB_APP_TICKET", "saved state cannot serialize a ticket envelope");
+        lacks(method(owner, "onSaveInstanceState"), "pendingWebAppTicket", "saved state cannot serialize pending authority");
+
+        String reuse = method(owner, "onNewIntent");
+        warmTicketBranches(methodTrees.get(owner + "#onNewIntent"));
+        for (String forbidden : List.of("openPendingWebApp(", "new WebAppRegistry(", "loadUrl(", "beginDrain(",
+                "returnToList(", "dismissTabSwitcher(", "clearPageFullscreen(", ".dismiss(", "closeNativeView(")) {
+            lacks(reuse, forbidden, "warm admission defers opening and cannot directly alter live browser state: " + forbidden);
+        }
+        String probe = method(owner, "canQueueWebAppTicket");
+        has(probe, "registry.canQueue(ticket, application.requireLaunch(), application.incarnation(), android.os.Process.myPid())",
+                "the non-consuming probe binds to the same launch, incarnation and pid as the later take");
+        has(probe, "return false", "registry failure does not permit admission");
+        lacks(probe, "registry.take(", "admission does not burn the capability");
+        lacks(probe, "registry.revokeTicket(", "admission does not revoke a capability");
+        String registryProbe = method("WebAppRegistry", "canQueue");
+        has(registryProbe, "pendingShortcut(getReadableDatabase(), token, launch, incarnation, pid) != null",
+                "registry probes read-only with the exact ticket and launch binding");
+        for (String mutator : List.of("getWritableDatabase(", "take(", "revokeTicket(", ".delete(")) {
+            lacks(registryProbe, mutator, "registry admission cannot mutate the handoff: " + mutator);
+        }
+        String pending = method("WebAppRegistry", "pendingShortcut");
+        has(pending, "slot=1 AND token=? AND session=? AND revision=? AND incarnation=? AND pid=?",
+                "registry matches token and every process/launch component on the single pending slot");
+        has(pending, "row.getLong(1) - SystemClock.elapsedRealtime()", "pending authority uses elapsed time");
+        has(pending, "ttl > 0 && ttl <= HANDOFF_MILLIS", "early admission and take reject expired and implausible deadlines");
+        String take = method("WebAppRegistry", "take");
+        before(take, "db.beginTransaction()", "pendingShortcut(db, token, launch, incarnation, pid)",
+                "take repeats the exact eligibility check inside the burn transaction");
+        before(take, "pendingShortcut(db, token, launch, incarnation, pid)", "db.delete(", "take checks before burning the exact token");
+        has(take, "db.delete(\"handoff\", \"slot=1 AND token=?\", new String[]{token})",
+                "take never burns a different pending delivery");
+        String replace = method(owner, "replacePendingWebAppTicket");
+        has(replace, "registry.revokeTicket(previous)", "replace revokes only the superseded ticket");
+        lacks(replace, "revokeTicket(next)", "the newly queued token must not be revoked");
+
+        String request = method(owner, "requestChromeRefresh");
+        has(request, "main.post(chromeRefresh)", "coalesced work uses the posted chrome pass");
+        before(postedChrome, "if (!current() || cleanupComplete)", "openPendingWebApp()", "posted consumer honors Activity ownership");
+        has(postedChrome, "if (resumed && uiBuilt) { openPendingWebApp();", "posted consumer runs only for foreground ready UI");
+        String initialize = method(owner, "initializeBrowserUi");
+        before(initialize, "uiBuilt = true", "openPendingWebApp()", "native initialization retries a ticket waiting for readiness");
+        String resume = method(owner, "onResume");
+        before(resume, "resumed = true", "requestChromeRefresh()", "resume schedules foreground ticket work after claiming foreground");
+        lacks(resume, "openPendingWebApp()", "resume uses the posted consumer, not inline navigation");
+
+        String open = method(owner, "openPendingWebApp");
+        before(open, "!interactive()", "pendingWebAppTicket = null", "unready Activity cannot lose the waiting ticket");
+        before(open, "!hasWindowFocus()", "pendingWebAppTicket = null", "unfocused window cannot consume the ticket");
+        before(open, "pendingWebAppTicket = null", "registry.take(", "remove the queued authority before any registry access can fail");
+        before(open, "LaunchSpec launch = application.requireLaunch()", "registry.take(", "consumer reads the live launch before claiming authority");
+        has(open, "registry.take(ticket, launch, application.incarnation(), android.os.Process.myPid())",
+                "consumer passes the exact pending ticket and attached process/launch binding");
+        before(open, "registry.take(", "openWebApp(app)", "take the bound ticket before opening a Web App Shell");
+        before(open, "WebAppShortcuts.PinState.CONFIRMED", "openWebApp(app)", "only a still-pinned shortcut can change browser mode");
+        lacks(open, "setIntent(", "consumption still cannot replace the base Intent");
+        Tree gain = when(methodTrees.get(owner + "#onWindowFocusChanged").getBody(), "(hasFocus)");
+        has(text(gain), "requestChromeRefresh()", "focus gain retries deferred ticket work by posting");
+    }
+
+    private static void intentHelperSignature(String name, String returns, String parameter, boolean isStatic, boolean nullable) {
+        MethodTree tree = methodTrees.get("NativeBrowserActivity#" + name);
+        check(tree != null && tree.getModifiers().getFlags().contains(Modifier.PRIVATE)
+                        && tree.getModifiers().getFlags().contains(Modifier.STATIC) == isStatic
+                        && tree.getReturnType().toString().equals(returns) && tree.getParameters().size() == 1
+                        && tree.getParameters().get(0).getType().toString().equals(parameter)
+                        && (!nullable || tree.getParameters().get(0).getModifiers().getAnnotations().stream()
+                                .anyMatch(a -> a.getAnnotationType().toString().equals("Nullable"))),
+                "private Activity intent helper has expected signature: " + name);
+    }
+
+    private static void warmTicketBranches(MethodTree reuse) {
+        var statements = reuse.getBody().getStatements();
+        var optional = statements.stream().filter(VariableTree.class::isInstance).map(VariableTree.class::cast)
+                .filter(v -> v.getInitializer() != null && compact(v.getInitializer().toString()).equals("isWebAppDelivery(intent)"))
+                .findFirst().orElse(null);
+        var attempt = statements.stream().filter(TryTree.class::isInstance).map(TryTree.class::cast).findFirst().orElse(null);
+        check(optional != null && attempt != null && statements.indexOf(optional) < statements.indexOf(attempt),
+                "classify optional delivery before validation can throw");
+        if (attempt == null) return;
+        String admit = attempt.getBlock().toString();
+        before(admit, "validateIntent(intent)", "application.verifyFrozenCommandLine()", "validate envelope before verifying frozen setup");
+        before(admit, "application.verifyFrozenCommandLine()", "if (!current())", "check current runtime after verifying frozen setup");
+        before(admit, "if (!current())", "canQueueWebAppTicket(", "stale Activity cannot even probe a ticket");
+        before(admit, "if (!current())", "replacePendingWebAppTicket(", "stale Activity cannot queue or supersede a ticket");
+        var operations = attempt.getBlock().getStatements();
+        var select = operations.stream().filter(IfTree.class::isInstance).map(IfTree.class::cast)
+                .filter(i -> i.getElseStatement() != null).findFirst().orElse(null);
+        check(select != null, "warm optional delivery and ordinary Continue have separate success paths");
+        if (select != null) {
+            String app = select.getThenStatement().toString();
+            String ordinary = select.getElseStatement().toString();
+            before(app, "if (!canQueueWebAppTicket(webAppTicket)) return;", "replacePendingWebAppTicket(webAppTicket)",
+                    "failed admission returns before a warm delivery can displace pending state or schedule chrome");
+            lacks(app, "setIntent(", "warm optional delivery never becomes the retained base Intent");
+            lacks(app, "showOrdinaryBrowser()", "queueing a ticket does not alter the current mode inline");
+            before(ordinary, "replacePendingWebAppTicket(null)", "showOrdinaryBrowser()", "ordinary Continue clears pending ticket and selects ordinary mode");
+            before(ordinary, "showOrdinaryBrowser()", "setIntent(intent)", "select ordinary browser before retaining its Intent");
+            String refresh = "requestChromeRefresh();";
+            String admitted = compact(admit);
+            check(admitted.indexOf(refresh) == admitted.lastIndexOf(refresh)
+                            && operations.subList(operations.indexOf(select) + 1, operations.size()).stream()
+                                    .anyMatch(s -> compact(s.toString()).equals(refresh)),
+                    "both accepted envelopes request one common posted refresh");
+        }
+        check(optional != null && attempt.getCatches().stream().anyMatch(c -> {
+            var rejected = c.getBlock().getStatements();
+            String failure = "startupFailed(\"NATIVE_NEW_INTENT_REJECTED\");";
+            for (int i = 0; i < rejected.size(); i++) {
+                if (!(rejected.get(i) instanceof IfTree guard)) continue;
+                String condition = compact(guard.getCondition().toString());
+                String then = compact(guard.getThenStatement().toString());
+                if (condition.equals("(!" + optional.getName() + ")") && then.contains(failure)) return true;
+                if (condition.equals("(" + optional.getName() + ")") && then.endsWith("return;}")
+                        && rejected.subList(i + 1, rejected.size()).stream().anyMatch(s -> compact(s.toString()).equals(failure))) {
+                    return true;
+                }
+            }
+            return false;
+        }), "warm catch invokes ordinary startup failure only for a nonoptional envelope");
+    }
+
+    private static void frameworkBackDispatch() {
+        String owner = "NativeBrowserActivity";
+        before(method(owner, "onCreate"), "super.onCreate(savedState)", "registerBrowserBack()",
+                "framework Back is attached to the created Activity");
+        String register = method(owner, "registerBrowserBack");
+        before(register, "SDK_INT < 33", "getOnBackInvokedDispatcher()", "legacy Activity never touches the API 33 dispatcher");
+        has(register, "browserBack = this::onBackPressed", "framework Back uses the same policy as legacy Back");
+        has(register, "registerOnBackInvokedCallback(android.window.OnBackInvokedDispatcher.PRIORITY_DEFAULT, browserBack)",
+                "browser Back leaves higher-priority IME and overlay dispatch intact");
+        before(method(owner, "onDestroy"), "unregisterBrowserBack()", "closeNativeView()", "destroy releases Back before tearing down the view");
+        String unregister = method(owner, "unregisterBrowserBack");
+        before(unregister, "unregisterOnBackInvokedCallback(browserBack)", "browserBack = null", "destroy removes exactly its registered callback");
+    }
+
     private static void explicitEnvironmentExit() {
-        has(source("NativeBrowserActivity.java"), "\"关闭当前标签页\", \"返回环境列表（保留运行）\", \"退出当前环境\"}", "owned popup menu includes explicit exit after retained return");
+        String menu = declaration("NativeBrowserActivity", "showMenu");
+        has(menu, "\"关闭当前标签页\", \"返回环境列表（保留运行）\", \"退出当前环境\"", "owned popup menu includes explicit exit after retained return");
         has(method("NativeBrowserActivity", "performMenuAction"), "requestEnvironmentExit()", "exit menu invokes manager handoff");
-        has(method("NativeBrowserActivity", "showMenu"), "performMenuAction(title)", "menu delegates unchanged action semantics");
+        has(menu, "performMenuAction(title)", "menu delegates unchanged action semantics");
         String request = method("NativeBrowserActivity", "requestEnvironmentExit");
         has(request, "MainActivity.ACTION_REQUEST_ENVIRONMENT_EXIT", "exit routed to manager process");
         has(request, "launch.sessionId", "exit request bound to current session");
@@ -600,13 +787,6 @@ public final class NativeBrowserUiSourceContractTest {
         before(asynchronous, "if (!current()) return", "startupFailed", "late startup callback is ignored");
         lacks(asynchronous, "finish()", "async failure cannot destroy an attached runtime");
         has(create, "savedState != null && !launch.sessionId.equals(savedState.getString(ControlProtocol.SESSION))", "saved-session validation retained");
-        String validate = method("NativeBrowserActivity", "validateIntent");
-        for (String guard : List.of("application.requireBrowserActivation()", "intent == null", "intent.getData() != null",
-                "intent.getSelector() != null", "intent.getClipData() != null", "extras == null", "extras.size() != 2",
-                "extras.containsKey(\"commandLineArgs\")", "!launch.sessionId.equals(extras.getString(ControlProtocol.SESSION))",
-                "!launch.nonce.equals(extras.getString(ControlProtocol.NONCE))")) {
-            has(validate, guard, "strict intent gate retained: " + guard);
-        }
     }
 
     private static void privateLifecycleStages() {
@@ -640,7 +820,8 @@ public final class NativeBrowserUiSourceContractTest {
                 "product renderer and toolbar policy precede every retained Shell");
         String activity = source("NativeBrowserActivity.java");
         lacks(activity, "uiTick", "no perpetual UI polling runnable");
-        lacks(activity, "postDelayed", "no periodic view/history/preview polling");
+        check(compact(activity).split("\\bpostDelayed\\(", -1).length == 2,
+                "the one-shot install deadline does not license delayed view/history/preview polling");
         has(method("NativeBrowserActivity", "requestChromeRefresh"), "chromeRefreshPosted",
                 "native view events coalesce into one main-loop refresh");
         String visibility = method("NativeBrowserActivity", "syncWebContentsVisibility");
@@ -824,6 +1005,120 @@ public final class NativeBrowserUiSourceContractTest {
         has(method("NativeBrowserActivity", "loadResolvedUrl"), "!interactive()", "native search/history cannot navigate after shutdown");
     }
 
+    private static void overflowPageActions() {
+        String owner = "NativeBrowserActivity";
+        MethodTree menu = methodTrees.get(owner + "#showMenu");
+        Tree dismiss = callback(menu, "popup.setOnDismissListener");
+        has(text(dismiss), "anchor.removeOnLayoutChangeListener(", "actual popup dismissal releases its anchor listener");
+        String ownedDismiss = text(when(dismiss, "overflowMenu == popup"));
+        before(ownedDismiss, "overflowMenu = null", "wakePendingFullscreen()",
+                "the owning dismiss callback releases the popup before waking fullscreen");
+        before(ownedDismiss, "overflowMenu = null", "requestChromeRefresh()",
+                "the owning dismiss callback releases the popup before waking chrome/install/offer");
+        for (String work : List.of("reconcilePageFullscreen(", "refreshChrome(", "beginWebAppInstall(", "refreshWebAppOffer(")) {
+            lacks(text(dismiss), work, "popup dismissal queues work instead of reconciling inline: " + work);
+        }
+        for (String post : List.of("requestFullscreenRefresh", "requestChromeRefresh")) {
+            has(method(owner, post), "main.post(", "overflow reconciliation uses a posted pass: " + post);
+        }
+        has(method(owner, "wakePendingFullscreen"), "requestFullscreenRefresh()", "dismiss can unblock pending fullscreen without a new native signal");
+
+        String installLabel = "安装网页应用", fullscreenLabel = "全屏浏览";
+        String menuCode = declaration(owner, "showMenu");
+        has(menuCode, "actions.add(\"" + fullscreenLabel + "\")", "browser fullscreen is an independent menu row");
+        has(menuCode, "actions.add(\"" + installLabel + "\")", "install is an independent menu row");
+        before(menuCode, "historyObservers.get(active)", "action.setOnClickListener", "menu captures the selected observer when opened");
+        before(menuCode, "popupOwner.webAppPageEpoch", "action.setOnClickListener", "menu captures the document epoch when opened");
+        Tree click = callback(menu, "action.setOnClickListener");
+        IfTree rejected = branch(click, "overflowMenu != popup");
+        IfTree exact = branch(click, condition -> mentionsLabel(condition, installLabel));
+        String rejectedWhen = rejected == null ? "" : text(rejected.getCondition());
+        has(rejectedWhen, "!interactive()", "a background popup click cannot dispatch an action");
+        has(rejectedWhen, "!view.hasWindowFocus()", "only the focused popup window can dispatch an action");
+        has(rejected == null ? "" : text(rejected.getThenStatement()), "return;", "invalid popup ownership rejects the click");
+        check(rejected != null && exact != null, "click validates popup ownership and distinguishes page actions");
+        before(text(click), text(rejected), text(exact), "popup ownership gates dispatch of the exact-page actions");
+        Tree special = exact == null ? null : exact.getThenStatement();
+        check(exact != null && mentionsLabel(exact.getCondition(), fullscreenLabel), "both page actions use the exact-page branch");
+        IfTree owns = branch(special, "ownsUncoveredPage(popupOwner)");
+        has(owns == null ? "" : text(owns.getCondition()), "popupOwner.webAppPageEpoch == popupPageEpoch",
+                "a reopened URL or a replacement document cannot inherit a popup's page action");
+        String uncovered = method(owner, "ownsUncoveredPage");
+        has(uncovered, "observer.ownsContents()", "page actions check the live WebContents owner");
+        has(uncovered, "manager.getActiveShell() == observer.shell", "page actions cannot target a background tab");
+        IfTree action = branch(owns == null ? null : owns.getThenStatement(),
+                condition -> mentionsLabel(condition, installLabel));
+        String install = action == null ? "" : text(action.getThenStatement());
+        String fullscreen = action == null ? "" : text(action.getElseStatement());
+        has(install, "requestWebAppInstall(popupOwner)", "install routes only to the captured page's install request");
+        lacks(install, "requestBrowserFullscreen(", "install cannot also request fullscreen");
+        has(fullscreen, "requestBrowserFullscreen(popupOwner)", "fullscreen routes to the captured page's fullscreen request");
+        lacks(fullscreen, "requestWebAppInstall(", "fullscreen cannot also request install");
+        before(text(special), "requestWebAppInstall(popupOwner)", "popup.dismiss()", "capture install before the popup releases ownership");
+        before(text(special), "requestBrowserFullscreen(popupOwner)", "popup.dismiss()", "capture fullscreen before the popup releases ownership");
+        before(text(special), "popup.dismiss()", "return;", "exact-page click dismisses without falling through to generic dispatch");
+        lacks(text(special), "performMenuAction(", "exact-page actions cannot re-resolve selection in generic menu dispatch");
+    }
+
+    private static void webAppInstallAndOffer() {
+        String owner = "NativeBrowserActivity";
+        before(postedChrome, "refreshChrome()", "refreshWebAppOffer()", "offer discovery follows posted page visibility reconciliation");
+        String exactPage = method(owner, "ownsWebAppPage");
+        has(exactPage, "ownsUncoveredPage(owner)", "install and offer are gated by the visible selected owner");
+        has(exactPage, "page.epoch == owner.webAppPageEpoch", "same-Shell navigation invalidates install and offer leases");
+        has(exactPage, "page.url.equals(visibleUrl(owner.shell))", "page lease checks the exact visible URL");
+
+        String arm = method(owner, "armWebAppInstallTimeout");
+        has(arm, "elapsedRealtime() + WEB_APP_CHECK_TIMEOUT_MS", "install gets a bounded phase deadline");
+        has(arm, "postDelayed(install.timeout, WEB_APP_CHECK_TIMEOUT_MS)", "the bound also expires a silent native check");
+        has(method(owner, "requestWebAppInstall"), "armWebAppInstallTimeout(", "the initial timeout includes waiting for focus or popup dismissal");
+        String expire = method(owner, "expireWebAppInstall");
+        before(expire, "if (webAppInstall != install) return;", "cancelWebAppInstall()", "a retired timer cannot cancel a newer request");
+        lacks(expire, "armWebAppInstallTimeout(", "timeout ends the phase instead of polling or extending it");
+        String cancel = method(owner, "cancelWebAppInstall");
+        before(cancel, "webAppInstall = null", "removeCallbacks(install.timeout)", "cancel clears pending ownership and disarms the timeout");
+        before(cancel, "webAppInstall = null", "install.dialog.dismiss()", "dialog dismissal cannot re-enter a still-owned install");
+
+        String begin = method(owner, "beginWebAppInstall");
+        before(begin, "overflowMenu != null", "NativePwaBridge.requestManifest(", "install waits until the popup has really released ownership");
+        before(begin, "install.checking", "NativePwaBridge.requestManifest(", "a chrome wake cannot duplicate an in-flight manifest check");
+        before(begin, "install.deadline", "NativePwaBridge.requestManifest(", "a focus wake cannot begin a check after its deadline");
+        String reply = method(owner, "receiveWebAppInstallManifest");
+        for (String effect : List.of("showWebAppConsent(", "completeWebAppInstall(")) {
+            before(reply, "ownsWebAppInstallPage(install)", effect, "recheck the exact lease before " + effect);
+            before(reply, "install.deadline", effect, "a late manifest cannot authorize " + effect);
+            before(reply, "focusEpoch != install.focusEpoch", effect, "discard a result spanning focus loss before " + effect);
+        }
+        has(method(owner, "ownsWebAppInstall"), "consent.getDecorView().hasWindowFocus()", "confirmation requires its own live consent window's focus");
+        MethodTree consent = methodTrees.get(owner + "#showWebAppConsent");
+        before(text(consent.getBody()), "removeCallbacks(install.timeout)", "sheet.show()", "waiting for user consent is not a timed manifest check");
+        String confirm = text(callback(consent, "sheet.actions"));
+        before(confirm, "!ownsWebAppInstall(install)", "armWebAppInstallTimeout(install)", "only owned explicit confirmation arms a fresh bounded recheck");
+        lacks(confirm, "requestPin(", "confirmation cannot pin inline from the first manifest");
+        String complete = method(owner, "completeWebAppInstall");
+        before(complete, "eligibleManifest(install, confirmed)", "registry.register(", "installation requires fresh eligible manifest data");
+        for (String field : List.of("id", "name", "startUrl", "scope", "origin")) {
+            before(complete, "!shown." + field + ".equals(confirmed." + field + ")", "registry.register(",
+                    "confirmation cannot change the authorized manifest " + field);
+        }
+
+        String refresh = method(owner, "refreshWebAppOffer");
+        before(refresh, "if (offer != null || owner == null", "NativePwaBridge.requestManifest(", "the current page lease suppresses duplicate passive checks");
+        before(refresh, "webAppOffer = probe", "NativePwaBridge.requestManifest(", "passive probe ownership is established before native completion");
+        String passive = method(owner, "receiveWebAppOffer");
+        before(passive, "if (webAppOffer != offer) return;", "eligibleManifest(", "stale discovery cannot publish a new page's offer");
+        before(passive, "ownsWebAppPage(offer)", "eligibleManifest(", "discovery still belongs to the exact live page");
+        for (String effect : List.of("requestWebAppInstall(", "showWebAppConsent(", "completeWebAppInstall(", "requestPin(")) {
+            lacks(refresh + passive, effect, "passive discovery cannot prompt or install: " + effect);
+        }
+        String canShow = method(owner, "canShowWebAppOffer");
+        has(canShow, "!offer.dismissed", "dismissing an offer lasts for the current page");
+        has(canShow, "NativePwaBridge.isSecurePage(", "show an offer only on a secure page");
+        String use = method(owner, "useWebAppOffer");
+        before(use, "if (!canShowWebAppOffer(offer)) return;", "requestWebAppInstall(offer.owner)", "offer activation revalidates the page before requesting install");
+        has(use, "if (dismiss) offer.dismissed = true; else requestWebAppInstall(offer.owner);", "ignoring an offer never requests install");
+    }
+
     private static void overlaySafetyAndWarnings() {
         String switcher = source("TabSwitcherView.java");
         has(switcher, "new AnchorScrollView(context)", "tab overview scrolls through all retained tabs");
@@ -1000,6 +1295,56 @@ public final class NativeBrowserUiSourceContractTest {
         has(spec, "EXCLUDE 127.0.0.1", "loopback proxy endpoints stay reachable");
         has(spec, "EXCLUDE localhost", "localhost proxy endpoints stay reachable");
         has(spec, "HostSyntax.bracket(host)", "IPv6 proxy hosts keep resolver-rule brackets");
+    }
+
+    private static Tree callback(Tree scope, String registration) {
+        List<Tree> bodies = new ArrayList<>();
+        new TreeScanner<Void, Void>() {
+            @Override public Void visitMethodInvocation(MethodInvocationTree node, Void unused) {
+                if (node.getMethodSelect().toString().equals(registration)) {
+                    for (Tree argument : node.getArguments()) {
+                        if (argument instanceof LambdaExpressionTree lambda) bodies.add(lambda.getBody());
+                    }
+                }
+                return super.visitMethodInvocation(node, unused);
+            }
+        }.scan(scope, null);
+        check(bodies.size() == 1, "locate the actual callback registered with " + registration);
+        return bodies.size() == 1 ? bodies.get(0) : null;
+    }
+
+    private static boolean mentionsLabel(Tree scope, String label) {
+        // Javac's pretty-printed AST can escape non-ASCII text; compare the literal value.
+        return Boolean.TRUE.equals(new TreeScanner<Boolean, Void>() {
+            @Override public Boolean visitLiteral(LiteralTree literal, Void unused) {
+                return label.equals(literal.getValue());
+            }
+            @Override public Boolean reduce(Boolean a, Boolean b) {
+                return Boolean.TRUE.equals(a) || Boolean.TRUE.equals(b);
+            }
+        }.scan(scope, null));
+    }
+
+    private static IfTree branch(Tree body, String condition) {
+        return branch(body, guard -> compact(text(guard)).contains(compact(condition)));
+    }
+
+    private static IfTree branch(Tree body, Predicate<Tree> condition) {
+        if (body instanceof BlockTree block) {
+            for (Tree statement : block.getStatements()) {
+                if (statement instanceof IfTree guard && condition.test(guard.getCondition())) return guard;
+            }
+        }
+        return null;
+    }
+
+    private static Tree when(Tree body, String condition) {
+        IfTree guard = branch(body, condition);
+        return guard == null ? null : guard.getThenStatement();
+    }
+
+    private static String text(Tree tree) {
+        return tree == null ? "" : tree.toString();
     }
 
     private static String method(String owner, String name) {

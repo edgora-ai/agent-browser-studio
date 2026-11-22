@@ -95,6 +95,7 @@ def collect_inputs(android=ANDROID):
         (module / "chromium/agent_browser_android_product_policy.h", "chromium/agent_browser_android_product_policy.h", "native"),
         (module / "chromium/agent_browser_android_product_policy.cc", "chromium/agent_browser_android_product_policy.cc", "native"),
         (module / "chromium/agent_browser_android_product_policy_unittest.cc", "chromium/agent_browser_android_product_policy_unittest.cc", "native"),
+        (module / "chromium/agent_browser_android_pwa_bridge.cc", "chromium/agent_browser_android_pwa_bridge.cc", "native"),
         (module / "chromium/product-bootstrap.patch", "chromium/product-bootstrap.patch", "patch"),
         (module / "chromium/product-tabs.patch", "chromium/product-tabs.patch", "patch"),
         (module / "chromium/product-language.patch", "chromium/product-language.patch", "patch"),
@@ -105,6 +106,8 @@ def collect_inputs(android=ANDROID):
         (module / "chromium/product-security-release.patch", "chromium/product-security-release.patch", "patch"),
         (module / "chromium/product-packaging-release.patch", "chromium/product-packaging-release.patch", "patch"),
         (module / "chromium/product-input-lifecycle.patch", "chromium/product-input-lifecycle.patch", "patch"),
+        (module / "chromium/product-webaudio-destination.patch", "chromium/product-webaudio-destination.patch", "patch"),
+        (module / "chromium/product-pwa.patch", "chromium/product-pwa.patch", "patch"),
     ])
     if len(selected) > MAX_FILES:
         raise ValueError("Selected source count exceeds the limit")
